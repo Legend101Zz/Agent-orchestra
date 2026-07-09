@@ -24,6 +24,20 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--echo", action="store_true")
     ex.add_argument("--idle-timeout", type=float, default=None, dest="idle_timeout")
 
+    ls = sub.add_parser("list", help="list delegated runs")
+    ls.add_argument("--json", action="store_true")
+
+    sh = sub.add_parser("show", help="show a run's meta and log tail")
+    sh.add_argument("id")
+    sh.add_argument("--tail", type=int, default=40)
+
+    kl = sub.add_parser("kill", help="kill a running delegation")
+    kl.add_argument("id")
+
+    qt = sub.add_parser("quota", help="MiniMax coding-plan quota")
+    qt.add_argument("--json", action="store_true")
+    qt.add_argument("--force", action="store_true", help="bypass 60s cache")
+
     return p
 
 
@@ -38,6 +52,10 @@ def main(argv=None) -> int:
     if args.cmd == "_exec":
         from orc_pkg import runner
         return runner.cmd_exec(args)
+    if args.cmd in ("list", "show", "kill", "quota"):
+        from orc_pkg import control
+        return {"list": control.cmd_list, "show": control.cmd_show,
+                "kill": control.cmd_kill, "quota": control.cmd_quota}[args.cmd](args)
     build_parser().print_help()
     return 1
 
