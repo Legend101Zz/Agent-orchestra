@@ -77,17 +77,21 @@ Claude Code (brain, subscription)          Codex (brain, subscription)
         ├── runs/<run-id>/output.log     worker stdout/stderr
         ├── runs/<run-id>/inbox/*.json   control messages (kill, follow-up)
         ├── quota.json                   last /remains snapshot (60s cache)
-        └── config.json                  thresholds, port
+        └── config.json                  thresholds
                    ▲
-        orc ui  →  localhost dashboard (Phase 2): live run table, log tail,
-                   kill buttons, quota bars (5h + weekly)
+        orc top →  btop-style terminal TUI (Textual): live run panels, log tail,
+                   kill/steer keybindings, quota bars (5h + weekly)
 ```
 
 ## Components
 
 ### 1. `orc` CLI (`pi-orchestra/bin/orc`, symlinked into `~/.local/bin/orc`)
 
-Python 3, stdlib only (argparse, json, subprocess, urllib, http.server). Subcommands:
+Python 3. Core subcommands are stdlib-only (argparse, json, subprocess, urllib);
+`orc top` additionally uses **Textual** installed in a project-local venv
+(`pi-orchestra/.venv`) — the `orc` shim runs on that venv's interpreter, and `top`
+imports Textual lazily so every other subcommand works even if the venv is broken.
+Subcommands:
 
 - `orc run "task" [--cwd DIR] [--name N] [--brain claude|codex|human] [--bg] [--force]`
   — create `runs/<UTC-timestamp>-<slug>/`, write `meta.json` (status `running`), check
@@ -108,7 +112,7 @@ Python 3, stdlib only (argparse, json, subprocess, urllib, http.server). Subcomm
   `minimax_api_key` first, fallback `~/.pi/agent/auth.json`). Caches to `quota.json`
   for 60 s. Exit codes: 0 = ok, 2 = below warn threshold, 3 = below block threshold,
   4 = endpoint unavailable (unknown).
-- `orc ui [--port 7777]` — Phase 2 dashboard server (see §4).
+- `orc top` — btop-style TUI control plane (see §4).
 
 **Quota guard:** before each spawn, `orc run`/`orc rpc` consult the cached quota.
 Below **warn** threshold (default 25 % of the 5-hour window): print a prominent
@@ -128,7 +132,7 @@ chars/4 estimate of the log — displayed as "estimated spend today" instead of
 
 Plain JSON, one directory per run, all writes atomic (write temp file in same dir,
 `os.replace`). Single writer per `meta.json` (the `orc` process that owns the run);
-the dashboard is read-only except for dropping messages into `inbox/`. `meta.json`
+the TUI is read-only except for dropping messages into `inbox/`. `meta.json`
 fields: `id, task, brain, cwd, provider, model, pid, status
 (running|done|failed|killed), started_at, ended_at, exit_code, tokens {input, output,
 estimated}`.
@@ -159,38 +163,56 @@ Skills (live in the repo, symlinked to `~/.claude/skills/`):
 `<!-- pi-orchestra begin/end -->` block, after backing the file up. No `config.toml`
 changes.
 
-### 4. Dashboard (`orc ui`) — Phase 2
+### 4. Control plane TUI (`orc top`)
 
-Single-file server on `localhost:7777` using `http.server` (no dependencies, never
-binds beyond loopback). Endpoints: `/` (inlined HTML/JS/CSS), `/api/runs`,
-`/api/runs/<id>/log?tail=200`, `/api/quota`, `POST /api/runs/<id>/kill` (writes a kill
-message to the run's inbox / signals the PID). UI: auto-refreshing (2 s poll) run table
-grouped by brain, status chips, expandable log tail, kill button per running run, and
-two quota bars (5-hour and weekly windows) with warn/block markers. A "new task" form
-that shells out to `orc run --bg` is included; **launching a full brain session from the
-panel is out of scope for v1** (needs a TTY; noted as a Phase 3 idea via
-`osascript`/Terminal.app).
+A btop-style full-screen terminal dashboard built with **Textual** (user-requested:
+"very nice visuals like btop"). Layout:
+
+- **Header bar** — app title, clock, refresh indicator, run counts by status.
+- **Quota panel** — two live gradient bars (5-hour and weekly windows) with warn/block
+  threshold tick marks and remaining-token figures; shows "estimated spend" fallback
+  mode when the `/remains` endpoint is unavailable.
+- **Runs table** — one row per run (id, brain badge `claude`/`codex`/`human`, status
+  chip with color, model, elapsed time, task excerpt), live-sorted with running runs on
+  top, auto-refresh every 2 s from the registry (read-only).
+- **Detail pane** — selecting a row shows `meta.json` fields and a live-tailing view of
+  `output.log`.
+- **Keybindings** — `k` kill selected run (confirm prompt), `n` new task (input box →
+  `orc run --bg`), `l` focus log tail, `q` quit, arrows/j/k navigate.
+
+The TUI is read-only against the registry except for kill signals and new-task spawns.
+It never edits `meta.json` (single-writer rule preserved). A localhost web dashboard was
+considered and dropped in favor of the TUI; it can be added later without registry
+changes. **Launching a full brain session from the panel stays out of scope** (needs a
+TTY; Phase 3 idea via `osascript`/Terminal.app).
 
 ## Phasing
 
-- **Phase 1 (build first):** `orc` core (`run`, `rpc`, `list`, `show`, `kill`,
-  `quota`), registry, `deleg8`/`pi-rpc`, both skills, Codex AGENTS.md block,
-  end-to-end tests, cheat sheet. Everything testable from the terminal.
-- **Phase 2:** `orc ui` dashboard; rpc inbox steering (follow-up prompts).
-- **Phase 3 (ideas, not committed):** launch brain sessions from the panel; MCP push
-  upgrade of the registry; advisor pattern (worker consults the brain mid-task, per
-  Anthropic's advisor-tool docs); Vibe Kanban integration.
+User approved building **all phases in this session**:
+
+- **Phase 1:** `orc` core (`run`, `rpc`, `list`, `show`, `kill`, `quota`), registry,
+  `deleg8`/`pi-rpc`, both skills, Codex AGENTS.md block. Testable from the terminal.
+- **Phase 2:** `orc top` TUI; rpc inbox steering (follow-up prompts).
+- **Phase 3:** end-to-end tests (the five from the original prompt + registry/kill/
+  quota/regression tests), cheat sheet, README with uninstall.
+- **Later (ideas, not committed):** launch brain sessions from the panel; MCP push
+  upgrade of the registry; web dashboard; Vibe Kanban integration.
+
+**Dogfooding requirement (user-requested):** the implementation itself uses the
+advisor pattern as a live test — pi/MiniMax-M3 writes first-draft code via `deleg8`-
+style one-shot calls while the main brain (Fable) designs, reviews, fixes, and
+integrates. Friction encountered is fed back into the skills' wording and the design.
 
 ## Error handling
 
 - Worker non-zero exit → status `failed`, stderr relayed; skills retry once, focused.
 - Quota endpoint failure → warn, never block.
 - Orphaned `running` runs (machine slept, pi crashed) → reconciled by PID check in
-  `orc list`/dashboard.
+  `orc list`/`orc top`.
 - Concurrent access → single-writer meta.json + atomic renames; no locks needed.
 - `orc kill` on an already-dead PID → idempotent, status still transitions.
 
-## Testing (definition of done for Phase 1)
+## Testing (definition of done)
 
 1. `pi -p "Reply with the single word: PONG"` → PONG.
 2. `deleg8 "Reply with the single word: PONG"` → PONG **and** a registry entry appears.
@@ -218,17 +240,17 @@ panel is out of scope for v1** (needs a TTY; noted as a Phase 3 idea via
   a 500k-token repo scan ≈ $0.17 — and on the coding plan these draw from the prepaid
   window rather than billing per-token.
 
-## Assumptions made while the user was away (please veto on review)
+## Resolved decisions (user reviewed 2026-07-10)
 
-1. **Phasing** — design everything now; build Phase 1 first, dashboard second.
-2. **Build vs adopt** — custom thin dashboard over adopting Vibe Kanban/Conductor.
-3. **"Control" scope v1** — view + kill + one follow-up message to rpc runs; launching
-   brain sessions from the panel deferred to Phase 3.
-4. **Quota key** — assumed the Keychain key is a coding-plan subscription key; the
-   `/remains` endpoint will be verified during implementation, with the estimation
-   fallback if not.
-5. **Keyword** — the literal words "orchestrate"/"orchestrated" gate the orchestrate
-   skill; plain heavy-task delegation via `pi-delegate` still auto-triggers (as the
-   user's original prompt specified).
-6. **`orc` implemented in Python 3 stdlib** (already on macOS) rather than pure bash —
-   JSON handling and the Phase-2 HTTP server make bash a poor fit.
+1. **Approved** the overall design; build **all phases** in one session.
+2. **Control plane is a btop-style terminal TUI** (`orc top`, Textual), not a web
+   dashboard — user explicitly requested rich terminal visuals.
+3. **Build custom** rather than adopt Vibe Kanban/Conductor.
+4. **"Control" scope v1** — view + kill + new-task spawn + one follow-up message to rpc
+   runs; launching brain sessions from the panel deferred.
+5. **Quota key** — assumed to be a coding-plan subscription key; `/remains` verified
+   during implementation, estimation fallback if not.
+6. **Keyword** — the literal words "orchestrate"/"orchestrated" gate the orchestrate
+   skill; heavy-task delegation via `pi-delegate` still auto-triggers.
+7. **Implementation dogfoods the advisor pattern** — pi/MiniMax drafts code, the main
+   brain reviews/integrates (doubles as an end-to-end test of the delegation flow).
