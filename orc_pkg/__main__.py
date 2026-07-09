@@ -24,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--echo", action="store_true")
     ex.add_argument("--idle-timeout", type=float, default=None, dest="idle_timeout")
 
+    rp = sub.add_parser("rpc", help="streaming delegation via pi rpc mode")
+    rp.add_argument("task")
+    rp.add_argument("--cwd", default=None)
+    rp.add_argument("--brain", default="human", choices=["claude", "codex", "human"])
+    rp.add_argument("--force", action="store_true")
+    rp.add_argument("--idle-timeout", type=float, default=None, dest="idle_timeout")
+
     ls = sub.add_parser("list", help="list delegated runs")
     ls.add_argument("--json", action="store_true")
 
@@ -49,6 +56,9 @@ def main(argv=None) -> int:
     if args.cmd == "run":
         from orc_pkg import runner
         return runner.cmd_run(args)
+    if args.cmd == "rpc":
+        from orc_pkg import runner
+        return runner.cmd_rpc(args)
     if args.cmd == "_exec":
         from orc_pkg import runner
         return runner.cmd_exec(args)

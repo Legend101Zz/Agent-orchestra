@@ -28,3 +28,27 @@ def fake_pi(tmp_path, monkeypatch):
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
     return script
+
+
+@pytest.fixture
+def fake_pi_rpc(tmp_path, monkeypatch):
+    """Fake pi for --mode rpc emitting the real event protocol (verified 2026-07-10)."""
+    bindir = tmp_path / "fakebin-rpc"
+    bindir.mkdir()
+    script = bindir / "pi"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "read -r line\n"
+        "echo '{\"type\":\"response\",\"command\":\"prompt\",\"success\":true}'\n"
+        "echo '{\"type\":\"agent_start\"}'\n"
+        'if [[ "$line" == *HANG* ]]; then\n'
+        "  echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":1,\"delta\":\"hanging...\"}}'\n"
+        "  sleep 30\n"
+        "fi\n"
+        "echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":1,\"delta\":\"part one \"}}'\n"
+        "echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":1,\"delta\":\"part two\"}}'\n"
+        "echo '{\"type\":\"agent_end\"}'\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    return script

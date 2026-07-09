@@ -165,6 +165,138 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
     return 130
 
 
+RPC_BASE = [
+    "pi",
+    "--mode",
+    "rpc",
+    "--offline",
+    "--provider",
+    "minimax",
+    "--model",
+    "MiniMax-M3",
+    "--no-session",
+]
+# Real pi rpc protocol (verified live 2026-07-10): assistant text arrives as
+# {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":...}}
+# and the run terminates with {"type":"agent_end",...}. pi exits when stdin closes,
+# so stdin must stay open until agent_end.
+TERMINAL_EVENTS = {"agent_end"}
+
+
+def _extract_text(evt: dict):
+    ame = evt.get("assistantMessageEvent")
+    if isinstance(ame, dict) and ame.get("type") == "text_delta":
+        delta = ame.get("delta")
+        if isinstance(delta, str):
+            return delta
+    return None
+
+
+def _inbox_has_kill(rd: Path) -> bool:
+    inbox = rd / "inbox"
+    return inbox.is_dir() and any(inbox.glob("kill-*.json"))
+
+
+def _killpg(proc) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def cmd_rpc(args) -> int:
+    import json
+
+    if not quota_gate(args.force):
+        return 3
+    rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd)
+    meta = registry.read_meta(rd)
+    idle_timeout = args.idle_timeout
+    if idle_timeout is None:
+        idle_timeout = float(quota.load_config().get("idle_timeout_sec", 300))
+    killed = False
+    code = 0
+    with (rd / "output.log").open("ab") as log:
+        try:
+            proc = subprocess.Popen(
+                RPC_BASE, cwd=meta["cwd"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        except FileNotFoundError:
+            log.write(b"orc: pi executable not found on PATH\n")
+            print("orc: pi executable not found on PATH", file=sys.stderr)
+            finalize(rd, meta, 127)
+            return 127
+        meta["pid"] = proc.pid
+        meta["status"] = "running"
+        registry.write_meta(rd, meta)
+        proc.stdin.write(json.dumps(
+            {"type": "prompt", "message": meta["task"]}).encode() + b"\n")
+        proc.stdin.flush()
+
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        last_output = time.monotonic()
+        buf = b""
+        done = False
+        try:
+            while not done:
+                if _inbox_has_kill(rd):
+                    _killpg(proc)
+                    killed = True
+                    break
+                events = sel.select(timeout=0.3)
+                if not events:
+                    if proc.poll() is not None:
+                        break
+                    if idle_timeout > 0 and time.monotonic() - last_output > idle_timeout:
+                        msg = f"\norc: idle timeout after {int(idle_timeout)}s — killing worker\n"
+                        log.write(msg.encode())
+                        log.flush()
+                        print(msg, file=sys.stderr)
+                        _killpg(proc)
+                        proc.wait()
+                        finalize(rd, registry.read_meta(rd), 124)
+                        return 124
+                    continue
+                chunk = os.read(proc.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                last_output = time.monotonic()
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    log.write(line + b"\n")
+                    log.flush()
+                    try:
+                        evt = json.loads(line)
+                    except ValueError:
+                        sys.stdout.buffer.write(line + b"\n")
+                        sys.stdout.buffer.flush()
+                        continue
+                    text = _extract_text(evt)
+                    if text:
+                        sys.stdout.write(text)
+                        sys.stdout.flush()
+                    if evt.get("type") in TERMINAL_EVENTS:
+                        done = True
+        except KeyboardInterrupt:
+            _killpg(proc)
+            killed = True
+        finally:
+            sel.close()
+            try:
+                proc.stdin.close()
+            except (OSError, BrokenPipeError):
+                pass
+            if killed:
+                _killpg(proc)
+            code = proc.wait()
+    print()
+    finalize(rd, registry.read_meta(rd), -signal.SIGTERM if killed else code)
+    return 130 if killed else max(code, 0)
+
+
 def cmd_run(args) -> int:
     if not quota_gate(args.force):
         return 3
