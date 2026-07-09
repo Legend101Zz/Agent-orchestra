@@ -47,6 +47,37 @@ def test_kill_background_run(orc_home, fake_pi):
     assert any(json.loads(p.read_text())["type"] == "kill" for p in inbox)
 
 
+def test_kill_when_worker_traps_sigterm(orc_home, tmp_path, monkeypatch):
+    """Real pi traps SIGTERM and exits 143; the run must still classify as killed."""
+    import os
+    import stat
+    bindir = tmp_path / "fakebin-trap"
+    bindir.mkdir()
+    script = bindir / "pi"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "trap 'exit 143' TERM\n"
+        "for i in $(seq 1 300); do sleep 0.1; done\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    seed_ok_quota(orc_home)
+    rid = run_orc("run", "trap test", "--bg").stdout.strip()
+    for _ in range(50):
+        m = registry.read_meta(registry.find_run(rid))
+        if m["status"] == "running":
+            break
+        time.sleep(0.1)
+    assert m["status"] == "running"
+    assert run_orc("kill", rid).returncode == 0
+    for _ in range(50):
+        m = registry.read_meta(registry.find_run(rid))
+        if m["status"] in ("killed", "failed"):
+            break
+        time.sleep(0.1)
+    assert m["status"] == "killed"
+
+
 def test_quota_exit_codes(orc_home, fake_pi):
     seed_ok_quota(orc_home)
     assert run_orc("quota").returncode == 0

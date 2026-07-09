@@ -159,6 +159,10 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
     finally:
         log_file.close()
 
+    # pi traps SIGTERM and exits 143 (128+15) instead of dying by signal; an
+    # inbox kill marker or that code means "killed by orc", not "failed".
+    if code > 0 and (code == 143 or _inbox_has_kill(rd)):
+        code = -signal.SIGTERM
     finalize(rd, meta, code)
     if code >= 0:
         return max(code, 0)
