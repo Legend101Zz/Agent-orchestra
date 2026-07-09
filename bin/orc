@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# orc — pi-orchestra CLI shim. Resolves symlinks so ~/.local/bin/orc finds the repo.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+exec env PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m orc_pkg "$@"
