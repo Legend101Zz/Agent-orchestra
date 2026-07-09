@@ -239,6 +239,7 @@ def cmd_rpc(args) -> int:
         last_output = time.monotonic()
         buf = b""
         done = False
+        usage = None
         try:
             while not done:
                 if _inbox_has_kill(rd):
@@ -279,6 +280,7 @@ def cmd_rpc(args) -> int:
                         sys.stdout.write(text)
                         sys.stdout.flush()
                     if evt.get("type") in TERMINAL_EVENTS:
+                        usage = _extract_usage(evt)
                         done = True
         except KeyboardInterrupt:
             _killpg(proc)
@@ -294,7 +296,28 @@ def cmd_rpc(args) -> int:
             code = proc.wait()
     print()
     finalize(rd, registry.read_meta(rd), -signal.SIGTERM if killed else code)
+    if usage:
+        meta = registry.read_meta(rd)
+        meta["tokens"].update(usage)
+        meta["tokens"]["estimated_total"] = usage.get(
+            "total", meta["tokens"]["estimated_total"])
+        registry.write_meta(rd, meta)
     return 130 if killed else max(code, 0)
+
+
+def _extract_usage(evt: dict):
+    """Pull real token usage from agent_end's assistant messages (pi records it)."""
+    best = None
+    for msg in evt.get("messages", []) or []:
+        u = msg.get("usage") if isinstance(msg, dict) else None
+        if isinstance(u, dict) and u.get("totalTokens"):
+            best = {"input": u.get("input", 0), "output": u.get("output", 0),
+                    "cache_read": u.get("cacheRead", 0),
+                    "total": u.get("totalTokens", 0)}
+            cost = u.get("cost")
+            if isinstance(cost, dict) and cost.get("total") is not None:
+                best["cost_usd"] = round(cost["total"], 6)
+    return best
 
 
 def cmd_run(args) -> int:

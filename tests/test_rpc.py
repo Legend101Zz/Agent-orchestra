@@ -17,6 +17,10 @@ def test_rpc_streams_and_finishes(orc_home, fake_pi_rpc):
     m = registry.list_runs()[0]
     assert m["status"] == "done"
     assert "agent_end" in (Path(m["_dir"]) / "output.log").read_text()
+    assert m["tokens"]["input"] == 84
+    assert m["tokens"]["total"] == 1639
+    assert m["tokens"]["cost_usd"] == 0.00014
+    assert m["tokens"]["estimated_total"] == 1639
 
 
 def test_rpc_inbox_kill(orc_home, fake_pi_rpc):

@@ -47,7 +47,7 @@ def fake_pi_rpc(tmp_path, monkeypatch):
         "fi\n"
         "echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":1,\"delta\":\"part one \"}}'\n"
         "echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"contentIndex\":1,\"delta\":\"part two\"}}'\n"
-        "echo '{\"type\":\"agent_end\"}'\n"
+        "echo '{\"type\":\"agent_end\",\"messages\":[{\"role\":\"assistant\",\"usage\":{\"input\":84,\"output\":19,\"cacheRead\":1536,\"totalTokens\":1639,\"cost\":{\"total\":0.00014016}}}]}'\n"
     )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
