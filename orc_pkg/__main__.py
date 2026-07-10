@@ -49,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     qt.add_argument("--json", action="store_true")
     qt.add_argument("--force", action="store_true", help="bypass 60s cache")
 
+    st = sub.add_parser("stats", help="usage & cost: workers (exact) + brains (estimate)")
+    st.add_argument("--json", action="store_true")
+
     sub.add_parser("top", help="btop-style control plane TUI")
 
     return p
@@ -72,10 +75,11 @@ def main(argv=None) -> int:
         from orc_pkg.tui import run_tui
         run_tui()
         return 0
-    if args.cmd in ("list", "show", "kill", "quota"):
+    if args.cmd in ("list", "show", "kill", "quota", "stats"):
         from orc_pkg import control
         return {"list": control.cmd_list, "show": control.cmd_show,
-                "kill": control.cmd_kill, "quota": control.cmd_quota}[args.cmd](args)
+                "kill": control.cmd_kill, "quota": control.cmd_quota,
+                "stats": control.cmd_stats}[args.cmd](args)
     build_parser().print_help()
     return 1
 
