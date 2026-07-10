@@ -35,7 +35,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Print the Rust CLI version.
     Version,
+    /// Run one registered JSON-mode worker.
     Run {
         task: String,
         #[arg(long)]
@@ -55,6 +57,7 @@ enum Commands {
         #[arg(long)]
         brain_model: Option<String>,
     },
+    /// Run one registered streaming RPC worker.
     Rpc {
         task: String,
         #[arg(long)]
@@ -80,32 +83,34 @@ enum Commands {
         #[arg(long)]
         idle_timeout: Option<f64>,
     },
+    /// List registry runs, reconciling dead worker PIDs.
     List {
         #[arg(long)]
         json: bool,
     },
+    /// Show metadata and the tail of one run.
     Show {
         id: String,
         #[arg(long, default_value_t = 40)]
         tail: usize,
     },
-    Kill {
-        id: String,
-    },
+    /// Request termination of one running worker.
+    Kill { id: String },
+    /// Read coding-plan quota and enforce configured thresholds.
     Quota {
         #[arg(long)]
         json: bool,
         #[arg(long)]
         force: bool,
     },
+    /// Report worker usage, delegated value, and brain usage.
     Stats {
         #[arg(long)]
         json: bool,
     },
-    Send {
-        id: String,
-        message: String,
-    },
+    /// Send one follow-up to a running RPC worker.
+    Send { id: String, message: String },
+    /// Start a linked retry without changing the source run.
     Retry {
         id: String,
         #[arg(long)]
@@ -113,20 +118,21 @@ enum Commands {
         #[arg(long)]
         foreground: bool,
     },
+    /// Continue stopped work from a brain-reviewed remaining-work brief.
     Handoff {
         id: String,
         brief: String,
         #[arg(long)]
         foreground: bool,
     },
+    /// Read or edit operator-console configuration.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    Budget {
-        session: String,
-        usd: f64,
-    },
+    /// Set a non-blocking advisory budget for one session.
+    Budget { session: String, usd: f64 },
+    /// Open the Ratatui operator console.
     Top {
         #[arg(long)]
         theme: Option<String>,
