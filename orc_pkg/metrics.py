@@ -112,9 +112,163 @@ def worker_stats(runs: list) -> dict:
     return out
 
 
+def _parse_claude_file(path: Path) -> dict:
+    """One session file -> {"days": {day: {...}}, "models": {model: total}}."""
+    days: dict = {}
+    models: dict = {}
+    seen: set = set()
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            usage = msg.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            key = (msg.get("id"), rec.get("requestId"))
+            if key != (None, None):
+                if key in seen:
+                    continue
+                seen.add(key)
+            day = str(rec.get("timestamp", ""))[:10]
+            d = days.setdefault(day, {"input": 0, "output": 0,
+                                      "cache_read": 0, "cache_create": 0})
+            inp = int(usage.get("input_tokens", 0) or 0)
+            outp = int(usage.get("output_tokens", 0) or 0)
+            d["input"] += inp
+            d["output"] += outp
+            d["cache_read"] += int(usage.get("cache_read_input_tokens", 0) or 0)
+            d["cache_create"] += int(usage.get("cache_creation_input_tokens", 0) or 0)
+            model = msg.get("model") or "?"
+            models[model] = models.get(model, 0) + inp + outp
+    return {"days": days, "models": models}
+
+
+def _parse_codex_file(path: Path) -> dict:
+    """Codex token_count carries *cumulative* totals — the last one per file wins."""
+    last = None
+    last_day = None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            payload = rec.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            info = payload.get("info")
+            if not isinstance(info, dict):
+                continue
+            total = info.get("total_token_usage") or info.get("last_token_usage")
+            if isinstance(total, dict):
+                last = total
+                last_day = str(rec.get("timestamp", ""))[:10]
+    if not last:
+        return {"days": {}, "models": {}}
+    if not last_day:
+        last_day = datetime.fromtimestamp(
+            path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+    return {"days": {last_day: {
+        "input": int(last.get("input_tokens", 0) or 0),
+        "output": int(last.get("output_tokens", 0) or 0),
+        "cache_read": int(last.get("cached_input_tokens", 0) or 0),
+        "cache_create": 0,
+    }}, "models": {}}
+
+
+_ZERO = {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0}
+
+
+def _combine(files: dict, now: datetime) -> dict | None:
+    if not files:
+        return None
+    today_key = now.strftime("%Y-%m-%d")
+    week_floor = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    today = dict(_ZERO)
+    week = dict(_ZERO)
+    by_model: dict = {}
+    for agg in files.values():
+        for day, d in agg.get("days", {}).items():
+            if day == today_key:
+                for k in today:
+                    today[k] += d.get(k, 0)
+            if day >= week_floor:
+                for k in week:
+                    week[k] += d.get(k, 0)
+        for model, tok in agg.get("models", {}).items():
+            by_model[model] = by_model.get(model, 0) + tok
+    return {"today": today, "week": week, "by_model": by_model}
+
+
 def brain_usage(claude_dir=None, codex_dir=None, cache_path=None, now=None) -> dict:
-    """Brain-side token usage parsed from local session logs (see Task 5)."""
-    return {"claude": None, "codex": None}
+    """Brain-side token usage parsed from local session logs, mtime-cached.
+
+    Returns {"claude": {...} | None, "codex": {...} | None}; None means the
+    logs are absent/unparseable — render as "n/a", never crash.
+    """
+    claude_dir = Path(claude_dir) if claude_dir else Path.home() / ".claude" / "projects"
+    codex_dir = Path(codex_dir) if codex_dir else Path.home() / ".codex" / "sessions"
+    cache_path = Path(cache_path) if cache_path else registry.home() / "brain_usage_cache.json"
+    now = now or datetime.now(timezone.utc)
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        if not isinstance(cache.get("files"), dict):
+            cache = {"files": {}}
+    except (OSError, ValueError):
+        cache = {"files": {}}
+
+    live_paths: set = set()
+    result: dict = {}
+    dirty = False
+    for name, root, parser in (("claude", claude_dir, _parse_claude_file),
+                               ("codex", codex_dir, _parse_codex_file)):
+        try:
+            paths = sorted(root.glob("**/*.jsonl")) if root.is_dir() else []
+        except OSError:
+            paths = []
+        files: dict = {}
+        for p in paths:
+            sp = str(p)
+            live_paths.add(sp)
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            cached = cache["files"].get(sp)
+            if (isinstance(cached, dict) and cached.get("mtime") == st.st_mtime
+                    and cached.get("size") == st.st_size):
+                files[sp] = cached.get("agg", {})
+                continue
+            try:
+                agg = parser(p)
+            except Exception:
+                continue
+            files[sp] = agg
+            cache["files"][sp] = {"mtime": st.st_mtime, "size": st.st_size, "agg": agg}
+            dirty = True
+        result[name] = _combine(files, now)
+
+    stale = [sp for sp in cache["files"] if sp not in live_paths]
+    for sp in stale:
+        del cache["files"][sp]
+        dirty = True
+    if dirty:
+        try:
+            registry.atomic_write_json(cache_path, cache)
+        except OSError:
+            pass
+    return result
 
 
 def delegated_value(runs: list) -> dict:
