@@ -109,6 +109,61 @@ async def test_theme_never_stock_blue(some_runs, quiet_backends):
         await pilot.press("q")
 
 
+async def test_enter_run_opens_session_screen(session_runs, quiet_backends):
+    from orc_pkg.tui import OrcTop
+    from orc_pkg.tui.session_screen import SessionScreen
+    app = OrcTop()
+    async with app.run_test(size=(140, 44)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")             # expand session
+        await pilot.pause()
+        await pilot.press("j", "enter")        # first member → drill in
+        await pilot.pause()
+        assert isinstance(app.screen, SessionScreen)
+        assert len(app.screen.runs) == 2       # whole session opened
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, SessionScreen)
+        await pilot.press("q")
+
+
+async def test_session_screen_has_four_tabs(session_runs, quiet_backends):
+    from textual.widgets import TabbedContent, TabPane
+    from orc_pkg.tui import OrcTop
+    from orc_pkg.tui.session_screen import SessionScreen
+    app = OrcTop()
+    async with app.run_test(size=(140, 44)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("j", "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SessionScreen)
+        panes = [p.id for p in app.screen.query(TabPane)]
+        assert panes == ["tab-flow", "tab-convo", "tab-log", "tab-meta"]
+        await pilot.press("escape")
+        await pilot.press("q")
+
+
+async def test_session_screen_cycles_selected_run(session_runs, quiet_backends):
+    from orc_pkg.tui import OrcTop
+    from orc_pkg.tui.session_screen import SessionScreen
+    app = OrcTop()
+    async with app.run_test(size=(140, 44)) as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("j", "enter")
+        await pilot.pause()
+        scr = app.screen
+        assert isinstance(scr, SessionScreen)
+        before = scr.current["id"]
+        await pilot.press("right_square_bracket")
+        assert scr.current["id"] != before
+        await pilot.press("escape")
+        await pilot.press("q")
+
+
 async def test_help_overlay_toggles(some_runs, quiet_backends):
     from orc_pkg.tui import OrcTop
     app = OrcTop()
