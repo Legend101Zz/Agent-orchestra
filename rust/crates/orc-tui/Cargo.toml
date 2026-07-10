@@ -11,8 +11,8 @@ chrono.workspace = true
 crossterm.workspace = true
 orc-core = { path = "../orc-core" }
 ratatui.workspace = true
+serde_json.workspace = true
 unicode-width.workspace = true
 
 [lints]
 workspace = true
-

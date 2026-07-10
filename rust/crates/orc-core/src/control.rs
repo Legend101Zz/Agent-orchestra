@@ -249,3 +249,42 @@ pub fn set_config(key: &str, raw_value: &str) -> Result<Value> {
     atomic_write_json(&home().join("config.json"), &config)?;
     Ok(config)
 }
+
+fn session_key(session: &str) -> String {
+    session
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+fn session_record_path(session: &str) -> PathBuf {
+    home()
+        .join("sessions")
+        .join(session_key(session))
+        .join("session.json")
+}
+
+#[must_use]
+pub fn session_budget(session: &str) -> Option<f64> {
+    fs::read(session_record_path(session))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|record| record.get("advisory_budget_usd").and_then(Value::as_f64))
+        .or_else(|| quota::load_config().advisory_budget_usd)
+}
+
+pub fn set_session_budget(session: &str, budget: f64) -> Result<Value> {
+    let record = serde_json::json!({
+        "id": session,
+        "advisory_budget_usd": budget.max(0.0),
+        "updated_at": now_iso(),
+    });
+    atomic_write_json(&session_record_path(session), &record)?;
+    Ok(record)
+}

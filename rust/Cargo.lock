@@ -1164,6 +1164,7 @@ dependencies = [
  "crossterm",
  "orc-core",
  "ratatui",
+ "serde_json",
  "unicode-width",
 ]
 

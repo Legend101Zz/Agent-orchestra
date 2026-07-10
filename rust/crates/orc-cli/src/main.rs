@@ -123,6 +123,10 @@ enum Commands {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    Budget {
+        session: String,
+        usd: f64,
+    },
     Top {
         #[arg(long)]
         theme: Option<String>,
@@ -397,6 +401,11 @@ fn dispatch(command: Commands) -> Result<i32> {
                 ConfigCommand::Set { key, value } => control::set_config(&key, &value)?,
             };
             println!("{}", serde_json::to_string_pretty(&config)?);
+            Ok(0)
+        }
+        Commands::Budget { session, usd } => {
+            let record = control::set_session_budget(&session, usd)?;
+            println!("{}", serde_json::to_string_pretty(&record)?);
             Ok(0)
         }
         Commands::Top { theme } => {

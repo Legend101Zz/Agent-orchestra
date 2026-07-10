@@ -124,3 +124,33 @@ def test_retry_and_handoff_are_additive(orc_home, fake_pi_json, rust_orc):
     handoff_meta = wait_terminal(handoff_dir)
     assert handoff_meta["handoff_from"] == original["id"]
     assert registry.read_meta(Path(original["_dir"])).get("retry_of") is None
+
+
+def test_session_budget_is_advisory_and_path_safe(orc_home, rust_orc):
+    result = run_rust(rust_orc, "budget", "team/unsafe", "0.75")
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout)
+    assert record["advisory_budget_usd"] == 0.75
+    assert (orc_home / "sessions" / "team%2Funsafe" / "session.json").is_file()
+    assert not (orc_home / "sessions" / "team" / "unsafe").exists()
+
+
+def test_context_exhaustion_requests_brain_reviewed_handoff(
+    orc_home, tmp_path, monkeypatch, rust_orc
+):
+    seed_ok_quota(orc_home)
+    bindir = tmp_path / "fake-context-limit"
+    bindir.mkdir()
+    script = bindir / "pi"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo '{\"type\":\"agent_end\",\"stopReason\":\"max_tokens\",\"messages\":[{\"role\":\"assistant\",\"usage\":{\"input\":99,\"output\":10,\"cacheRead\":0,\"totalTokens\":109}}]}'\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    result = run_rust(rust_orc, "run", "use every available token", "--brain", "codex")
+    assert result.returncode == 0, result.stderr
+    meta = registry.list_runs()[0]
+    assert meta["status"] == "done"
+    assert meta["attention"] == "handoff_needed"
+    assert meta["failure_kind"] == "context_exhausted"

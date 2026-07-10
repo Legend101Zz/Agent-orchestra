@@ -212,7 +212,29 @@ fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or(1)
 }
 
-fn finalize(run_dir: &Path, code: i32, usage: Option<&Usage>) -> Result<()> {
+fn context_exhausted(bytes: &[u8]) -> bool {
+    let line = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+    [
+        "context_length_exceeded",
+        "maximum context length",
+        "context window exceeded",
+        "context limit exceeded",
+        "token limit exceeded",
+        "\"finish_reason\":\"length\"",
+        "\"finishreason\":\"length\"",
+        "\"stop_reason\":\"max_tokens\"",
+        "\"stopreason\":\"max_tokens\"",
+    ]
+    .iter()
+    .any(|signature| line.contains(signature))
+}
+
+fn finalize(
+    run_dir: &Path,
+    code: i32,
+    usage: Option<&Usage>,
+    failure_kind: Option<&str>,
+) -> Result<()> {
     let mut meta = read_meta(run_dir)?;
     meta.status = if code == 0 {
         "done"
@@ -237,8 +259,13 @@ fn finalize(run_dir: &Path, code: i32, usage: Option<&Usage>) -> Result<()> {
     if code == 124 {
         meta.attention = Some("handoff_needed".to_owned());
         meta.failure_kind = Some("idle_timeout".to_owned());
+    } else if let Some(failure_kind) = failure_kind {
+        meta.attention = Some("handoff_needed".to_owned());
+        meta.failure_kind = Some(failure_kind.to_owned());
     }
-    write_meta(run_dir, &meta)
+    write_meta(run_dir, &meta)?;
+    crate::notification::run_finished(&meta);
+    Ok(())
 }
 
 fn deliver_pending_prompts(
@@ -276,7 +303,7 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
             if echo {
                 eprint!("{message}");
             }
-            finalize(run_dir, 127, None)?;
+            finalize(run_dir, 127, None, None)?;
             return if error.downcast_ref::<std::io::Error>().is_some() {
                 Ok(127)
             } else {
@@ -312,6 +339,7 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
     let mut killed = false;
     let mut timed_out = false;
     let mut saw_delta = false;
+    let mut exhausted_context = false;
     let poll = Duration::from_millis(if mode == Mode::Rpc { 300 } else { 500 });
 
     loop {
@@ -333,6 +361,7 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
         match receiver.recv_timeout(poll) {
             Ok(line) => {
                 last_output = Instant::now();
+                exhausted_context |= context_exhausted(&line.bytes);
                 let compact = compact_log_line(&line.bytes);
                 log.write_all(&compact)?;
                 log.write_all(b"\n")?;
@@ -368,7 +397,12 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
                     if saw_delta && echo {
                         println!();
                     }
-                    finalize(run_dir, code, usage.as_ref())?;
+                    finalize(
+                        run_dir,
+                        code,
+                        usage.as_ref(),
+                        exhausted_context.then_some("context_exhausted"),
+                    )?;
                     return Ok(if code < 0 { 130 } else { code });
                 }
                 if idle_timeout > 0.0
@@ -407,7 +441,12 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
     if saw_delta && echo {
         println!();
     }
-    finalize(run_dir, code, usage.as_ref())?;
+    finalize(
+        run_dir,
+        code,
+        usage.as_ref(),
+        exhausted_context.then_some("context_exhausted"),
+    )?;
     Ok(if code < 0 { 130 } else { code })
 }
 
