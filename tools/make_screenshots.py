@@ -134,6 +134,16 @@ async def shoot(outdir: Path) -> None:
         await pilot.press("escape")
         await pilot.press("q")
 
+    app = OrcTop(theme_name="phosphor")
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        (outdir / "orc-top-phosphor.svg").write_text(
+            app.export_screenshot(title="orc top — phosphor theme"))
+        await pilot.press("q")
+
 
 def main() -> None:
     outdir = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "docs"

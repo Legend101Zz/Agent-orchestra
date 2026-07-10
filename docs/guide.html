@@ -332,11 +332,19 @@
         <tr><td>20260710-023226-reply-with…</td><td>👤 human</td><td><span style="color: var(--ok);">done</span></td><td>07-10 02:32</td><td style="text-align:right;">1639</td><td>Reply with the single wor…</td></tr>
       </table>
       <div class="tui-detail">20260710-031502  [running]  cwd=/Users/comreton/Desktop/pi-orchestra<br>…live tail of output.log appears here…</div>
-      <div class="tui-keys"><span><b>k</b> kill (press twice)</span><span><b>n</b> new task</span><span><b>r</b> refresh</span><span><b>q</b> quit</span></div>
+      <div class="tui-keys"><span><b>j/k</b> nav</span><span><b>enter</b> open</span><span><b>x</b> kill (twice)</span><span><b>n</b> new task</span><span><b>s</b> sort</span><span><b>/</b> filter</span><span><b>t</b> theme</span><span><b>?</b> help</span><span><b>q</b> quit</span></div>
     </div>
   </div>
   <p class="muted" style="margin-top: 14px;">Refreshes every 2 seconds straight from <code>~/.orchestra</code>. The dashboard only <em>reads</em> —
   kills and new tasks are shelled out through the same <code>orc</code> commands the brains use, so there's a single code path for everything.</p>
+  <p class="muted" style="margin-top: 10px;">v2 is a full instrument cluster: gradient quota meters with a braille history sparkline,
+  a <strong>delegated-value hero tile</strong> (worker tokens priced at brain API rates vs what MiniMax actually cost — <code>~</code> marks
+  chars/4 estimates, everything else is exact from pi's <code>agent_end</code> usage), a 24-hour activity strip, and orchestrated swarms
+  grouped as expandable <strong>sessions</strong> (<code>ORC_SESSION</code>). Hitting <code>enter</code> on a run opens a drill-in screen with
+  <em>Flow</em> (the brain→workers diagram), <em>Conversation</em> (markdown-rendered prompt & reply, thinking collapsed behind <code>t</code>),
+  <em>Log</em> (live tail, <code>/</code> search, <code>w</code> wrap) and <em>Meta</em> tabs — <code>esc</code> comes back. Two themes ship,
+  <strong>ember</strong> and <strong>phosphor</strong>, switchable live with <code>t</code> and saved to <code>~/.orchestra/config.json</code>.
+  Real screenshots: <code>docs/orc-top-screenshot.svg</code>, <code>docs/orc-session-screenshot.svg</code>, <code>docs/orc-top-phosphor.svg</code>.</p>
 </section>
 
 <!-- ============ USABILITY / HOW IT LOADS ============ -->
@@ -382,6 +390,8 @@
       <tr><td>Open the dashboard</td><td><span class="cmd">orc top</span></td></tr>
       <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
       <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
+      <tr><td>Usage &amp; savings report</td><td><span class="cmd">orc stats</span> &nbsp;(workers exact · brains estimated · delegated value)</td></tr>
+      <tr><td>Group a swarm as one session</td><td><span class="cmd">ORC_SESSION="orch-…" orc run "chunk" --bg</span> &nbsp;or&nbsp; <span class="cmd">orc run … --session ID</span></td></tr>
       <tr><td>Fail fast on a stalled worker</td><td><span class="cmd">orc run "task" --idle-timeout 120</span></td></tr>
       <tr><td>Trigger the multi-worker swarm</td><td>say <span class="cmd">orchestrate: &lt;big task&gt;</span> to Claude or Codex</td></tr>
       <tr><td>One-off with a different model</td><td><span class="cmd">pi -p --offline --provider minimax --model MiniMax-M2.5 "task"</span> <span class="muted">(bypasses the registry)</span></td></tr>

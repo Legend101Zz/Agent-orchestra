@@ -39,6 +39,8 @@ before any append (`*.pi-orchestra.bak`).
 | Streaming delegation             | `pi-rpc "task"` |
 | Watch everything (control plane) | `orc top` |
 | List / inspect / kill runs       | `orc list` / `orc show <id>` / `orc kill <id>` |
+| Usage, cost & savings report     | `orc stats` (`--json` for machines) |
+| Group a swarm as one session     | `export ORC_SESSION="orch-…"` before `orc run`, or `--session ID` |
 | Check MiniMax quota              | `orc quota` (exit 0 ok / 2 warn / 3 block / 4 unknown) |
 | Force past a quota block         | add `--force` (only if you accept the risk) |
 | Fail fast on a stalled worker    | `orc run "task" --idle-timeout 120` |
@@ -51,15 +53,42 @@ before any append (`*.pi-orchestra.bak`).
   ≤3 parallel workers → verified synthesis). Ordinary prompts never trigger it.
 - **Cost:** a PONG round-trip measured $0.00014; a typical delegation (~50k in /
   5k out) ≈ $0.02 API-equivalent; a 500k-token scan ≈ $0.17. On the coding plan
-  these draw down the 5-hour/weekly windows shown in `orc top`. `orc rpc` runs
-  record exact usage + cost from pi's `agent_end` event in `meta.json`.
+  these draw down the 5-hour/weekly windows shown in `orc top`. Both `orc run`
+  (json mode) and `orc rpc` record exact usage + cost from pi's `agent_end`
+  event in `meta.json`; chars/4 estimates (marked `~`) are only a fallback.
 
 ## Control plane (`orc top`)
 
-Keys: `k` kill selected (press twice to confirm) · `n` new background task ·
-`r` refresh · `q` quit. Auto-refreshes every 2 s. The quota panel shows both the
-5-hour and weekly windows with color thresholds (green >25 %, yellow >10 %, red).
-Screenshot: `docs/orc-top-screenshot.svg`.
+A btop-style instrument cluster over `~/.orchestra`, auto-refreshing every 2 s:
+
+- **Quota** — gradient fuel-gauge meters for the 5-hour and weekly windows with
+  warn/block notches, reset countdown, and a braille history sparkline (sampled
+  to `quota_history.jsonl` on every API fetch).
+- **Tiles** — the delegated-value hero (`saved $X · Nx vs brain rates`, with an
+  honest "% exact basis" line), tokens today (workers + 🧠/🤖 brains), cost
+  today, active workers.
+- **Sessions** — orchestrated swarms group into expandable rows (`ORC_SESSION`);
+  `enter` on a run opens a drill-in screen with **Flow** (brain→workers DAG),
+  **Conversation** (markdown prompt/reply, thinking behind `t`), **Log** (live
+  tail, `/` search, `w` wrap) and **Meta** tabs; `esc` comes back.
+- **Keys** — `j/k` nav · `enter` open · `x` kill (twice to confirm) · `n` new
+  task · `s` sort · `/` filter · `t` theme · `?` help · `q` quit. Mouse works
+  everywhere.
+- **Themes** — `ember` (default) and `phosphor` (CRT green); `t` cycles and
+  persists to `~/.orchestra/config.json`.
+
+Screenshots: `docs/orc-top-screenshot.svg` · `docs/orc-session-screenshot.svg` ·
+`docs/orc-top-phosphor.svg` (regenerate with
+`.venv/bin/python tools/make_screenshots.py`).
+
+## Usage accounting (`orc stats`)
+
+Three blocks, honest about precision: **WORKERS** (registry; exact tokens+cost
+where pi reported usage, `~` estimates otherwise), **DELEGATED VALUE** (worker
+tokens priced at brain API list rates vs what MiniMax actually cost — the
+number this project exists for), **BRAINS** (parsed locally from
+`~/.claude/projects/**.jsonl` and `~/.codex/sessions/**`, cached by mtime,
+labeled API-equivalent since subscriptions are flat-rate; `n/a` when absent).
 
 ## Config (`~/.orchestra/config.json`)
 
@@ -70,6 +99,7 @@ Screenshot: `docs/orc-top-screenshot.svg`.
 | `cache_ttl_sec` | 60 | quota API cache |
 | `max_parallel_workers` | 3 | ceiling the orchestrate skill respects |
 | `idle_timeout_sec` | 300 | kill a worker that produces no output for this long (exit 124) |
+| `theme` | `ember` | `orc top` theme: `ember` or `phosphor` (the `t` key persists here) |
 
 ## Troubleshooting
 
