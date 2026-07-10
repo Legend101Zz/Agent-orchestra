@@ -130,4 +130,31 @@ mod tests {
         assert!(session.contains("MINIMAX M3"));
         assert!(session.contains("CONVERSATION"));
     }
+
+    #[test]
+    fn narrow_session_keeps_controller_and_worker_identity() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::with_runs(
+            vec![
+                run("worker-a", "running", Some("session-v3")),
+                run("worker-b", "failed", Some("session-v3")),
+            ],
+            EMBER,
+        );
+        app.expanded.insert("session-v3".to_owned());
+        app.rebuild_rows();
+        app.selected_row = 1;
+        app.open_selected();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let session = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(session.contains("CODEX / CONTROLLER"));
+        assert!(session.contains("MINIMAX M3"));
+    }
 }
