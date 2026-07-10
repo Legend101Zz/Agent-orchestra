@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -112,26 +113,18 @@ pub fn runs_as_json(reconcile: bool) -> Result<Value> {
 pub fn show(prefix: &str, tail: usize) -> Result<(RunMeta, Vec<String>)> {
     let run = find_run(prefix)?;
     let meta = read_meta(&run)?;
-    let lines = File::open(run.join("output.log"))
-        .ok()
-        .map(|file| {
-            BufReader::new(file)
-                .lines()
-                .map_while(Result::ok)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Ok((
-        meta,
-        lines
-            .into_iter()
-            .rev()
-            .take(tail)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect(),
-    ))
+    let mut lines = VecDeque::with_capacity(tail);
+    if tail > 0
+        && let Ok(file) = File::open(run.join("output.log"))
+    {
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if lines.len() == tail {
+                lines.pop_front();
+            }
+            lines.push_back(line);
+        }
+    }
+    Ok((meta, lines.into()))
 }
 
 pub fn kill(prefix: &str) -> Result<RunMeta> {
