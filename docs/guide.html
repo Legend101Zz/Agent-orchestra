@@ -1,0 +1,464 @@
+<title>pi-orchestra — field guide</title>
+<style>
+  :root {
+    --bg: #101418;
+    --panel: #171d24;
+    --panel-2: #131920;
+    --line: #2a323d;
+    --text: #ccd4dc;
+    --muted: #89939f;
+    --accent: #fea62b;
+    --ok: #4fc26b;
+    --warn: #e3bc4a;
+    --bad: #e0604f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Segoe UI, sans-serif;
+  }
+  html { background: var(--bg); }
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    line-height: 1.65;
+    margin: 0;
+    font-size: 16.5px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px 96px; }
+
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(254,166,43,.35); }
+  a:hover, a:focus-visible { border-bottom-color: var(--accent); outline: none; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  h1, h2, h3 { font-family: var(--mono); text-wrap: balance; line-height: 1.25; }
+  h1 { font-size: 40px; margin: 0 0 10px; letter-spacing: -0.5px; color: #fff; }
+  h2 { font-size: 22px; margin: 0 0 18px; color: #fff; }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--text); }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  .muted { color: var(--muted); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+
+  header.hero { padding: 72px 0 26px; }
+  .hero .sub { font-size: 19px; color: var(--muted); max-width: 62ch; }
+  .hero .sub strong { color: var(--text); font-weight: 600; }
+
+  section { margin-top: 64px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 26px 28px;
+  }
+
+  code, .cmd {
+    font-family: var(--mono); font-size: 0.88em;
+    background: #0b0f13; border: 1px solid var(--line);
+    border-radius: 4px; padding: 2px 6px; color: #ffd48a;
+    white-space: nowrap;
+  }
+  pre {
+    background: #0b0f13; border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px 18px; overflow-x: auto; font-family: var(--mono);
+    font-size: 13.5px; line-height: 1.6; color: var(--text); margin: 14px 0;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; white-space: pre; }
+  pre .c { color: var(--muted); }
+  pre .g { color: var(--ok); }
+  pre .y { color: var(--warn); }
+  pre .r { color: var(--bad); }
+  pre .a { color: var(--accent); }
+
+  /* ---- chips & bars ---- */
+  .chip {
+    display: inline-block; font-family: var(--mono); font-size: 12px;
+    padding: 1px 9px; border-radius: 999px; border: 1px solid;
+    letter-spacing: .04em; white-space: nowrap;
+  }
+  .chip.ok   { color: var(--ok);   border-color: rgba(79,194,107,.5);  background: rgba(79,194,107,.09); }
+  .chip.warn { color: var(--warn); border-color: rgba(227,188,74,.5);  background: rgba(227,188,74,.09); }
+  .chip.bad  { color: var(--bad);  border-color: rgba(224,96,79,.5);   background: rgba(224,96,79,.09); }
+  .chip.dim  { color: var(--muted); border-color: var(--line);         background: rgba(137,147,159,.07); }
+
+  .bar { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 13px; }
+  .bar .track {
+    flex: 1; height: 10px; border-radius: 5px; background: #0b0f13;
+    border: 1px solid var(--line); overflow: hidden;
+  }
+  .bar .fill { height: 100%; border-radius: 4px; }
+  .bar .pct { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ---- architecture flow ---- */
+  .flow { display: flex; flex-direction: column; gap: 0; align-items: stretch; margin: 20px 0 6px; }
+  .flow-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .node {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 12px 18px; text-align: center; min-width: 190px; flex: 1; max-width: 300px;
+  }
+  .node .t { font-family: var(--mono); font-size: 14px; color: #fff; }
+  .node .d { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .node.accent { border-color: rgba(254,166,43,.55); }
+  .node.accent .t { color: var(--accent); }
+  .flow-link {
+    text-align: center; font-family: var(--mono); font-size: 12px;
+    color: var(--muted); padding: 6px 0; line-height: 1.4;
+  }
+  .flow-link .arrow { color: var(--accent); }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th {
+    font-family: var(--mono); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted); text-align: left;
+    padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 9px 14px 9px 0; border-bottom: 1px solid rgba(42,50,61,.55); vertical-align: top; }
+  td:first-child { white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td .cmd { font-size: 13px; }
+
+  /* ---- scenario cards ---- */
+  .scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 18px; }
+  .scenario { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 18px 20px; }
+  .scenario .say { font-family: var(--mono); font-size: 13.5px; color: #fff; margin-bottom: 8px; }
+  .scenario .say em { color: var(--accent); font-style: normal; }
+  .scenario p { font-size: 14px; color: var(--muted); margin: 0; }
+
+  /* ---- TUI mock ---- */
+  .tui {
+    background: #0d1117; border: 1px solid var(--line); border-radius: 8px;
+    font-family: var(--mono); font-size: 13px; overflow-x: auto; margin-top: 18px;
+  }
+  .tui-inner { min-width: 660px; }
+  .tui-head {
+    display: flex; justify-content: space-between; padding: 8px 14px;
+    background: #161d26; color: var(--muted); font-size: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tui-head b { color: var(--text); font-weight: 600; }
+  .tui-quota { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
+  .tui-quota .label { color: #fff; font-weight: 600; }
+  .tui-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tui-table th { font-size: 10.5px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .tui-table td { padding: 7px 10px; border-bottom: 1px solid rgba(42,50,61,.4); white-space: nowrap; }
+  .tui-detail { padding: 10px 14px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); line-height: 1.7; }
+  .tui-keys { display: flex; gap: 16px; padding: 8px 14px; background: #161d26; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .tui-keys b { color: var(--accent); font-weight: 600; }
+  .row-running td { color: var(--warn); }
+
+  /* ---- q&a / auto vs manual ---- */
+  .duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 18px; }
+  .duo .panel { padding: 20px 22px; }
+  .duo h3 { margin-top: 0; }
+  ul { margin: 0 0 14px; padding-left: 20px; }
+  li { margin-bottom: 8px; max-width: 64ch; }
+  li::marker { color: var(--accent); }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: rgba(254,166,43,.06);
+    padding: 14px 18px; border-radius: 0 6px 6px 0; margin: 18px 0; font-size: 15px;
+  }
+  .callout.red { border-left-color: var(--bad); background: rgba(224,96,79,.06); }
+
+  /* ---- lessons ---- */
+  .lessons { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 18px; }
+  .lesson { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; }
+  .lesson .k { font-family: var(--mono); font-size: 13px; color: var(--accent); margin-bottom: 6px; }
+  .lesson p { font-size: 14px; color: var(--muted); margin: 0; }
+
+  footer { margin-top: 80px; border-top: 1px solid var(--line); padding-top: 18px; font-size: 13px; color: var(--muted); font-family: var(--mono); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .pulse { animation: pulse 2.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <p class="eyebrow">field guide · built 2026-07-10</p>
+  <h1>pi-orchestra</h1>
+  <p class="sub">Your expensive AI assistants (<strong>Claude Code</strong>, <strong>Codex</strong>) stay the brains.
+  A cheap giant-context worker (<strong>MiniMax&nbsp;M3</strong> via the <strong>pi</strong> CLI) does the heavy lifting.
+  Every delegated job is <strong>recorded, quota-guarded, and killable</strong> — and you watch it all in one terminal dashboard: <code>orc top</code>.</p>
+</header>
+
+<!-- ============ WHY ============ -->
+<section>
+  <p class="eyebrow">01 · the idea</p>
+  <h2>Why this exists</h2>
+  <div class="panel">
+    <p>Claude and Codex run on your paid subscriptions — great judgment, expensive tokens.
+    MiniMax M3 has a <strong>1,000,000-token context window</strong> and costs about
+    <strong>$0.30 / $1.20 per million tokens</strong> (a full question–answer round trip we measured cost $0.00014).
+    So the rule is simple:</p>
+    <p style="font-family: var(--mono); color: #fff; font-size: 17px;">
+      brains <span style="color: var(--accent);">decide</span> · workers <span style="color: var(--accent);">grind</span> · you <span style="color: var(--accent);">watch &amp; veto</span>
+    </p>
+    <p class="muted" style="margin-bottom: 0;">Reading 50 files, summarizing a huge log, a mechanical refactor across a repo — that's worker food.
+    Judgment calls, small edits, anything needing back-and-forth with you — the brain keeps those.</p>
+  </div>
+</section>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section>
+  <p class="eyebrow">02 · the machine</p>
+  <h2>How the pieces connect</h2>
+  <div class="flow">
+    <div class="flow-row">
+      <div class="node">
+        <div class="t">🧠 Claude Code</div>
+        <div class="d">skills: <code>pi-delegate</code> (auto) + <code>orchestrate</code> (keyword)</div>
+      </div>
+      <div class="node">
+        <div class="t">🤖 Codex</div>
+        <div class="d">same instructions via a block in <code>~/.codex/AGENTS.md</code></div>
+      </div>
+      <div class="node">
+        <div class="t">👤 You</div>
+        <div class="d">type <code>deleg8 "…"</code> or <code>pi-rpc "…"</code> in any terminal</div>
+      </div>
+    </div>
+    <div class="flow-link">│<br><span class="arrow">▼</span>&nbsp; every road goes through one gate</div>
+    <div class="flow-row">
+      <div class="node accent">
+        <div class="t">orc</div>
+        <div class="d">checks quota → registers the run → spawns the worker → tees output → enforces the idle watchdog</div>
+      </div>
+    </div>
+    <div class="flow-link">│<br><span class="arrow">▼</span>&nbsp; spawns</div>
+    <div class="flow-row">
+      <div class="node">
+        <div class="t">pi × MiniMax-M3</div>
+        <div class="d">1M-token context; always <code>--provider minimax --model MiniMax-M3 --no-session --offline</code></div>
+      </div>
+    </div>
+    <div class="flow-link">│<br><span class="arrow">▼</span>&nbsp; everything written as plain JSON you can <code>cat</code></div>
+    <div class="flow-row">
+      <div class="node">
+        <div class="t">~/.orchestra/</div>
+        <div class="d"><code>runs/&lt;id&gt;/meta.json</code> · <code>output.log</code> · <code>inbox/</code> (control messages) · <code>quota.json</code> · <code>config.json</code></div>
+      </div>
+    </div>
+    <div class="flow-link">│<br><span class="arrow">▼</span>&nbsp; read live by</div>
+    <div class="flow-row">
+      <div class="node accent">
+        <div class="t">orc top</div>
+        <div class="d">btop-style dashboard: run table, log tail, kill keys, quota bars</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ THREE SCENARIOS ============ -->
+<section>
+  <p class="eyebrow">03 · in practice</p>
+  <h2>What happens when you say things</h2>
+  <div class="scenarios">
+    <div class="scenario">
+      <div class="say">"fix this typo in app.py"</div>
+      <p><strong style="color: var(--text);">Nothing special.</strong> Small task → the brain does it itself. No workers, no registry entries, zero orchestration overhead.</p>
+    </div>
+    <div class="scenario">
+      <div class="say">"summarize all 80 files in src/"</div>
+      <p><strong style="color: var(--text);">Auto-delegation.</strong> The <code>pi-delegate</code> skill kicks in: quota is checked, one MiniMax worker grinds through it, the brain verifies the result before using it.</p>
+    </div>
+    <div class="scenario">
+      <div class="say">"<em>orchestrate</em>: audit this whole repo"</div>
+      <p><strong style="color: var(--text);">Full orchestration — only on this keyword.</strong> Quota report → task split into ≤3 parallel background workers → brain polls, verifies, synthesizes → per-worker report.</p>
+    </div>
+  </div>
+  <div class="callout">
+    The word <strong>orchestrate</strong> (or <em>orchestrated</em>) is the only trigger for multi-worker mode.
+    Ordinary prompts — even heavy ones — never spin up the swarm.
+  </div>
+</section>
+
+<!-- ============ QUOTA ============ -->
+<section>
+  <p class="eyebrow">04 · the fuel gauge</p>
+  <h2>Quota guard — the brain knows how much MiniMax you have left</h2>
+  <div class="panel">
+    <p>Your MiniMax coding plan is metered by two rolling windows. Before <em>every</em> delegation,
+    <code>orc</code> asks MiniMax's own API (<code>/v1/token_plan/remains</code>) how much is left — real numbers, not guesses:</p>
+    <div style="display: flex; flex-direction: column; gap: 10px; margin: 18px 0;">
+      <div class="bar"><span style="min-width: 120px;">5-hour window</span><div class="track"><div class="fill" style="width: 99%; background: var(--ok);"></div></div><span class="pct">99%</span></div>
+      <div class="bar"><span style="min-width: 120px;">weekly window</span><div class="track"><div class="fill" style="width: 49%; background: var(--ok);"></div></div><span class="pct">49%</span></div>
+      <p class="muted" style="font-size: 13px; margin: 0;">(live values at the time this guide was generated)</p>
+    </div>
+    <h3>Three thresholds, three behaviors</h3>
+    <div class="tablewrap">
+    <table>
+      <tr><th>Remaining</th><th>What orc does</th><th>What you see</th></tr>
+      <tr>
+        <td><span class="chip ok">&gt; 25%</span></td>
+        <td>Runs normally.</td>
+        <td>Nothing — it just works.</td>
+      </tr>
+      <tr>
+        <td><span class="chip warn">≤ 25%</span></td>
+        <td>Runs, but warns. Brains are required to repeat the warning to you verbatim.</td>
+        <td><code>ORC WARNING: MiniMax quota low…</code></td>
+      </tr>
+      <tr>
+        <td><span class="chip bad">≤ 10%</span></td>
+        <td>Refuses to start the worker (exit code 3). Only <code>--force</code> overrides, and brains may not use it without your say-so.</td>
+        <td><code>ORC BLOCKED: … Use --force to override.</code></td>
+      </tr>
+    </table>
+    </div>
+    <p class="muted" style="margin: 12px 0 0;">Thresholds live in <code>~/.orchestra/config.json</code> (<code>warn_pct</code>, <code>block_pct</code>).
+    If the quota API is unreachable, work is never blocked — you just get an honest <code>quota unknown</code> note.</p>
+  </div>
+</section>
+
+<!-- ============ TUI ============ -->
+<section>
+  <p class="eyebrow">05 · the control plane</p>
+  <h2>orc top — see everything, kill anything</h2>
+  <div class="tui" role="img" aria-label="Mock of the orc top terminal dashboard">
+    <div class="tui-inner">
+      <div class="tui-head"><span>⭘ <b>orc top — pi-orchestra control plane</b></span><span>02:41:02</span></div>
+      <div class="tui-quota">
+        <span class="label">MiniMax quota &nbsp;&nbsp;level: <span style="color: var(--ok);">OK</span></span>
+        <div class="bar"><span style="min-width: 64px;">5-hour</span><div class="track"><div class="fill" style="width: 99%; background: var(--ok);"></div></div><span class="pct">99%</span><span class="muted">resets ~167m</span></div>
+        <div class="bar"><span style="min-width: 64px;">weekly</span><div class="track"><div class="fill" style="width: 49%; background: var(--ok);"></div></div><span class="pct">49%</span></div>
+      </div>
+      <table class="tui-table">
+        <tr><th>ID</th><th>Brain</th><th>Status</th><th>Started</th><th>Tok~</th><th>Task</th></tr>
+        <tr class="row-running"><td>20260710-031502-audit-src…</td><td>🧠 claude</td><td><span class="pulse">running</span></td><td>07-10 03:15</td><td style="text-align:right;">—</td><td>Audit src/ for dead code…</td></tr>
+        <tr><td>20260710-024427-think-very…</td><td>👤 human</td><td><span style="color: var(--bad);">killed</span></td><td>07-10 02:44</td><td style="text-align:right;">312</td><td>Think very carefully and…</td></tr>
+        <tr><td>20260710-023226-reply-with…</td><td>👤 human</td><td><span style="color: var(--ok);">done</span></td><td>07-10 02:32</td><td style="text-align:right;">1639</td><td>Reply with the single wor…</td></tr>
+      </table>
+      <div class="tui-detail">20260710-031502  [running]  cwd=/Users/comreton/Desktop/pi-orchestra<br>…live tail of output.log appears here…</div>
+      <div class="tui-keys"><span><b>k</b> kill (press twice)</span><span><b>n</b> new task</span><span><b>r</b> refresh</span><span><b>q</b> quit</span></div>
+    </div>
+  </div>
+  <p class="muted" style="margin-top: 14px;">Refreshes every 2 seconds straight from <code>~/.orchestra</code>. The dashboard only <em>reads</em> —
+  kills and new tasks are shelled out through the same <code>orc</code> commands the brains use, so there's a single code path for everything.</p>
+</section>
+
+<!-- ============ USABILITY / HOW IT LOADS ============ -->
+<section>
+  <p class="eyebrow">06 · your question, answered</p>
+  <h2>Is it "on" for Claude and Codex whenever I run them?</h2>
+  <p><strong style="color: var(--ok);">Yes — from every new session, automatically.</strong> Nothing to launch, no daemon, no per-project setup. Here's exactly what loads where:</p>
+  <div class="duo">
+    <div class="panel">
+      <h3>Automatic (no action needed)</h3>
+      <ul>
+        <li><strong>Claude Code</strong> reads <code>~/.claude/skills/pi-delegate</code> and <code>…/orchestrate</code> at session start — they're global, so every project gets them. (Symlinks into the repo, so <code>git pull</code> updates behavior.)</li>
+        <li><strong>Codex</strong> reads <code>~/.codex/AGENTS.md</code> every session — the pi-orchestra block travels with it.</li>
+        <li><strong><code>orc</code></strong> sits at <code>~/.local/bin/orc</code>, already on PATH for both brains' shells and yours.</li>
+        <li><strong>Quota gate + registry + watchdog</strong> are inside <code>orc</code> itself — any caller gets them for free.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Only when you want it</h3>
+      <ul>
+        <li><code>deleg8</code> / <code>pi-rpc</code> are zsh functions for <em>your</em> interactive terminal (new terminals from now on; existing ones need <code>source ~/.zshrc</code>).</li>
+        <li>Brains' tool shells are non-interactive, so they don't see those functions — their skills tell them to call <code>orc run … --brain claude</code> directly. Verified working.</li>
+        <li><code>orc top</code> — run it whenever you want the dashboard; it's a viewer, nothing depends on it running.</li>
+        <li>The <code>orchestrate</code> swarm — fires only when you type the keyword.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>One caveat:</strong> sessions that were already open before installation (like the one that built this) don't have the skills loaded — skills are read at session start. Anything started from now on has the full stack.
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section>
+  <p class="eyebrow">07 · cheat sheet</p>
+  <h2>Commands you'll actually type</h2>
+  <div class="panel">
+    <div class="tablewrap">
+    <table>
+      <tr><th>I want to…</th><th>Type</th></tr>
+      <tr><td>Delegate one task</td><td><span class="cmd">deleg8 "task"</span> &nbsp;or&nbsp; <span class="cmd">deleg8 "task" /path/to/dir</span></td></tr>
+      <tr><td>Watch it stream live</td><td><span class="cmd">pi-rpc "task"</span> &nbsp;(Ctrl+C cancels)</td></tr>
+      <tr><td>Open the dashboard</td><td><span class="cmd">orc top</span></td></tr>
+      <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
+      <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
+      <tr><td>Fail fast on a stalled worker</td><td><span class="cmd">orc run "task" --idle-timeout 120</span></td></tr>
+      <tr><td>Trigger the multi-worker swarm</td><td>say <span class="cmd">orchestrate: &lt;big task&gt;</span> to Claude or Codex</td></tr>
+      <tr><td>One-off with a different model</td><td><span class="cmd">pi -p --offline --provider minimax --model MiniMax-M2.5 "task"</span> <span class="muted">(bypasses the registry)</span></td></tr>
+      <tr><td>Remove everything</td><td><span class="cmd">./uninstall.sh</span> <span class="muted">(keeps your run history)</span></td></tr>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ UNDER THE HOOD ============ -->
+<section>
+  <p class="eyebrow">08 · under the hood</p>
+  <h2>One run, on disk</h2>
+  <p>No database, no server. Each delegation is a folder you can read with <code>cat</code> — which is also exactly what the dashboard does:</p>
+<pre><code><span class="c">~/.orchestra/runs/20260710-023226-reply-with-the-single-b7d2/</span>
+├── meta.json      <span class="c"># the record ↓</span>
+├── output.log     <span class="c"># everything the worker printed</span>
+└── inbox/         <span class="c"># control messages (a kill request is just a JSON file)</span>
+
+<span class="c">meta.json:</span>
+{
+  "id": "20260710-023226-reply-with-the-single-b7d2",
+  "task": "Reply with the single word: PONG",
+  "brain": <span class="a">"human"</span>,          <span class="c">// or "claude" / "codex" — who ordered it</span>
+  "status": <span class="g">"done"</span>,          <span class="c">// starting → running → done | failed | killed | orphaned</span>
+  "pid": 41233,
+  "started_at": "2026-07-09T21:02:26+00:00",
+  "ended_at":   "2026-07-09T21:02:41+00:00",
+  "exit_code": 0,
+  "tokens": { "input": 84, "output": 19, "total": 1639, <span class="a">"cost_usd": 0.00014</span> }
+}</code></pre>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><span class="chip warn">running</span></td><td>Worker is alive right now (PID is checked, not trusted).</td></tr>
+    <tr><td><span class="chip ok">done</span></td><td>Finished cleanly; output is in <code>output.log</code>.</td></tr>
+    <tr><td><span class="chip bad">failed</span></td><td>Worker exited with an error — including exit 124, the idle watchdog killing a stalled worker.</td></tr>
+    <tr><td><span class="chip bad">killed</span></td><td>You (or a brain) killed it via <code>orc kill</code>, the TUI, or Ctrl+C.</td></tr>
+    <tr><td><span class="chip dim">orphaned</span></td><td>Machine slept or the process vanished; reconciled automatically on the next <code>orc list</code>.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- ============ SAFETY ============ -->
+<section>
+  <p class="eyebrow">09 · guarantees</p>
+  <h2>What it will never touch</h2>
+  <div class="panel">
+    <p>The whole install is <strong>additive</strong>, and it was checksum-verified before and after:</p>
+    <ul>
+      <li><code>~/.pi/agent/auth.json</code> &amp; <code>settings.json</code> — untouched. Plain <code>pi</code> and your <code>pix</code> launcher behave exactly as before.</li>
+      <li><code>~/.claude/settings.json</code> — untouched. Plain <code>claude</code> stays on your Anthropic subscription.</li>
+      <li><code>~/.codex/config.toml</code> — untouched. Plain <code>codex</code> stays on OpenAI.</li>
+      <li>The only writes: two <em>marked blocks</em> (in <code>~/.zshrc</code> and <code>~/.codex/AGENTS.md</code>, both backed up as <code>*.pi-orchestra.bak</code> first) plus symlinks. <code>./uninstall.sh</code> reverses all of it.</li>
+      <li>Your API key stays in the macOS Keychain — read at runtime, never copied anywhere.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ LESSONS ============ -->
+<section>
+  <p class="eyebrow">10 · battle scars</p>
+  <h2>Built by using itself — what the dogfooding taught us</h2>
+  <p>MiniMax M3 drafted most of orc's own code while Claude reviewed and integrated — the exact advisor pattern the system implements. Every lesson below is now baked into the code or the skills:</p>
+  <div class="lessons">
+    <div class="lesson"><div class="k">--offline, always</div><p>pi's startup network check once hung a worker for 5 minutes. Every orc-spawned worker now passes it.</p></div>
+    <div class="lesson"><div class="k">stalls are normal</div><p>~50% of long-prompt calls stalled or aborted that day. Hence the idle watchdog: no output for <code>idle_timeout_sec</code> (default 300s) → killed, exit 124.</p></div>
+    <div class="lesson"><div class="k">--thinking low for drafts</div><p>Default thinking caused multi-minute stalls; low took 10–47s with equal quality on well-specified tasks.</p></div>
+    <div class="lesson"><div class="k">review is not optional</div><p>Worker drafts were good — and still shipped a real bug almost every time (an invented JSON key, a broken docstring). Brains must verify before acting.</p></div>
+    <div class="lesson"><div class="k">rpc dies with stdin</div><p>pi's streaming mode exits the moment stdin closes — naïve one-shot pipes silently produce nothing. orc holds stdin open until <code>agent_end</code>.</p></div>
+    <div class="lesson"><div class="k">exact costs, free</div><p>pi's final event carries real token usage and dollar cost; orc records it in <code>meta.json</code> instead of estimating.</p></div>
+  </div>
+</section>
+
+<footer>
+  repo: ~/Desktop/pi-orchestra · registry: ~/.orchestra · guide generated 2026-07-10 ·
+  26 unit tests + 10 live checks passing
+</footer>
+
+</div>
