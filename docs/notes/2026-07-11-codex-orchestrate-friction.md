@@ -116,3 +116,7 @@ high-priority dogfood finding.
 - A 500-run fixture was necessary to make list benchmarks and viewport behavior
   meaningful. Using the live registry would have mixed in the orchestration session's
   193 MB of amplified Python logs and produced a machine-state-dependent comparison.
+- The live smoke prompt asked the worker to output a recursive file inventory as
+  Markdown. It returned the requested content but also created an unrequested
+  `FILE_LIST.md` in the repository. The main brain removed it before commit. Even
+  smoke-task output must be treated as a potentially mutating, untrusted action.

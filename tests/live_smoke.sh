@@ -2,6 +2,7 @@
 # Live smoke: real pi + MiniMax calls. Run manually; prints PASS/FAIL per check.
 # Costs a few cents of coding-plan quota.
 set -uo pipefail
+export ORC_SMOKE_PATH="$PATH"
 pass=0; fail=0
 check() { local name="$1"; shift; if "$@"; then echo "PASS: $name"; ((pass++)); else echo "FAIL: $name"; ((fail++)); fi }
 
@@ -10,7 +11,7 @@ out1=$(timeout 240 pi -p --offline --provider minimax --model MiniMax-M3 --no-se
 check "1 pi PONG" grep -qi "PONG" <<<"$out1"
 
 echo "--- 2: deleg8 PONG (via orc, registered)"
-out2=$(zsh -ic 'deleg8 "Reply with the single word: PONG"' 2>&1)
+out2=$(zsh -ic 'export PATH="$ORC_SMOKE_PATH"; deleg8 "Reply with the single word: PONG"' 2>&1)
 check "2 deleg8 PONG" grep -qi "PONG" <<<"$out2"
 
 echo "--- 3: model identity"
@@ -19,7 +20,7 @@ echo "   model says: $(tail -1 <<<"$out3")"
 check "3 model id mentions minimax/M3" grep -qiE "minimax|m3" <<<"$out3"
 
 echo "--- 4: real agentic task via deleg8 (file listing)"
-out4=$(zsh -ic 'deleg8 "List every file in the current directory recursively (excluding .venv and .git), grouped by extension, with counts. Output as markdown." "'"$PWD"'"' 2>&1)
+out4=$(zsh -ic 'export PATH="$ORC_SMOKE_PATH"; deleg8 "List every file in the current directory recursively (excluding .venv and .git), grouped by extension, with counts. Output as markdown." "'"$PWD"'"' 2>&1)
 check "4 recursive listing mentions py" grep -qi "py" <<<"$out4"
 
 echo "--- 5: skills + codex block in place"

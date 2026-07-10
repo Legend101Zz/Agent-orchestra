@@ -45,10 +45,8 @@ pub fn search_runs(runs: &[RunMeta], query: &str, limit: usize) -> Vec<SearchHit
         };
         let length = file.metadata().map_or(0, |metadata| metadata.len());
         let offset = length.saturating_sub(MAX_LOG_SEARCH_BYTES);
-        if offset > 0 {
-            if file.seek(SeekFrom::Start(offset)).is_err() {
-                continue;
-            }
+        if offset > 0 && file.seek(SeekFrom::Start(offset)).is_err() {
+            continue;
         }
         let mut reader = BufReader::new(file);
         if offset > 0 {
