@@ -1,4 +1,5 @@
 """Spawn pi workers: foreground/background runs with quota gating and idle watchdog."""
+import json
 import os
 import selectors
 import signal
@@ -12,6 +13,8 @@ from orc_pkg import quota, registry
 PI_BASE = [
     "pi",
     "-p",
+    "--mode",
+    "json",
     "--offline",
     "--provider",
     "minimax",
@@ -48,7 +51,7 @@ def quota_gate(force: bool) -> bool:
     return True
 
 
-def finalize(rd: Path, meta: dict, code: int) -> None:
+def finalize(rd: Path, meta: dict, code: int, usage: dict | None = None) -> None:
     if code == 0:
         status = "done"
     elif code < 0:
@@ -68,6 +71,9 @@ def finalize(rd: Path, meta: dict, code: int) -> None:
             out_size = 0
     tokens = meta.setdefault("tokens", {})
     tokens["estimated_total"] = (len(task) + out_size) // 4
+    if usage:
+        tokens.update(usage)
+        tokens["estimated_total"] = usage.get("total", tokens["estimated_total"])
     registry.write_meta(rd, meta)
 
 
@@ -78,6 +84,33 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
 
     log_file = open(rd / "output.log", "ab")
     code = 0
+    buf = b""
+    usage: dict | None = None
+    echoed_delta = False
+
+    def handle_line(line: bytes) -> None:
+        # Raw event line goes to the log; only extracted text (or non-JSON
+        # passthrough) reaches the caller's stdout.
+        nonlocal usage, echoed_delta
+        log_file.write(line + b"\n")
+        log_file.flush()
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            evt = None
+        if not isinstance(evt, dict):
+            if echo and line:
+                sys.stdout.buffer.write(line + b"\n")
+                sys.stdout.buffer.flush()
+            return
+        text = _extract_text(evt)
+        if text and echo:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            echoed_delta = True
+        if evt.get("type") in TERMINAL_EVENTS:
+            usage = _extract_usage(evt) or usage
+
     try:
         try:
             proc = subprocess.Popen(
@@ -125,17 +158,16 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
                             except ProcessLookupError:
                                 pass
                             proc.wait()
-                            finalize(rd, meta, 124)
+                            finalize(rd, meta, 124, usage)
                             return 124
                         continue
                     chunk = os.read(proc.stdout.fileno(), 65536)
                     if not chunk:
                         break
-                    log_file.write(chunk)
-                    log_file.flush()
-                    if echo:
-                        sys.stdout.buffer.write(chunk)
-                        sys.stdout.buffer.flush()
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        handle_line(line)
                     last_output = time.monotonic()
             except KeyboardInterrupt:
                 try:
@@ -148,6 +180,12 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
             else:
                 code = proc.wait()
         finally:
+            if buf:
+                try:
+                    handle_line(buf)
+                except Exception:
+                    pass
+                buf = b""
             try:
                 sel.close()
             except Exception:
@@ -159,11 +197,14 @@ def _exec(rd: Path, echo: bool = False, idle_timeout: float | None = None) -> in
     finally:
         log_file.close()
 
+    if echoed_delta:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
     # pi traps SIGTERM and exits 143 (128+15) instead of dying by signal; an
     # inbox kill marker or that code means "killed by orc", not "failed".
     if code > 0 and (code == 143 or _inbox_has_kill(rd)):
         code = -signal.SIGTERM
-    finalize(rd, meta, code)
+    finalize(rd, meta, code, usage)
     if code >= 0:
         return max(code, 0)
     return 130
@@ -209,8 +250,6 @@ def _killpg(proc) -> None:
 
 
 def cmd_rpc(args) -> int:
-    import json
-
     if not quota_gate(args.force):
         return 3
     rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd)
@@ -299,13 +338,7 @@ def cmd_rpc(args) -> int:
                 _killpg(proc)
             code = proc.wait()
     print()
-    finalize(rd, registry.read_meta(rd), -signal.SIGTERM if killed else code)
-    if usage:
-        meta = registry.read_meta(rd)
-        meta["tokens"].update(usage)
-        meta["tokens"]["estimated_total"] = usage.get(
-            "total", meta["tokens"]["estimated_total"])
-        registry.write_meta(rd, meta)
+    finalize(rd, registry.read_meta(rd), -signal.SIGTERM if killed else code, usage)
     return 130 if killed else max(code, 0)
 
 

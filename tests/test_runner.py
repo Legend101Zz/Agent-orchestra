@@ -45,6 +45,32 @@ def test_run_foreground_success(orc_home, fake_pi):
     assert "FAKE-PI-REPLY" in log.read_text()
 
 
+def test_run_json_mode_records_exact_usage(orc_home, fake_pi_json):
+    seed_ok_quota(orc_home)
+    r = run_orc("run", "usage test")
+    assert r.returncode == 0
+    assert "json part one json part two" in r.stdout      # deltas, not raw JSON
+    assert '"type"' not in r.stdout                        # no raw events on stdout
+    m = registry.list_runs()[0]
+    t = m["tokens"]
+    assert t["input"] == 120 and t["output"] == 30
+    assert t["cache_read"] == 2048 and t["total"] == 2198
+    assert t["cost_usd"] == 0.000201
+    assert t["estimated_total"] == 2198                    # exact wins over estimate
+    log = (Path(m["_dir"]) / "output.log").read_text()
+    assert '"agent_end"' in log                            # raw events preserved in log
+
+
+def test_run_plain_output_still_estimates(orc_home, fake_pi):
+    seed_ok_quota(orc_home)
+    r = run_orc("run", "plain test")
+    assert r.returncode == 0
+    assert "FAKE-PI-REPLY" in r.stdout
+    m = registry.list_runs()[0]
+    assert m["tokens"]["estimated_total"] > 0
+    assert "cost_usd" not in m["tokens"]
+
+
 def test_run_blocked_by_quota(orc_home, fake_pi):
     seed_blocked_quota(orc_home)
     r = run_orc("run", "hello")
