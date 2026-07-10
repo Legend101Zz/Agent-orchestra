@@ -2,16 +2,35 @@
 # pi-orchestra installer — additive only; backs up before any append; idempotent.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+USE_RUST=0
+case "${1:-}" in
+  "") ;;
+  --rust) USE_RUST=1 ;;
+  -h|--help)
+    echo "usage: ./install.sh [--rust]"
+    echo "  default  install the Python/Textual implementation"
+    echo "  --rust   build and install rust/target/release/orc"
+    exit 0
+    ;;
+  *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
+esac
 
-echo "==> venv + deps"
-[ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv"
-"$ROOT/.venv/bin/pip" -q install -U pip
-"$ROOT/.venv/bin/pip" -q install -r "$ROOT/requirements.txt"
+if [ "$USE_RUST" -eq 1 ]; then
+  echo "==> Rust release build"
+  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --locked
+  ORC_TARGET="$ROOT/rust/target/release/orc"
+else
+  echo "==> venv + deps"
+  [ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv"
+  "$ROOT/.venv/bin/pip" -q install -U pip
+  "$ROOT/.venv/bin/pip" -q install -r "$ROOT/requirements.txt"
+  ORC_TARGET="$ROOT/bin/orc"
+fi
 
 echo "==> orc symlink"
 mkdir -p "$HOME/.local/bin"
-chmod +x "$ROOT/bin/orc"
-ln -sfn "$ROOT/bin/orc" "$HOME/.local/bin/orc"
+chmod +x "$ORC_TARGET"
+ln -sfn "$ORC_TARGET" "$HOME/.local/bin/orc"
 
 echo "==> ~/.orchestra"
 mkdir -p "$HOME/.orchestra/runs"
