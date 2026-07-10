@@ -15,11 +15,14 @@ must not activate.
 2. **Decompose** the task into independent worker-sized chunks (each self-contained,
    with explicit file paths / scope). Read `max_parallel_workers` from
    `~/.orchestra/config.json` (default 3) and never exceed it.
-3. **Launch** workers in the background, attributed to you:
+3. **Launch** workers in the background, attributed to you and grouped as one
+   session. Pick a session id once, export it, then launch every worker under it:
 
+       export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"
        orc run "chunk description" --cwd /path --brain claude --bg
 
-   Each prints a run id. Tell the user they can watch live with `orc top`.
+   Each prints a run id. The whole swarm shows up as a single expandable session
+   in `orc top`. Tell the user they can watch live there.
 4. **Monitor**: poll `orc list --json` every 30–60 seconds. Read finished output via
    `orc show <id> --tail 100`. Kill a stuck worker with `orc kill <id>` (stalled
    workers also self-terminate via the idle watchdog, exit code 124).

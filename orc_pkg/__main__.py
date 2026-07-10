@@ -16,6 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--name", default=None)
     run.add_argument("--bg", action="store_true")
     run.add_argument("--force", action="store_true")
+    run.add_argument("--session", default=None,
+                     help="group this run under a session id (default: $ORC_SESSION)")
     run.add_argument("--idle-timeout", type=float, default=None, dest="idle_timeout",
                      help="kill worker after N seconds without output (default: config idle_timeout_sec)")
 
@@ -30,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--brain", default="human", choices=["claude", "codex", "human"])
     rp.add_argument("--force", action="store_true")
     rp.add_argument("--idle-timeout", type=float, default=None, dest="idle_timeout")
+    rp.add_argument("--session", default=None,
+                    help="group this run under a session id (default: $ORC_SESSION)")
 
     ls = sub.add_parser("list", help="list delegated runs")
     ls.add_argument("--json", action="store_true")

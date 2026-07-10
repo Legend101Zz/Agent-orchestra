@@ -66,6 +66,7 @@ def new_run(
     cwd=None,
     provider: str = "minimax",
     model: str = "MiniMax-M3",
+    session: str | None = None,
 ) -> Path:
     """Create a new run directory with inbox/ and meta.json, return its Path."""
     slug = _make_slug(task)
@@ -90,6 +91,8 @@ def new_run(
         "exit_code": None,
         "tokens": {"estimated_total": 0},
     }
+    if session:
+        meta["session"] = session
     atomic_write_json(run_dir / "meta.json", meta)
     return run_dir
 

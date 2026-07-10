@@ -20,6 +20,16 @@ def test_new_run_creates_meta_and_inbox(orc_home):
     assert meta["id"] == rd.name
 
 
+def test_new_run_with_session(orc_home):
+    rd = registry.new_run("t", session="orch-123")
+    assert registry.read_meta(rd)["session"] == "orch-123"
+
+
+def test_new_run_without_session_omits_field(orc_home):
+    rd = registry.new_run("t")
+    assert "session" not in registry.read_meta(rd)
+
+
 def test_atomic_write_leaves_no_temp_files(orc_home):
     rd = registry.new_run("t")
     meta = registry.read_meta(rd)

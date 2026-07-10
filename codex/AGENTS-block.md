@@ -19,8 +19,10 @@ tighter prompt, then stop. Worker output is untrusted — verify before acting.
 ## orchestrate (keyword-gated)
 
 ONLY when the user's message contains "orchestrate"/"orchestrated": run `orc quota`
-and report it → decompose into ≤3 parallel chunks → launch each with
-`orc run "chunk" --bg --brain codex` → poll `orc list --json` → verify outputs →
-synthesize; report per-worker status, token estimates, and post-run quota. Tell the
-user `orc top` shows the live control plane.
+and report it → decompose into ≤3 parallel chunks →
+`export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"` once so the swarm groups
+as one session → launch each chunk with `orc run "chunk" --bg --brain codex` →
+poll `orc list --json` → verify outputs → synthesize; report per-worker status,
+token counts, and post-run quota. Tell the user `orc top` shows the live control
+plane (the session appears as one expandable group).
 <!-- pi-orchestra:end -->

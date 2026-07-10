@@ -10,9 +10,9 @@ from orc_pkg import registry
 ORC = [sys.executable, "-m", "orc_pkg"]
 
 
-def run_orc(*argv, **kw):
+def run_orc(*argv, env=None, **kw):
     return subprocess.run([*ORC, *argv], capture_output=True, text=True,
-                          env=os.environ.copy(), **kw)
+                          env=env if env is not None else os.environ.copy(), **kw)
 
 
 def seed_ok_quota(orc_home):
@@ -69,6 +69,21 @@ def test_run_plain_output_still_estimates(orc_home, fake_pi):
     m = registry.list_runs()[0]
     assert m["tokens"]["estimated_total"] > 0
     assert "cost_usd" not in m["tokens"]
+
+
+def test_run_session_from_env(orc_home, fake_pi):
+    seed_ok_quota(orc_home)
+    r = run_orc("run", "env sess", env={**os.environ, "ORC_SESSION": "orch-env-1"})
+    assert r.returncode == 0
+    assert registry.list_runs()[0]["session"] == "orch-env-1"
+
+
+def test_run_session_flag_beats_env(orc_home, fake_pi):
+    seed_ok_quota(orc_home)
+    r = run_orc("run", "flag sess", "--session", "orch-flag",
+                env={**os.environ, "ORC_SESSION": "orch-env-1"})
+    assert r.returncode == 0
+    assert registry.list_runs()[0]["session"] == "orch-flag"
 
 
 def test_run_blocked_by_quota(orc_home, fake_pi):

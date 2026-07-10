@@ -249,10 +249,15 @@ def _killpg(proc) -> None:
         pass
 
 
+def _session_for(args) -> str | None:
+    return getattr(args, "session", None) or os.environ.get("ORC_SESSION") or None
+
+
 def cmd_rpc(args) -> int:
     if not quota_gate(args.force):
         return 3
-    rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd)
+    rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd,
+                          session=_session_for(args))
     meta = registry.read_meta(rd)
     idle_timeout = args.idle_timeout
     if idle_timeout is None:
@@ -360,7 +365,8 @@ def _extract_usage(evt: dict):
 def cmd_run(args) -> int:
     if not quota_gate(args.force):
         return 3
-    rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd)
+    rd = registry.new_run(args.task, brain=args.brain, cwd=args.cwd,
+                          session=_session_for(args))
     if args.name:
         meta = registry.read_meta(rd)
         meta["name"] = args.name
