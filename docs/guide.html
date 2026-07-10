@@ -208,15 +208,15 @@
   <div class="flow">
     <div class="flow-row">
       <div class="node">
-        <div class="t">🧠 Claude Code</div>
+        <div class="t">Claude Code</div>
         <div class="d">skills: <code>pi-delegate</code> (auto) + <code>orchestrate</code> (keyword)</div>
       </div>
       <div class="node">
-        <div class="t">🤖 Codex</div>
+        <div class="t">Codex</div>
         <div class="d">same instructions via a block in <code>~/.codex/AGENTS.md</code></div>
       </div>
       <div class="node">
-        <div class="t">👤 You</div>
+        <div class="t">You</div>
         <div class="d">type <code>deleg8 "…"</code> or <code>pi-rpc "…"</code> in any terminal</div>
       </div>
     </div>
@@ -245,7 +245,7 @@
     <div class="flow-row">
       <div class="node accent">
         <div class="t">orc top</div>
-        <div class="d">btop-style dashboard: run table, log tail, kill keys, quota bars</div>
+        <div class="d">Rust operator console: session topology, steering, handoff, search, quota and budgets</div>
       </div>
     </div>
   </div>
@@ -316,35 +316,33 @@
 <!-- ============ TUI ============ -->
 <section>
   <p class="eyebrow">05 · the control plane</p>
-  <h2>orc top — see everything, kill anything</h2>
+  <h2>orc top — understand, intervene, continue</h2>
   <div class="tui" role="img" aria-label="Mock of the orc top terminal dashboard">
     <div class="tui-inner">
-      <div class="tui-head"><span>⭘ <b>orc top — pi-orchestra control plane</b></span><span>02:41:02</span></div>
+      <div class="tui-head"><span><b>ORC / OPERATOR CONSOLE</b></span><span>SESSION / 3 WORKERS</span></div>
       <div class="tui-quota">
         <span class="label">MiniMax quota &nbsp;&nbsp;level: <span style="color: var(--ok);">OK</span></span>
         <div class="bar"><span style="min-width: 64px;">5-hour</span><div class="track"><div class="fill" style="width: 99%; background: var(--ok);"></div></div><span class="pct">99%</span><span class="muted">resets ~167m</span></div>
         <div class="bar"><span style="min-width: 64px;">weekly</span><div class="track"><div class="fill" style="width: 49%; background: var(--ok);"></div></div><span class="pct">49%</span></div>
       </div>
       <table class="tui-table">
-        <tr><th>ID</th><th>Brain</th><th>Status</th><th>Started</th><th>Tok~</th><th>Task</th></tr>
-        <tr class="row-running"><td>20260710-031502-audit-src…</td><td>🧠 claude</td><td><span class="pulse">running</span></td><td>07-10 03:15</td><td style="text-align:right;">—</td><td>Audit src/ for dead code…</td></tr>
-        <tr><td>20260710-024427-think-very…</td><td>👤 human</td><td><span style="color: var(--bad);">killed</span></td><td>07-10 02:44</td><td style="text-align:right;">312</td><td>Think very carefully and…</td></tr>
-        <tr><td>20260710-023226-reply-with…</td><td>👤 human</td><td><span style="color: var(--ok);">done</span></td><td>07-10 02:32</td><td style="text-align:right;">1639</td><td>Reply with the single wor…</td></tr>
+        <tr><th>SESSION / RUN</th><th>CONTROLLER</th><th>STATE</th><th>STARTED</th><th>TOKENS</th><th>WORK</th></tr>
+        <tr class="row-running"><td>orch-v3-registry-recovery</td><td>codex</td><td><span class="pulse">running</span></td><td>07-11 09:04</td><td style="text-align:right;">586k</td><td>3 workers · 1 needs attention</td></tr>
+        <tr><td>port-runner-watchdog</td><td>codex</td><td><span style="color: var(--bad);">handoff</span></td><td>07-11 09:01</td><td style="text-align:right;">~98k</td><td>idle timeout · checkpoint preserved</td></tr>
+        <tr><td>map-registry-contract</td><td>codex</td><td><span style="color: var(--ok);">done</span></td><td>07-11 09:00</td><td style="text-align:right;">451k</td><td>compatibility verified</td></tr>
       </table>
       <div class="tui-detail">20260710-031502  [running]  cwd=/Users/comreton/Desktop/pi-orchestra<br>…live tail of output.log appears here…</div>
-      <div class="tui-keys"><span><b>j/k</b> nav</span><span><b>enter</b> open</span><span><b>x</b> kill (twice)</span><span><b>n</b> new task</span><span><b>s</b> sort</span><span><b>/</b> filter</span><span><b>t</b> theme</span><span><b>?</b> help</span><span><b>q</b> quit</span></div>
+      <div class="tui-keys"><span><b>enter</b> session</span><span><b>s</b> steer</span><span><b>r</b> retry</span><span><b>h</b> handoff</span><span><b>/</b> search</span><span><b>+/-</b> budget</span><span><b>t</b> theme</span><span><b>q</b> quit</span></div>
     </div>
   </div>
-  <p class="muted" style="margin-top: 14px;">Refreshes every 2 seconds straight from <code>~/.orchestra</code>. The dashboard only <em>reads</em> —
-  kills and new tasks are shelled out through the same <code>orc</code> commands the brains use, so there's a single code path for everything.</p>
-  <p class="muted" style="margin-top: 10px;">v2 is a full instrument cluster: gradient quota meters with a braille history sparkline,
-  a <strong>delegated-value hero tile</strong> (worker tokens priced at brain API rates vs what MiniMax actually cost — <code>~</code> marks
-  chars/4 estimates, everything else is exact from pi's <code>agent_end</code> usage), a 24-hour activity strip, and orchestrated swarms
-  grouped as expandable <strong>sessions</strong> (<code>ORC_SESSION</code>). Hitting <code>enter</code> on a run opens a drill-in screen with
-  <em>Flow</em> (the brain→workers diagram), <em>Conversation</em> (markdown-rendered prompt & reply, thinking collapsed behind <code>t</code>),
-  <em>Log</em> (live tail, <code>/</code> search, <code>w</code> wrap) and <em>Meta</em> tabs — <code>esc</code> comes back. Two themes ship,
-  <strong>ember</strong> and <strong>phosphor</strong>, switchable live with <code>t</code> and saved to <code>~/.orchestra/config.json</code>.
-  Real screenshots: <code>docs/orc-top-screenshot.svg</code>, <code>docs/orc-session-screenshot.svg</code>, <code>docs/orc-top-phosphor.svg</code>.</p>
+  <p class="muted" style="margin-top: 14px;">The Rust console watches <code>~/.orchestra</code> incrementally and redraws only when state changes.
+  It never writes <code>meta.json</code>; every action uses the same CLI control path as headless operation.</p>
+  <p class="muted" style="margin-top: 10px;">Open a session and the left side becomes a real topology: the main Codex controller,
+  its model, and every MiniMax M3 worker remain visibly connected. The right side carries <em>Conversation</em>, <em>Log</em>, <em>Timeline</em>
+  and <em>Meta</em>. Running RPC workers accept follow-ups with <code>s</code>. Failed, stalled, or context-exhausted work can be retried with
+  <code>r</code> or continued through a brain-reviewed linked handoff with <code>h</code>; completed work is never discarded. Per-session
+  budgets are advisory: crossing one raises attention but never blocks or kills a worker. Two token-only themes ship,
+  <strong>ember</strong> and <strong>phosphor</strong>. The v3 demo is <code>docs/orc-v3-rust-demo.gif</code>.</p>
 </section>
 
 <!-- ============ USABILITY / HOW IT LOADS ============ -->
@@ -391,11 +389,15 @@
       <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
       <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
       <tr><td>Usage &amp; savings report</td><td><span class="cmd">orc stats</span> &nbsp;(workers exact · brains estimated · delegated value)</td></tr>
+      <tr><td>Steer a running worker</td><td><span class="cmd">orc send &lt;id&gt; "follow-up"</span></td></tr>
+      <tr><td>Retry or continue stopped work</td><td><span class="cmd">orc retry &lt;id&gt;</span> · <span class="cmd">orc handoff &lt;id&gt; "remaining work"</span></td></tr>
+      <tr><td>Set an advisory budget</td><td><span class="cmd">orc budget &lt;session&gt; &lt;usd&gt;</span></td></tr>
       <tr><td>Group a swarm as one session</td><td><span class="cmd">ORC_SESSION="orch-…" orc run "chunk" --bg</span> &nbsp;or&nbsp; <span class="cmd">orc run … --session ID</span></td></tr>
       <tr><td>Fail fast on a stalled worker</td><td><span class="cmd">orc run "task" --idle-timeout 120</span></td></tr>
       <tr><td>Trigger the multi-worker swarm</td><td>say <span class="cmd">orchestrate: &lt;big task&gt;</span> to Claude or Codex</td></tr>
       <tr><td>One-off with a different model</td><td><span class="cmd">pi -p --offline --provider minimax --model MiniMax-M2.5 "task"</span> <span class="muted">(bypasses the registry)</span></td></tr>
       <tr><td>Remove everything</td><td><span class="cmd">./uninstall.sh</span> <span class="muted">(keeps your run history)</span></td></tr>
+      <tr><td>Opt into the Rust stack</td><td><span class="cmd">./install.sh --rust</span> <span class="muted">(default install remains Python)</span></td></tr>
     </table>
     </div>
   </div>
