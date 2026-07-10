@@ -101,6 +101,44 @@ def level_for(parsed, cfg) -> str:
     return "ok"
 
 
+def history_path() -> Path:
+    return registry.home() / "quota_history.jsonl"
+
+
+def append_history(parsed: dict) -> None:
+    """Append one quota sample; best-effort, never raises."""
+    try:
+        path = history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({
+            "ts": time.time(),
+            "five_hour_pct": parsed.get("five_hour_pct"),
+            "weekly_pct": parsed.get("weekly_pct"),
+        })
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def read_history(limit: int = 288) -> list:
+    """Return the last ``limit`` parseable history samples, oldest first."""
+    try:
+        with open(history_path(), "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines[-limit * 2:]:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and "five_hour_pct" in rec:
+            out.append(rec)
+    return out[-limit:]
+
+
 def get_quota(force: bool = False) -> dict:
     cfg = load_config()
     home = registry.home()
@@ -134,6 +172,7 @@ def get_quota(force: bool = False) -> dict:
         }
 
     registry.atomic_write_json(cache_path, parsed)
+    append_history(parsed)
     result = dict(parsed)
     result["level"] = level_for(parsed, cfg)
     result["source"] = "api"

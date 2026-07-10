@@ -65,3 +65,26 @@ def test_get_quota_no_key(orc_home, monkeypatch):
     monkeypatch.setattr(quota, "get_key", lambda: None)
     q = quota.get_quota(force=True)
     assert q["level"] == "unknown"
+
+
+def test_history_append_and_read(orc_home):
+    quota.append_history({"five_hour_pct": 80, "weekly_pct": 60})
+    quota.append_history({"five_hour_pct": 78, "weekly_pct": 59})
+    hist = quota.read_history()
+    assert [h["five_hour_pct"] for h in hist] == [80, 78]
+    assert all("ts" in h for h in hist)
+
+
+def test_history_tolerates_garbage(orc_home):
+    p = registry.home() / "quota_history.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('not json\n{"ts": 1, "five_hour_pct": 50, "weekly_pct": 40}\n')
+    assert quota.read_history() == [{"ts": 1, "five_hour_pct": 50, "weekly_pct": 40}]
+
+
+def test_get_quota_api_fetch_appends_history(orc_home, monkeypatch):
+    monkeypatch.setattr(quota, "fetch_remains", lambda key: RAW)
+    monkeypatch.setattr(quota, "get_key", lambda: "k")
+    quota.get_quota(force=True)
+    hist = quota.read_history()
+    assert len(hist) == 1 and hist[0]["five_hour_pct"] == 83
