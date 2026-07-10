@@ -10,7 +10,7 @@ import math
 
 from rich.text import Text
 
-from orc_pkg.tui.theme import Theme, gradient_at
+from orc_pkg.tui.theme import Theme, gradient_at, lerp_hex
 
 # Fractional fill for the meter's last cell, 1/8 → 7/8.
 _PARTIALS = " ▏▎▍▌▋▊▉"
@@ -27,6 +27,9 @@ STATUS_GLYPH = {
 }
 
 BRAIN_GLYPH = {"claude": "🧠", "codex": "🤖", "human": "👤"}
+# Emoji are double-width and unreliable in tight table cells; the table uses
+# these single-cell sigils instead (color carries the rest).
+BRAIN_SIGIL = {"claude": "◆", "codex": "▲", "human": "●"}
 
 
 def status_glyph(status: str) -> str:
@@ -35,9 +38,10 @@ def status_glyph(status: str) -> str:
 
 def meter(pct: float | None, width: int, theme: Theme,
           warn: float = 25, block: float = 10) -> Text:
-    """btop-style meter: each filled cell colored by its position along the
-    gradient, so a draining bar recedes into the red end. Threshold notches
-    at warn/block stay visible over filled and unfilled cells alike."""
+    """Fuel-gauge meter: the whole fill takes the color of the *current*
+    level on the gradient (71% left reads amber-green, 8% reads red), with a
+    brightness ramp toward the tip for the btop feel. Threshold notches at
+    warn/block stay visible over filled and unfilled cells alike."""
     t = Text()
     if pct is None:
         t.append(_EMPTY * (width - 2), style=theme.text_dim)
@@ -48,11 +52,14 @@ def meter(pct: float | None, width: int, theme: Theme,
     cells = pct / 100 * width
     filled = int(cells)
     frac = cells - filled
+    level = gradient_at(pct / 100, theme.meter_stops)
+    tail = lerp_hex(level, theme.bg, 0.45)
     tick_cells = {int(round(warn / 100 * width)): theme.warn,
                   int(round(block / 100 * width)): theme.err}
 
     for i in range(width):
-        color = gradient_at((i + 0.5) / width, theme.meter_stops)
+        ramp = (i + 1) / cells if cells else 0
+        color = lerp_hex(tail, level, min(1.0, max(0.0, ramp)))
         if i in tick_cells:
             t.append(_TICK, style=tick_cells[i])
         elif i < filled:
