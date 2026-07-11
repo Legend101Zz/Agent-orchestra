@@ -176,6 +176,11 @@ enum Commands {
         #[arg(long)]
         theme: Option<String>,
     },
+    /// Dispatch one bounded command through a configured worker harness.
+    Dispatch {
+        #[command(subcommand)]
+        command: DispatchCommand,
+    },
     /// Maintain the durable session task board.
     Task {
         #[command(subcommand)]
@@ -305,6 +310,46 @@ enum ConfigCommand {
     List,
     Get { key: String },
     Set { key: String, value: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum DispatchCommand {
+    /// Dispatch one bounded command to a configured worker harness.
+    Send {
+        /// Stable task identifier in the same session.
+        task: String,
+        /// Worker harness key, e.g. `hermes`.
+        harness: String,
+        /// Bounded prompt body delivered to the harness.
+        prompt: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        pane: Option<String>,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List durable dispatch records for one session.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one durable dispatch record.
+    Show {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn quota_exit(level: &str) -> i32 {
@@ -459,6 +504,82 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
         )?,
     }
     Ok(0)
+}
+
+fn print_dispatch(record: &orc_core::dispatch::DispatchRecord, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(record)?);
+    } else {
+        println!(
+            "{}  {:<9}  {:<6}  {:<10}  task={}",
+            record.id, record.status, record.actor, record.harness, record.task,
+        );
+        if let Some(error) = &record.error {
+            println!("    error: {error}");
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_session(explicit: Option<String>) -> Result<String> {
+    explicit
+        .or_else(|| std::env::var("ORC_SESSION").ok())
+        .filter(|session| !session.is_empty())
+        .ok_or_else(|| anyhow!("dispatch session is required; pass --session or set ORC_SESSION"))
+}
+
+fn dispatch_dispatch(command: DispatchCommand) -> Result<i32> {
+    match command {
+        DispatchCommand::Send {
+            task,
+            harness,
+            prompt,
+            session,
+            pane,
+            run,
+            timeout,
+            actor,
+            json,
+        } => {
+            let session = dispatch_session(session)?;
+            let record = orc_core::dispatch::dispatch(&orc_core::dispatch::DispatchRequest {
+                session,
+                task,
+                actor: orc_core::dispatch::DispatchActor::from(orc_core::tasks::TaskActor::from(
+                    actor,
+                )),
+                harness,
+                pane_id: pane,
+                run,
+                prompt,
+                timeout_sec: timeout,
+            })?;
+            print_dispatch(&record, json)?;
+            Ok(if record.is_confirmed() { 0 } else { 1 })
+        }
+        DispatchCommand::List { session, json } => {
+            let session = dispatch_session(session)?;
+            let records = orc_core::dispatch::list_dispatches(&session)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&records)?);
+            } else if records.is_empty() {
+                println!(
+                    "no dispatches yet — try: orc dispatch send <task> <harness> <prompt> --session <session>"
+                );
+            } else {
+                for record in records {
+                    print_dispatch(&record, false)?;
+                }
+            }
+            Ok(0)
+        }
+        DispatchCommand::Show { id, session, json } => {
+            let session = dispatch_session(session)?;
+            let record = orc_core::dispatch::read_dispatch(&session, &id)?;
+            print_dispatch(&record, json)?;
+            Ok(if record.is_confirmed() { 0 } else { 1 })
+        }
+    }
 }
 
 fn dispatch(command: Commands) -> Result<i32> {
@@ -726,6 +847,7 @@ fn dispatch(command: Commands) -> Result<i32> {
             let status = command.status().context("open pi-orchestra RUNS shell")?;
             Ok(status.code().unwrap_or(1))
         }
+        Commands::Dispatch { command } => dispatch_dispatch(command),
         Commands::Task { command } => dispatch_task(command),
     }
 }

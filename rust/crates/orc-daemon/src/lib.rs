@@ -20,10 +20,12 @@ use orc_core::bench::{
     PaneLayout, SessionPaneRecord, create_session as create_bench_session, list_sessions,
     load_harness_registry, read_session, write_session,
 };
+use orc_core::dispatch::{self as orc_dispatch, DispatchActor, DispatchRequest};
 use orc_core::tasks::{TaskActor, TaskStatus, diff_task, list_tasks, move_task};
 use orc_proto::{
-    ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
-    PaneSnapshot, ServerResponse, SessionSummary, TaskHistorySummary, TaskSummary,
+    ClientRequest, DaemonMetrics, DispatchCommand, DispatchSummary, HarnessSummary, LayoutRect,
+    PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse, SessionSummary,
+    TaskHistorySummary, TaskSummary,
 };
 use orc_pty::{HostedPane, UpdateSignal};
 use serde::{Deserialize, Serialize};
@@ -100,6 +102,7 @@ pub struct Daemon {
     clients: AtomicUsize,
     next_client_id: AtomicU64,
     requested_sizes: Mutex<ClientSizes>,
+    control_sequence: AtomicU64,
 }
 
 impl Daemon {
@@ -131,6 +134,7 @@ impl Daemon {
             clients: AtomicUsize::new(0),
             next_client_id: AtomicU64::new(1),
             requested_sizes: Mutex::new(HashMap::new()),
+            control_sequence: AtomicU64::new(0),
         }
     }
 
@@ -242,7 +246,8 @@ impl Daemon {
     }
 
     fn sequences(&self) -> Result<Vec<PaneSequence>> {
-        self.panes
+        let mut sequences = self
+            .panes
             .read()
             .map_err(|_| DaemonError::Poisoned)?
             .iter()
@@ -253,7 +258,12 @@ impl Daemon {
                     sequence: pane.sequence(),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        sequences.push(PaneSequence {
+            id: "__control__".to_owned(),
+            sequence: self.control_sequence.load(Ordering::Acquire),
+        });
+        Ok(sequences)
     }
 
     fn wait_for_change(
@@ -397,6 +407,12 @@ impl Daemon {
                 .enumerate()
                 .map(|(index, worker)| (worker.clone(), "worker".to_owned(), index + 1)),
         );
+        let worker_offer = workers
+            .iter()
+            .enumerate()
+            .map(|(index, harness)| format!("{}-worker-{}={harness}", session.id, index + 1))
+            .collect::<Vec<_>>()
+            .join(",");
         let mut entries = Vec::with_capacity(launches.len());
         for (harness_id, role, index) in launches {
             let harness = registry.harnesses.get(&harness_id).ok_or_else(|| {
@@ -410,6 +426,12 @@ impl Daemon {
             let environment = vec![
                 ("ORC_SESSION".to_owned(), session.id.clone()),
                 ("ORC_PANE_ID".to_owned(), pane_id.clone()),
+                ("ORC_WORKERS".to_owned(), worker_offer.clone()),
+                (
+                    "ORC_DELEGATE_HINT".to_owned(),
+                    "Use orc task with explicit --session/--actor, then orc dispatch send; workers are offers and delivery must confirm."
+                        .to_owned(),
+                ),
             ];
             let pane = HostedPane::spawn_with_signal_and_env(
                 &pane_id,
@@ -722,7 +744,69 @@ impl Daemon {
                 move_task(&session_id, &task_id, status, TaskActor::Human)?;
                 self.task_board(&session_id)
             }
+            ClientRequest::Dispatch { command } => self.dispatch_command(&command),
+            ClientRequest::DispatchBoard { session_id } => self.dispatch_board(&session_id),
         }
+    }
+
+    fn dispatch_command(&self, command: &DispatchCommand) -> Result<ServerResponse> {
+        let actor = DispatchActor::parse(&command.actor)?;
+        let request = DispatchRequest {
+            session: command.session_id.clone(),
+            task: command.task_id.clone(),
+            actor,
+            harness: command.harness.clone(),
+            pane_id: command.pane_id.clone(),
+            run: command.run.clone(),
+            prompt: command.prompt.clone(),
+            timeout_sec: command.timeout_sec,
+        };
+        match orc_dispatch::dispatch(&request) {
+            Ok(record) => {
+                self.control_sequence.fetch_add(1, Ordering::AcqRel);
+                let (epoch, changed) = &*self.signal;
+                if let Ok(mut epoch) = epoch.lock() {
+                    *epoch = epoch.saturating_add(1);
+                    changed.notify_all();
+                }
+                Ok(ServerResponse::Dispatched {
+                    record: dispatch_summary(record),
+                })
+            }
+            Err(error) => Ok(ServerResponse::Error {
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    fn dispatch_board(&self, session_id: &str) -> Result<ServerResponse> {
+        let records = orc_dispatch::list_dispatches(session_id)?;
+        let summaries = records
+            .into_iter()
+            .map(dispatch_summary)
+            .collect::<Vec<_>>();
+        Ok(ServerResponse::DispatchBoard {
+            session_id: session_id.to_owned(),
+            records: summaries,
+        })
+    }
+}
+
+fn dispatch_summary(record: orc_dispatch::DispatchRecord) -> DispatchSummary {
+    DispatchSummary {
+        id: record.id,
+        session_id: record.session,
+        task_id: record.task,
+        actor: record.actor,
+        harness: record.harness,
+        pane_id: record.pane_id,
+        run: record.run,
+        command_line: record.command_line,
+        status: record.status,
+        exit_code: record.exit_code,
+        failure_kind: record.failure_kind,
+        error: record.error,
+        updated_at: record.updated_at,
     }
 }
 
@@ -1005,11 +1089,20 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use orc_core::bench::create_session;
     use orc_core::bench::{HarnessConfig, HarnessRegistry, read_session, write_harness_registry};
-    use orc_proto::{ClientRequest, LayoutRect, PROTOCOL_VERSION, ServerResponse};
+    use orc_proto::{ClientRequest, DispatchCommand, LayoutRect, PROTOCOL_VERSION, ServerResponse};
+
+    fn daemon_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     use orc_pty::{HostedPane, update_signal};
 
     use super::{
@@ -1315,6 +1408,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code)]
     fn session_launch_attribution_layout_and_repeated_conductor_recovery_are_durable() {
+        let _guard = daemon_test_lock();
         let root = std::env::temp_dir().join(format!("orcd-session-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create session root");
@@ -1344,6 +1438,9 @@ mod tests {
             resume_args: resume.iter().map(|value| (*value).to_owned()).collect(),
             roles: roles.iter().map(|value| (*value).to_owned()).collect(),
             adapter: "fixture".to_owned(),
+            dispatch_args: Vec::new(),
+            dispatch_uses_stdin: false,
+            dispatch_timeout_sec: 120,
             extra: BTreeMap::new(),
         };
         let mut registry = HarnessRegistry {
@@ -1471,6 +1568,223 @@ mod tests {
                 .expect("unsupported response"),
             ServerResponse::Error { message } if message.contains("RESUME NOT SUPPORTED")
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn dispatch_request_dispatches_through_configured_worker_and_survives_client_detach() {
+        let _guard = daemon_test_lock();
+        let root = std::env::temp_dir().join(format!("orcd-dispatch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create dispatch root");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).expect("create dispatch cwd");
+        // SAFETY: daemon tests that mutate ORC_HOME run serially in this binary.
+        unsafe { std::env::set_var("ORC_HOME", &root) };
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create dispatch bin");
+        let worker_script = bin.join("fake-worker.sh");
+        fs::write(
+            &worker_script,
+            r#"#!/bin/sh
+echo "fake-worker-stdout ${@: -1}"
+exit 0
+"#,
+        )
+        .expect("write dispatch worker");
+        fs::set_permissions(&worker_script, fs::Permissions::from_mode(0o755))
+            .expect("chmod dispatch worker");
+        let mut registry = HarnessRegistry::default();
+        registry.harnesses.insert(
+            "fake-worker".to_owned(),
+            HarnessConfig {
+                command: "/bin/sh".to_owned(),
+                args: vec![worker_script.to_string_lossy().into_owned()],
+                resume_args: Vec::new(),
+                roles: vec!["worker".to_owned()],
+                adapter: "fake-worker".to_owned(),
+                dispatch_args: vec!["--oneshot".to_owned()],
+                dispatch_uses_stdin: false,
+                dispatch_timeout_sec: 30,
+                extra: BTreeMap::new(),
+            },
+        );
+        registry.harnesses.insert(
+            "brain-fixture".to_owned(),
+            HarnessConfig {
+                command: "/bin/sh".to_owned(),
+                args: Vec::new(),
+                resume_args: Vec::new(),
+                roles: vec!["brain".to_owned()],
+                adapter: "brain-fixture".to_owned(),
+                dispatch_args: Vec::new(),
+                dispatch_uses_stdin: false,
+                dispatch_timeout_sec: 30,
+                extra: BTreeMap::new(),
+            },
+        );
+        registry.default_workers = vec!["fake-worker".to_owned()];
+        write_harness_registry(&registry).expect("persist dispatch harness");
+
+        let daemon = Daemon::production(root.clone(), update_signal());
+        let session = create_session("brain-fixture", &["fake-worker".to_owned()], &cwd)
+            .expect("create dispatch session");
+        let task = orc_core::tasks::add_task(
+            &session.id,
+            orc_core::tasks::TaskActor::Brain,
+            orc_core::tasks::NewTask {
+                title: "daemon dispatch task".to_owned(),
+                ..orc_core::tasks::NewTask::default()
+            },
+        )
+        .expect("add dispatch task");
+        orc_core::tasks::assign_task(
+            &session.id,
+            &task.id,
+            "fake-worker".to_owned(),
+            Some("W-daemon".to_owned()),
+            orc_core::tasks::TaskActor::Brain,
+        )
+        .expect("assign dispatch task");
+        orc_core::tasks::start_task(&session.id, &task.id, orc_core::tasks::TaskActor::Brain)
+            .expect("start dispatch task");
+
+        let dispatched = daemon
+            .respond(ClientRequest::Dispatch {
+                command: DispatchCommand {
+                    session_id: session.id.clone(),
+                    task_id: task.id.clone(),
+                    actor: "brain".to_owned(),
+                    harness: "fake-worker".to_owned(),
+                    pane_id: Some(format!("{}-worker-1", session.id)),
+                    run: Some("W-daemon".to_owned()),
+                    prompt: "summarize diff".to_owned(),
+                    timeout_sec: Some(15),
+                },
+            })
+            .expect("dispatch response");
+        let ServerResponse::Dispatched { record } = dispatched else {
+            panic!("expected Dispatched response");
+        };
+        assert_eq!(record.status, "confirmed");
+        assert_eq!(record.actor, "brain");
+        assert_eq!(record.run.as_deref(), Some("W-daemon"));
+        assert!(record.command_line.contains("fake-worker"));
+        assert!(record.command_line.contains("summarize diff"));
+
+        let (mut client, server) = UnixStream::pair().expect("board socket pair");
+        thread::scope(|scope| {
+            scope.spawn(|| handle_client(server, &daemon).expect("serve board client"));
+            serde_json::to_writer(
+                &mut client,
+                &ClientRequest::Hello {
+                    version: PROTOCOL_VERSION,
+                },
+            )
+            .expect("write hello");
+            client.write_all(b"\n").expect("finish hello");
+            serde_json::to_writer(
+                &mut client,
+                &ClientRequest::DispatchBoard {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("write board request");
+            client.write_all(b"\n").expect("finish board request");
+            let mut reader = BufReader::new(client.try_clone().expect("clone board"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("welcome");
+            assert!(line.contains("welcome"));
+            line.clear();
+            reader.read_line(&mut line).expect("board response");
+            let board: ServerResponse = serde_json::from_str(&line).expect("parse board");
+            let ServerResponse::DispatchBoard { records, .. } = board else {
+                panic!("expected dispatch board");
+            };
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].id, record.id);
+            assert_eq!(records[0].status, "confirmed");
+            drop(client);
+        });
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn dispatch_request_missing_harness_returns_explicit_protocol_error() {
+        let _guard = daemon_test_lock();
+        let root =
+            std::env::temp_dir().join(format!("orcd-dispatch-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create missing-exec root");
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).expect("create missing-exec cwd");
+        // SAFETY: daemon tests that mutate ORC_HOME run serially in this binary.
+        unsafe { std::env::set_var("ORC_HOME", &root) };
+        let registry = HarnessRegistry::default();
+        write_harness_registry(&registry).expect("persist default registry");
+
+        let daemon = Daemon::production(root.clone(), update_signal());
+        let session = create_session("codex", &[], &cwd).expect("create missing-exec session");
+        let task = orc_core::tasks::add_task(
+            &session.id,
+            orc_core::tasks::TaskActor::Brain,
+            orc_core::tasks::NewTask {
+                title: "missing exec task".to_owned(),
+                ..orc_core::tasks::NewTask::default()
+            },
+        )
+        .expect("add missing-exec task");
+        orc_core::tasks::assign_task(
+            &session.id,
+            &task.id,
+            "missing-fixture".to_owned(),
+            None,
+            orc_core::tasks::TaskActor::Brain,
+        )
+        .expect("assign missing-exec task");
+        orc_core::tasks::start_task(&session.id, &task.id, orc_core::tasks::TaskActor::Brain)
+            .expect("start missing-exec task");
+
+        let response = daemon
+            .respond(ClientRequest::Dispatch {
+                command: DispatchCommand {
+                    session_id: session.id.clone(),
+                    task_id: task.id.clone(),
+                    actor: "brain".to_owned(),
+                    harness: "missing-fixture".to_owned(),
+                    pane_id: None,
+                    run: None,
+                    prompt: "noop".to_owned(),
+                    timeout_sec: Some(15),
+                },
+            })
+            .expect("dispatch error response");
+        match response {
+            ServerResponse::Dispatched { record } => {
+                assert_eq!(record.status, "failed");
+                let failure = record.failure_kind.as_deref().unwrap_or_default();
+                assert!(
+                    matches!(
+                        failure,
+                        "unknown_harness" | "capability_unavailable" | "missing_executable"
+                    ),
+                    "unexpected failure kind: {failure}"
+                );
+                let error = record.error.as_deref().unwrap_or_default();
+                assert!(
+                    error.contains("UNKNOWN HARNESS")
+                        || error.contains("CAPABILITY UNAVAILABLE")
+                        || error.contains("MISSING EXECUTABLE"),
+                    "explicit error required; got {error:?}"
+                );
+            }
+            ServerResponse::Error { message } => {
+                panic!("expected Dispatched, got Error: {message}")
+            }
+            other => panic!("unexpected response variant: {other:?}"),
+        }
         let _ = fs::remove_dir_all(root);
     }
 }

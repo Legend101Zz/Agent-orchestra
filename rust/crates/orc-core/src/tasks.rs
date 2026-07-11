@@ -833,6 +833,33 @@ pub fn start_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
     move_task(session, id, TaskStatus::Running, actor)
 }
 
+/// Record a confirmed or failed worker delivery on the durable task history.
+///
+/// Only confirmed delivery may set `assignee_run`; failures remain visible in
+/// history without claiming that a worker received the brief.
+pub fn record_delivery(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    confirmed_link: Option<String>,
+    detail: String,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    let action = if confirmed_link.is_some() {
+        "delivery_confirmed"
+    } else {
+        "delivery_failed"
+    };
+    if let Some(link) = confirmed_link {
+        task.assignee_run = Some(link);
+    }
+    append_history(&mut task, actor, action, None, None, Some(detail));
+    write_task(&task)?;
+    Ok(task)
+}
+
 /// Move a running task to review.
 pub fn review_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
     move_task(session, id, TaskStatus::Review, actor)

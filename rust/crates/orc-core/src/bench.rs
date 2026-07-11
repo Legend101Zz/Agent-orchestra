@@ -35,9 +35,37 @@ pub struct HarnessConfig {
     pub roles: Vec<String>,
     /// Adapter capability name.
     pub adapter: String,
+    /// Non-interactive command template used by Phase 4A dispatches.
+    ///
+    /// When non-empty, the dispatcher spawns
+    /// `<command> <dispatch_args...> <prompt>` (or pipes `<prompt>` on stdin
+    /// when [`Self::dispatch_uses_stdin`] is true). The leading flag must be a
+    /// demonstrated non-interactive capability such as Hermes' `--oneshot`
+    /// (`-z`) flag.
+    #[serde(default)]
+    pub dispatch_args: Vec<String>,
+    /// Whether the dispatcher should pipe the prompt on stdin instead of
+    /// appending it as the final command-line argument.
+    #[serde(default)]
+    pub dispatch_uses_stdin: bool,
+    /// Upper bound in seconds for one dispatch invocation.
+    ///
+    /// Defaults to 120 seconds when zero.
+    #[serde(default)]
+    pub dispatch_timeout_sec: u64,
     /// Unknown future fields.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// Effective dispatch timeout in seconds for one configured harness.
+#[must_use]
+pub fn dispatch_timeout_for(config: &HarnessConfig) -> u64 {
+    if config.dispatch_timeout_sec == 0 {
+        120
+    } else {
+        config.dispatch_timeout_sec
+    }
 }
 
 /// Client behavior stored alongside the harness registry.
@@ -83,17 +111,24 @@ pub struct HarnessRegistry {
 
 impl Default for HarnessRegistry {
     fn default() -> Self {
-        let harness =
-            |command: &str, args: &[&str], resume: &[&str], roles: &[&str], adapter: &str| {
-                HarnessConfig {
-                    command: command.to_owned(),
-                    args: args.iter().map(|value| (*value).to_owned()).collect(),
-                    resume_args: resume.iter().map(|value| (*value).to_owned()).collect(),
-                    roles: roles.iter().map(|value| (*value).to_owned()).collect(),
-                    adapter: adapter.to_owned(),
-                    extra: BTreeMap::new(),
-                }
-            };
+        let harness = |command: &str,
+                       args: &[&str],
+                       resume: &[&str],
+                       roles: &[&str],
+                       adapter: &str,
+                       dispatch: &[&str]| {
+            HarnessConfig {
+                command: command.to_owned(),
+                args: args.iter().map(|value| (*value).to_owned()).collect(),
+                resume_args: resume.iter().map(|value| (*value).to_owned()).collect(),
+                roles: roles.iter().map(|value| (*value).to_owned()).collect(),
+                adapter: adapter.to_owned(),
+                dispatch_args: dispatch.iter().map(|value| (*value).to_owned()).collect(),
+                dispatch_uses_stdin: false,
+                dispatch_timeout_sec: 120,
+                extra: BTreeMap::new(),
+            }
+        };
         Self {
             harnesses: BTreeMap::from([
                 (
@@ -104,15 +139,30 @@ impl Default for HarnessRegistry {
                         &["--continue"],
                         &["brain", "worker"],
                         "claude",
+                        &[],
                     ),
                 ),
                 (
                     "codex".to_owned(),
-                    harness("codex", &[], &["resume"], &["brain", "worker"], "codex"),
+                    harness(
+                        "codex",
+                        &[],
+                        &["resume"],
+                        &["brain", "worker"],
+                        "codex",
+                        &[],
+                    ),
                 ),
                 (
                     "hermes".to_owned(),
-                    harness("hermes", &["--tui"], &[], &["brain", "worker"], "hermes"),
+                    harness(
+                        "hermes",
+                        &["--tui"],
+                        &[],
+                        &["brain", "worker"],
+                        "hermes",
+                        &["-z"],
+                    ),
                 ),
                 (
                     "pi-m3".to_owned(),
@@ -122,6 +172,7 @@ impl Default for HarnessRegistry {
                         &[],
                         &["brain", "worker"],
                         "pi",
+                        &[],
                     ),
                 ),
             ]),

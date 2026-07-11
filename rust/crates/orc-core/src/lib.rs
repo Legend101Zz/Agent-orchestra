@@ -1,5 +1,6 @@
 pub mod bench;
 pub mod control;
+pub mod dispatch;
 pub mod inbox;
 pub mod metrics;
 pub mod model;

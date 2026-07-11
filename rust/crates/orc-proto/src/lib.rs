@@ -170,6 +170,66 @@ pub struct TaskHistorySummary {
     pub to: Option<String>,
 }
 
+/// Phase 4A dispatch request sent by an actor to a configured worker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DispatchCommand {
+    /// Owning Bench session identifier.
+    pub session_id: String,
+    /// Stable task identifier in the same session.
+    pub task_id: String,
+    /// `human` or `brain`.
+    pub actor: String,
+    /// Configured worker harness key.
+    pub harness: String,
+    /// Optional pane linkage recorded for replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// Optional run linkage recorded for replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// Bounded prompt body delivered to the harness.
+    pub prompt: String,
+    /// Optional bounded timeout override in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_sec: Option<u64>,
+}
+
+/// Summary of one durable dispatch record returned to clients.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DispatchSummary {
+    /// Stable `D`-prefixed dispatch identifier.
+    pub id: String,
+    /// Owning Bench session identifier.
+    pub session_id: String,
+    /// Stable task identifier in the same session.
+    pub task_id: String,
+    /// `human` or `brain`.
+    pub actor: String,
+    /// Configured worker harness key.
+    pub harness: String,
+    /// Optional pane linkage recorded for replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// Optional run linkage recorded for replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// Effective command line recorded for the delivery.
+    pub command_line: String,
+    /// Current durable delivery state.
+    pub status: String,
+    /// Exit code reported by the harness, when recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Failure reason when the delivery did not succeed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    /// Plain failure detail when one is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Last mutation timestamp.
+    pub updated_at: String,
+}
+
 /// Persisted rectangle sent through a daemon mutation command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LayoutRect {
@@ -303,6 +363,16 @@ pub enum ClientRequest {
         /// Requested written status.
         status: String,
     },
+    /// Dispatch one bounded command to a configured worker harness.
+    Dispatch {
+        /// Dispatch command with explicit actor and session.
+        command: DispatchCommand,
+    },
+    /// Read every durable dispatch record for a session.
+    DispatchBoard {
+        /// Owning session identifier.
+        session_id: String,
+    },
 }
 
 /// A response sent from the daemon to one client.
@@ -369,6 +439,18 @@ pub enum ServerResponse {
         session_id: String,
         /// Parseable task cards; corrupt sibling records are omitted.
         tasks: Vec<TaskSummary>,
+    },
+    /// Result of a single recorded dispatch.
+    Dispatched {
+        /// Durable summary of the recorded dispatch.
+        record: DispatchSummary,
+    },
+    /// Durable dispatch records for one session.
+    DispatchBoard {
+        /// Owning session identifier.
+        session_id: String,
+        /// Durable dispatch summaries, newest first.
+        records: Vec<DispatchSummary>,
     },
     /// A recoverable protocol or command failure.
     Error {
