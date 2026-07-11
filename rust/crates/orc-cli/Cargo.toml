@@ -13,9 +13,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 orc-core = { path = "../orc-core" }
-orc-tui = { path = "../orc-tui" }
 serde_json.workspace = true
 
 [lints]
 workspace = true
-

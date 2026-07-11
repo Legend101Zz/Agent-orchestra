@@ -272,7 +272,8 @@ fn deliver_pending_prompts(
     run_dir: &Path,
     stdin: &mut ChildStdin,
     delivered: &mut HashSet<PathBuf>,
-) -> Result<()> {
+) -> Result<usize> {
+    let mut delivered_count = 0;
     for path in pending_prompts(run_dir, delivered)? {
         let message = read_prompt(&path)?;
         if message.kind != "prompt" {
@@ -282,8 +283,9 @@ fn deliver_pending_prompts(
         write_rpc_prompt(stdin, &message.message)?;
         acknowledge_prompt(run_dir, &path)?;
         delivered.insert(path);
+        delivered_count += 1;
     }
-    Ok(())
+    Ok(delivered_count)
 }
 
 pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
@@ -334,6 +336,8 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
     let interrupted = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&interrupted))?;
     let mut delivered = HashSet::new();
+    let mut delivered_prompt_count = 0;
+    let mut agent_end_count = 0;
     let mut last_output = Instant::now();
     let mut usage = None;
     let mut killed = false;
@@ -355,11 +359,22 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
                 break;
             }
             if let Some(stdin) = stdin.as_mut() {
-                deliver_pending_prompts(run_dir, stdin, &mut delivered)?;
+                delivered_prompt_count += deliver_pending_prompts(run_dir, stdin, &mut delivered)?;
             }
         }
         match receiver.recv_timeout(poll) {
             Ok(line) => {
+                if mode == Mode::Rpc {
+                    if has_kill(run_dir) {
+                        terminate_pid(child_pid);
+                        killed = true;
+                        break;
+                    }
+                    if let Some(stdin) = stdin.as_mut() {
+                        delivered_prompt_count +=
+                            deliver_pending_prompts(run_dir, stdin, &mut delivered)?;
+                    }
+                }
                 last_output = Instant::now();
                 exhausted_context |= context_exhausted(&line.bytes);
                 let compact = compact_log_line(&line.bytes);
@@ -376,8 +391,9 @@ pub fn execute(run_dir: &Path, echo: bool, idle_timeout: f64) -> Result<i32> {
                             saw_delta = true;
                         }
                         if value.get("type").and_then(Value::as_str) == Some("agent_end") {
+                            agent_end_count += 1;
                             usage = extract_usage(&value).or(usage);
-                            if mode == Mode::Rpc {
+                            if mode == Mode::Rpc && agent_end_count > delivered_prompt_count {
                                 break;
                             }
                         }

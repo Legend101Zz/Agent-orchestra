@@ -1,176 +1,209 @@
 # pi-orchestra
 
-Delegation and orchestration layer: Claude Code / Codex (the expensive "brains")
-offload heavy, long-context work to **pi** running **MiniMax-M3** (1M context,
-~$0.30/$1.20 per 1M tokens), with every delegated run registered on disk,
-quota-gated against your MiniMax coding plan, and visible in a btop-style TUI.
+pi-orchestra is a Rust terminal workspace for one expensive conductor and a
+user-editable pool of harness workers. `orcd` owns the PTYs and durable screen
+state; `pi-orchestra` renders HOME and STAGE; `orc` remains the headless
+delegation and registry CLI. Provider traffic goes directly between each
+harness and its provider—there is no API proxy.
 
-```
-Claude Code (brain)                     Codex (brain)
-   │  skill: pi-delegate (auto)            │  ~/.codex/AGENTS.md block
-   │  skill: orchestrate (keyword-gated)   │
-   └───────────────┬───────────────────────┘
-                   ▼  bash
-              orc CLI ──── quota check → spawn pi → tee output → registry
-                   ▼
-   pi -p / --mode rpc  --provider minimax --model MiniMax-M3 --no-session
-                   ▼
-        ~/.orchestra/runs/<id>/{meta.json, output.log, inbox/}
-                   ▲
-        orc top  (Ratatui TUI: session topology, steering, retry, search)
+```text
+pi-orchestra client  ← Unix socket →  orcd  → conductor PTY + worker PTYs
+        HOME / STAGE                  │
+                                      └→ ~/.orchestra plain JSON records
+orc run / rpc / list / show / quota ────────────────────────────────┘
 ```
 
-## Install / uninstall
+## Install and uninstall
 
 ```bash
-./install.sh            # default: Python/Textual implementation
-./install.sh --rust     # opt-in: build + select rust/target/release/orc
-./uninstall.sh   # removes symlinks + marked blocks; keeps ~/.orchestra data
+./install.sh
+./uninstall.sh
 ```
 
-The Rust binary can also be built and exercised without changing the installed
-symlink:
+The installer performs a locked Rust release build in an isolated target under
+your install HOME (or `ORC_INSTALL_CARGO_TARGET_DIR`) and safely links all three
+binaries into `~/.local/bin`:
+
+- `orc`
+- `orcd`
+- `pi-orchestra`
+
+Existing commands are backed up before replacement. Marked shell/AGENTS blocks
+are additive and idempotent. Uninstall removes the links and marked blocks but
+preserves `~/.orchestra` data. The installer never edits
+`~/.pi/agent/*`, `~/.claude/settings.json`, or `~/.codex/config.toml`.
+
+Build without installing:
 
 ```bash
-cargo build --manifest-path rust/Cargo.toml --release --locked
-rust/target/release/orc top
+CARGO_TARGET_DIR=/tmp/pi-orchestra-build cargo build --manifest-path rust/Cargo.toml --release --locked
+/tmp/pi-orchestra-build/release/pi-orchestra home
 ```
 
-Everything is additive. `~/.pi/agent/*`, `~/.claude/settings.json`, and
-`~/.codex/config.toml` are never touched (checksum-verified). Backups are written
-before any append (`*.pi-orchestra.bak`).
+## Phase 3: durable tasks, worktrees, and SCORE
 
-## Cheat sheet
+Tasks are plain additive JSON, mutated only through `orc task` with an explicit
+session and actor. `--json` returns the complete task record or diff object.
 
-| I want to…                       | Command |
-|----------------------------------|---------|
-| Delegate one task                | `deleg8 "task"` or `deleg8 "task" /path` |
-| Streaming delegation             | `pi-rpc "task"` |
-| Watch everything (control plane) | `orc top` |
-| List / inspect / kill runs       | `orc list` / `orc show <id>` / `orc kill <id>` |
-| Usage, cost & savings report     | `orc stats` (`--json` for machines) |
-| Steer a running RPC worker       | `orc send <id> "follow-up"` |
-| Retry without retyping           | `orc retry <id>` |
-| Continue from a stopped worker   | `orc handoff <id> "what remains"` |
-| Search every run                 | `/` in `orc top` |
-| Set an advisory session budget   | `orc budget <session> <usd>` |
-| Group a swarm as one session     | `export ORC_SESSION="orch-…"` before `orc run`, or `--session ID` |
-| Check MiniMax quota              | `orc quota` (exit 0 ok / 2 warn / 3 block / 4 unknown) |
-| Force past a quota block         | add `--force` (only if you accept the risk) |
-| Fail fast on a stalled worker    | `orc run "task" --idle-timeout 120` |
-| Different model, one-off         | `pi -p --offline --provider minimax --model MiniMax-M2.5 "task"` (unregistered) |
+```bash
+orc task add "review parser" --isolate --session bench-1 --actor brain --json
+orc task assign T0001 pi-m3 --session bench-1 --actor brain
+orc task start T0001 --session bench-1 --actor brain
+orc task review T0001 --session bench-1 --actor human
+orc task diff T0001 --session bench-1 --json
+orc task merge T0001 --session bench-1 --actor human --json
+```
 
-- **Claude/Codex auto-delegate** heavy tasks (10+ files, big inputs, batch/refactor
-  work) via the `pi-delegate` skill; they must relay `ORC WARNING`/`ORC BLOCKED`
-  lines to you verbatim.
-- **Say "orchestrate"** in your prompt to trigger multi-worker mode (quota check →
-  ≤3 parallel workers → verified synthesis). Ordinary prompts never trigger it.
-- **Cost:** a PONG round-trip measured $0.00014; a typical delegation (~50k in /
-  5k out) ≈ $0.02 API-equivalent; a 500k-token scan ≈ $0.17. On the coding plan
-  these draw down the 5-hour/weekly windows shown in `orc top`. Both `orc run`
-  (json mode) and `orc rpc` record exact usage + cost from pi's `agent_end`
-  event in `meta.json`; chars/4 estimates (marked `~`) are only a fallback.
+Isolation creates only an owned `orc/<session>/<task>` branch under the owned
+worktree root. It refuses dirty, detached, non-Git, reused, symlinked, or
+unprovable paths and never auto-resolves merge conflicts. `drop` preserves the
+audit record and prunes only an owned clean worktree.
 
-## Control plane (`orc top`)
+SCORE is the task board in an attached session: `j/k` selects, `h/l` requests
+the adjacent valid lifecycle move, mouse drag requests a column move through
+the daemon as `human`, `g` focuses the linked STAGE pane, and `ctrl-g b`
+returns from STAGE to SCORE. SCORE is covered with ember/phosphor TestBackend
+snapshots at wide and exactly 72x30 sizes; RUNS and baton animation remain
+outside Phase 3.
 
-The Rust v3 console is an operator workspace over `~/.orchestra`. It is read-only
-with respect to run metadata and reparses only changed files; actions go through
-the same CLI control paths as headless use.
+## Bench client
 
-- **Quota** — gradient fuel-gauge meters for the 5-hour and weekly windows with
-  warn/block notches, reset countdown, and a braille history sparkline (sampled
-  to `quota_history.jsonl` on every API fetch).
-- **Receipts, not vanity metrics** — completed token volume replaces run-start
-  activity; delegated value exposes its exact-data basis and never prices an
-  estimated total as output tokens.
-- **Session workspace** — `enter` opens a responsive split view: the main Codex
-  controller and MiniMax M3 worker nodes stay visibly connected on the left;
-  Conversation, Log, Timeline and Meta remain readable on the right. At narrow
-  widths it stacks instead of collapsing into clipped boxes.
-- **Intervention loop** — `s` sends a follow-up to a running RPC worker, `r`
-  retries, and `h` creates a new linked worker with a brain-reviewed continuation
-  brief. A timeout or exhausted context becomes an attention state, not discarded
-  work. Handoffs preserve the source run and record `handoff_from` on the new run.
-- **Advisory budgets** — per-session dollar budgets are visible and adjustable
-  with `+`/`-`. Crossing one raises attention but never blocks or kills work.
-- **Search and replay** — `/` searches prompts and bounded output across runs;
-  Timeline reconstructs starts, steering acknowledgements, completion and
-  handoff lineage from durable registry evidence.
-- **Keys** — `j/k` navigate (or scroll detail), `[`/`]` move between workers,
-  `enter` opens, `x` kills, `n` starts, `s` steers, `r` retries, `h` hands off,
-  `/` searches, `t` changes theme, `,` opens settings, `?` shows help and `q`
-  quits. Mouse navigation and scrolling are supported.
-- **Themes** — `ember` (default) and `phosphor` (CRT green); `t` cycles and
-  persists to `~/.orchestra/config.json`.
+```bash
+pi-orchestra home
+pi-orchestra attach                 # newest durable session
+pi-orchestra attach <session-id>
+orc top                             # opens the honest RUNS shell placeholder
+```
 
-Demo capture: `docs/orc-v3-rust-demo.gif` (regenerate with
-`ORC_DEMO_HOME=/tmp/orc-v3-demo .venv/bin/python tools/seed_v3_demo.py` and
-`vhs tools/orc-v3-demo.tape`). The older Python v2 SVG captures remain in
-`docs/` for parity comparison.
+HOME shows durable sessions and a three-step launch flow:
 
-## Measured CLI performance
+1. choose a brain;
+2. review/edit the worker pool (Hermes + pi/MiniMax-M3 are preselected);
+3. choose the cwd.
 
-Measured with Hyperfine 1.20.0 on this development machine, 20 timed runs after
-five warmups. `list` used the reproducible 500-run mixed exact/legacy fixture from
-`tools/seed_benchmark_registry.py`; quota used its fresh local cache, so neither
-measurement includes network latency.
+STAGE renders daemon-owned terminal panes as floating ensemble cards with
+rounded corners, half-block shadows, brass focus, keyboard swap, mouse drag,
+resize, zoom-to-solo, and persisted per-session layout. Focused keyboard bytes
+are forwarded raw, including kitty extended keys and bracketed paste. Mouse
+coordinates are translated only when forwarding into pane content. `ctrl-g` is
+the only leader; double-tap sends literal control-G.
 
-| Command | Python mean | Rust mean | Speedup |
-|---------|------------:|----------:|--------:|
-| `orc list` (500 runs) | 125.2 ms | 21.4 ms | 5.84x |
-| `orc quota --json` (cached) | 97.0 ms | 6.7 ms | 14.43x |
+Useful STAGE keys:
 
-These are startup-plus-command measurements, not synthetic library benchmarks.
+| Keys | Action |
+|---|---|
+| `ctrl-g n` / `ctrl-g p` | focus next / previous pane |
+| `ctrl-g s` | swap focused pane with the next pane |
+| `ctrl-g z` | zoom focused pane / restore ensemble |
+| `ctrl-g +` / `ctrl-g -` | resize focused card |
+| drag a card header | reposition and persist layout |
+| `R` on a dead conductor | resume when the harness has `resume_args` |
+| `ctrl-g h` | return HOME |
+| `ctrl-g q` | detach; panes continue in `orcd` |
+| `V` | cycle to/from the RUNS shell |
 
-## Usage accounting (`orc stats`)
+When a brain exits, workers remain alive and its last screen becomes
+`CONDUCTOR DOWN` with elapsed time. Recovery uses the configured command,
+`resume_args`, cwd, `ORC_SESSION`, and `ORC_PANE_ID`. A harness without resume
+support states `RESUME NOT SUPPORTED`; pi-orchestra never invents it.
 
-Three blocks, honest about precision: **WORKERS** (registry; exact tokens+cost
-where pi reported usage, `~` estimates otherwise), **DELEGATED VALUE** (worker
-tokens priced at brain API list rates vs what MiniMax actually cost — the
-number this project exists for), **BRAINS** (parsed locally from
-`~/.claude/projects/**.jsonl` and `~/.codex/sessions/**`, cached by mtime,
-labeled API-equivalent since subscriptions are flat-rate; `n/a` when absent).
+The daemon starts on demand at `~/.orchestra/orcd.sock`. The parent is mode
+`0700`, the socket is `0600`, attachment is bounded, and stale sockets are
+removed only after type/owner/live-listener checks. Logs rotate under a bounded
+retention policy at `~/.orchestra/orcd.log`. Closing a client is a normal detach,
+not a warning.
 
-## Config (`~/.orchestra/config.json`)
+Remote use needs no web server: SSH or mosh into the machine and run
+`pi-orchestra attach`.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `warn_pct` | 25 | warn when min(5h %, weekly %) at or below this |
-| `block_pct` | 10 | refuse to spawn (exit 3) at or below this; `--force` overrides |
-| `cache_ttl_sec` | 60 | quota API cache |
-| `max_parallel_workers` | 3 | ceiling the orchestrate skill respects |
-| `idle_timeout_sec` | 300 | kill a worker that produces no output for this long (exit 124) |
-| `theme` | `ember` | `orc top` theme: `ember` or `phosphor` (the `t` key persists here) |
-| `advisory_budget_usd` | unset | default session budget; visibility only, never a quota gate |
-| `notifications` | `actionable` | macOS completion/failure notices: `off`, `actionable`, or `all` |
+## Harness registry
 
-## Troubleshooting
+`~/.orchestra/harnesses.json` is plain additive JSON and written atomically.
+Unknown fields survive round trips. Defaults:
 
-- **`orc quota` says unknown** — your key may not be a coding-plan subscription key,
-  or the endpoint is down. Delegation still works; gating is skipped with a warning.
-- **Worker killed with exit 124** — the MiniMax API stalls sometimes (observed ~50 %
-  of long-prompt calls on 2026-07-10). Retry once; the skills know to. Note that in
-  `pi -p` mode output is buffered per turn, so `idle_timeout_sec` must exceed your
-  longest expected single turn.
-- **Killed runs showing `failed`** — pi traps SIGTERM and exits 143; orc classifies
-  143 or an inbox kill-marker as `killed`. If you see otherwise, check `orc show <id>`.
-- **Need the Python v2 console** — the default installer still selects it. Run
-  `./install.sh` again without `--rust`; registry files remain interoperable.
+```json
+{
+  "harnesses": {
+    "claude": {"command":"claude","args":[],"resume_args":["--continue"],"roles":["brain","worker"],"adapter":"claude"},
+    "codex": {"command":"codex","args":[],"resume_args":["resume"],"roles":["brain","worker"],"adapter":"codex"},
+    "hermes": {"command":"hermes","args":["--tui"],"resume_args":[],"roles":["brain","worker"],"adapter":"hermes"},
+    "pi-m3": {"command":"pi","args":["--provider","minimax","--model","MiniMax-M3"],"resume_args":[],"roles":["brain","worker"],"adapter":"pi"}
+  },
+  "default_workers": ["hermes", "pi-m3"],
+  "max_parallel_workers": 3,
+  "app": {"leader_key":"ctrl-g","reduced_motion":false,"theme":"ember"}
+}
+```
 
-## Lessons from building this (advisor-pattern dogfood)
+Only `ember` and `phosphor` are supported themes.
 
-This repo was built with the exact flow it implements: MiniMax-M3 (via pi) drafted
-`registry.py`, `quota.py`, `runner.py`, and `control.py` from interface+test specs;
-the main brain reviewed, fixed, and integrated. Findings baked into the skills:
+## Headless CLI
 
-1. **Always pass `--offline`** — pi's startup network checks caused a 5-minute hang.
-2. **`--thinking low` for tightly-specified drafts** — default thinking produced
-   4-minute stalls; low took 10–47 s with equal quality on spec-driven files.
-3. **~50 % of long-prompt calls stalled or aborted** — hence the idle watchdog,
-   the retry-once rule, and treating worker output as untrusted.
-4. Worker draft quality was high (fsync, corrupt-meta tolerance added unprompted)
-   but with real bugs each time: an invented `"auth"` JSON wrapper, a dropped
-   docstring quote. **Review is not optional.**
-5. **pi rpc exits when stdin closes** — heredoc one-shots silently die; orc holds
-   stdin open until `agent_end`.
-6. pi's `agent_end` carries exact token usage and cost — recorded into the registry.
+| Goal | Command |
+|---|---|
+| Delegate once | `orc run "task" --brain codex` |
+| Streaming RPC worker | `orc rpc "task" --brain codex` |
+| List / inspect / kill | `orc list` / `orc show <id>` / `orc kill <id>` |
+| Send an RPC follow-up | `orc send <id> "message"` |
+| Retry / reviewed handoff | `orc retry <id>` / `orc handoff <id> "remaining work"` |
+| Usage and savings | `orc stats --json` |
+| MiniMax quota | `orc quota` (exit 0 ok / 2 warn / 3 block / 4 unknown) |
+| Bound a stalled worker | `orc run "task" --idle-timeout 120` |
+
+Shell helpers installed by the marked block:
+
+```bash
+deleg8 "task" /path/to/cwd
+pi-rpc "task"
+```
+
+Quota transport failure is fail-open and printed as `ORC NOTE`. Warn and block
+messages are `ORC WARNING` and `ORC BLOCKED`; callers must relay those lines
+verbatim. Worker output is untrusted until the brain verifies it.
+
+## Measured Phase 2 behavior
+
+Release measurements on the development M-series Mac:
+
+- Unix-socket round trip, 5,000 samples: p50 **13 µs**, p95 **17 µs**,
+  p99 **42 µs**, max **72 µs**.
+- PTY input to visible snapshot replay, 100 samples: p50 **3.770 ms**,
+  p95 **4.000 ms**, p99 **4.363 ms**, max **4.601 ms**.
+- Five idle samples: daemon **0.0% CPU**, client **0.0% CPU**; observed RSS
+  about 6.7 MiB and 2.8 MiB respectively.
+
+The required four-pane flood ran for 7,608 seconds (2 h 6 m 48 s), with each
+producer writing 1,024 lines then pausing 50 ms. Daemon CPU was 21.2% at the
+start, peaked at 36.5%, and ended at 22.8%; RSS was 31,168 KiB, 52,672 KiB,
+and 33,520 KiB respectively. The captured in-run metrics recorded 33,392
+coalesced updates and no dropped canonical PTY state. The exact interruption
+caveat and raw evidence are recorded in the Phase 2 evidence note under
+`docs/notes/`.
+
+Visual evidence:
+
+- `docs/v4-phase2-shell.gif` — HOME, launch flow, wide ember STAGE, zoom,
+  swap, detach and reattach.
+- `docs/v4-phase2-narrow-phosphor.gif` — new-session flow and STAGE at exactly
+  72×30 in phosphor.
+
+## Compatibility and verification
+
+The former Python implementation was removed only after its behavior was
+captured. The immutable corpus under
+`rust/crates/orc-core/tests/fixtures/python-v3/` is now the compatibility
+oracle for current, legacy, corrupt, exact-usage, killed, orphaned, RPC,
+session-linked, retry, handoff, CJK, combining-mark, and wide-character data.
+Rust tests compare meaningful JSON/exit structure and preserve unknown fields.
+
+```bash
+cd rust
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo build --release --locked
+```
+
+Historical design, benchmark, and review documents retain their original
+language labels for auditability; they are not runtime fallback instructions.

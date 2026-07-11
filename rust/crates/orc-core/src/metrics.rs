@@ -196,7 +196,7 @@ pub fn delegated_value(runs: &[RunMeta]) -> DelegatedValue {
     let saved = if all_tokens == 0 {
         0.0
     } else {
-        round6(brain_equiv - worker_cost)
+        ((brain_equiv - worker_cost) * 10_000.0).round() / 10_000.0
     };
     DelegatedValue {
         worker_cost_usd: round6(worker_cost),

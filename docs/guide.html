@@ -335,8 +335,13 @@
       <div class="tui-keys"><span><b>enter</b> session</span><span><b>s</b> steer</span><span><b>r</b> retry</span><span><b>h</b> handoff</span><span><b>/</b> search</span><span><b>+/-</b> budget</span><span><b>t</b> theme</span><span><b>q</b> quit</span></div>
     </div>
   </div>
-  <p class="muted" style="margin-top: 14px;">The Rust console watches <code>~/.orchestra</code> incrementally and redraws only when state changes.
-  It never writes <code>meta.json</code>; every action uses the same CLI control path as headless operation.</p>
+  <p class="muted" style="margin-top: 14px;"><strong>Phase 3 SCORE:</strong> attached sessions expose a durable board.
+  <code>j/k</code> selects, <code>h/l</code> requests the adjacent valid move, mouse drag requests a human-attributed
+  column move through the daemon, <code>g</code> focuses the linked STAGE pane, and <code>ctrl-g b</code> returns to SCORE.
+  Review cards show isolated-worktree diff statistics; task JSON and worktree lifecycle remain CLI/core-owned.</p>
+  <p class="muted" style="margin-top: 14px;"><strong>Historical v3 console reference:</strong> v4 now opens the new
+  <code>pi-orchestra</code> RUNS shell from <code>orc top</code>; the full ledger port is intentionally not claimed in Phase 2.
+  HOME and STAGE are production surfaces, and every mutation goes through daemon/core command paths.</p>
   <p class="muted" style="margin-top: 10px;">Open a session and the left side becomes a real topology: the main Codex controller,
   its model, and every MiniMax M3 worker remain visibly connected. The right side carries <em>Conversation</em>, <em>Log</em>, <em>Timeline</em>
   and <em>Meta</em>. Running RPC workers accept follow-ups with <code>s</code>. Failed, stalled, or context-exhausted work can be retried with
@@ -349,7 +354,8 @@
 <section>
   <p class="eyebrow">06 · your question, answered</p>
   <h2>Is it "on" for Claude and Codex whenever I run them?</h2>
-  <p><strong style="color: var(--ok);">Yes — from every new session, automatically.</strong> Nothing to launch, no daemon, no per-project setup. Here's exactly what loads where:</p>
+  <p><strong style="color: var(--ok);">Yes — from every new session, automatically.</strong> No per-project setup is required.
+  The per-user <code>orcd</code> daemon starts on demand when the Bench client first opens.</p>
   <div class="duo">
     <div class="panel">
       <h3>Automatic (no action needed)</h3>
@@ -365,7 +371,8 @@
       <ul>
         <li><code>deleg8</code> / <code>pi-rpc</code> are zsh functions for <em>your</em> interactive terminal (new terminals from now on; existing ones need <code>source ~/.zshrc</code>).</li>
         <li>Brains' tool shells are non-interactive, so they don't see those functions — their skills tell them to call <code>orc run … --brain claude</code> directly. Verified working.</li>
-        <li><code>orc top</code> — run it whenever you want the dashboard; it's a viewer, nothing depends on it running.</li>
+        <li><code>pi-orchestra</code> — opens HOME; <code>pi-orchestra attach</code> reconnects to daemon-owned panes.</li>
+        <li><code>orc top</code> — opens the honestly labeled RUNS shell placeholder; the full ledger port is not claimed yet.</li>
         <li>The <code>orchestrate</code> swarm — fires only when you type the keyword.</li>
       </ul>
     </div>
@@ -385,7 +392,8 @@
       <tr><th>I want to…</th><th>Type</th></tr>
       <tr><td>Delegate one task</td><td><span class="cmd">deleg8 "task"</span> &nbsp;or&nbsp; <span class="cmd">deleg8 "task" /path/to/dir</span></td></tr>
       <tr><td>Watch it stream live</td><td><span class="cmd">pi-rpc "task"</span> &nbsp;(Ctrl+C cancels)</td></tr>
-      <tr><td>Open the dashboard</td><td><span class="cmd">orc top</span></td></tr>
+      <tr><td>Open HOME / attach STAGE</td><td><span class="cmd">pi-orchestra home</span> · <span class="cmd">pi-orchestra attach</span></td></tr>
+      <tr><td>Open the RUNS shell</td><td><span class="cmd">orc top</span></td></tr>
       <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
       <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
       <tr><td>Usage &amp; savings report</td><td><span class="cmd">orc stats</span> &nbsp;(workers exact · brains estimated · delegated value)</td></tr>
@@ -397,7 +405,7 @@
       <tr><td>Trigger the multi-worker swarm</td><td>say <span class="cmd">orchestrate: &lt;big task&gt;</span> to Claude or Codex</td></tr>
       <tr><td>One-off with a different model</td><td><span class="cmd">pi -p --offline --provider minimax --model MiniMax-M2.5 "task"</span> <span class="muted">(bypasses the registry)</span></td></tr>
       <tr><td>Remove everything</td><td><span class="cmd">./uninstall.sh</span> <span class="muted">(keeps your run history)</span></td></tr>
-      <tr><td>Opt into the Rust stack</td><td><span class="cmd">./install.sh --rust</span> <span class="muted">(default install remains Python)</span></td></tr>
+      <tr><td>Install the Rust stack</td><td><span class="cmd">./install.sh</span> <span class="muted">(orc + orcd + pi-orchestra)</span></td></tr>
     </table>
     </div>
   </div>
@@ -407,7 +415,7 @@
 <section>
   <p class="eyebrow">08 · under the hood</p>
   <h2>One run, on disk</h2>
-  <p>No database, no server. Each delegation is a folder you can read with <code>cat</code> — which is also exactly what the dashboard does:</p>
+  <p>No database and no web server. A private per-user daemon owns PTYs; each delegation remains a plain folder you can inspect directly:</p>
 <pre><code><span class="c">~/.orchestra/runs/20260710-023226-reply-with-the-single-b7d2/</span>
 ├── meta.json      <span class="c"># the record ↓</span>
 ├── output.log     <span class="c"># everything the worker printed</span>

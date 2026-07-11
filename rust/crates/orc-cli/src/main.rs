@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
 use orc_core::quota;
 use orc_core::registry::list_runs;
 use orc_core::runner::Mode;
+use orc_core::tasks::{self, NewTask, TaskActor, TaskStatus};
 
 #[derive(Clone, Debug, ValueEnum)]
 enum Brain {
@@ -22,6 +23,44 @@ impl Brain {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Human => "human",
+        }
+    }
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum TaskActorArg {
+    Brain,
+    Human,
+}
+
+impl From<TaskActorArg> for TaskActor {
+    fn from(value: TaskActorArg) -> Self {
+        match value {
+            TaskActorArg::Brain => Self::Brain,
+            TaskActorArg::Human => Self::Human,
+        }
+    }
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum TaskStatusArg {
+    Backlog,
+    Assigned,
+    Running,
+    Review,
+    Done,
+    Dropped,
+}
+
+impl From<TaskStatusArg> for TaskStatus {
+    fn from(value: TaskStatusArg) -> Self {
+        match value {
+            TaskStatusArg::Backlog => Self::Backlog,
+            TaskStatusArg::Assigned => Self::Assigned,
+            TaskStatusArg::Running => Self::Running,
+            TaskStatusArg::Review => Self::Review,
+            TaskStatusArg::Done => Self::Done,
+            TaskStatusArg::Dropped => Self::Dropped,
         }
     }
 }
@@ -137,6 +176,128 @@ enum Commands {
         #[arg(long)]
         theme: Option<String>,
     },
+    /// Maintain the durable session task board.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TaskCommand {
+    /// Add one backlog task.
+    Add {
+        title: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        depends_on: Vec<String>,
+        #[arg(long)]
+        isolate: bool,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List parseable tasks without hiding valid siblings when one is corrupt.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one task and its append-only history.
+    Show {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assign a task to a worker or pane.
+    Assign {
+        id: String,
+        assignee: String,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark an assigned task running.
+    Start {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a running task to review.
+    Review {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark a reviewed task done.
+    Done {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a task while preserving its audit record.
+    Drop {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a task through the documented state machine.
+    Move {
+        id: String,
+        status: TaskStatusArg,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report a worktree diff once isolation has been materialized.
+    Diff {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explicitly squash-merge one reviewed isolated task.
+    Merge {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -165,10 +326,145 @@ fn fmt_tokens(value: u64) -> String {
     }
 }
 
+fn task_session(explicit: Option<String>) -> Result<String> {
+    explicit
+        .or_else(|| std::env::var("ORC_SESSION").ok())
+        .filter(|session| !session.is_empty())
+        .ok_or_else(|| anyhow!("task session is required; pass --session or set ORC_SESSION"))
+}
+
+fn print_task(task: &orc_core::tasks::Task, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(task)?);
+    } else {
+        println!("{}  {:<9}  {}", task.id, task.status, task.title);
+    }
+    Ok(())
+}
+
+fn dispatch_task(command: TaskCommand) -> Result<i32> {
+    match command {
+        TaskCommand::Add {
+            title,
+            description,
+            depends_on,
+            isolate,
+            session,
+            actor,
+            json,
+        } => {
+            let task = tasks::add_task(
+                &task_session(session)?,
+                actor.into(),
+                NewTask {
+                    title,
+                    description: description.unwrap_or_default(),
+                    depends_on,
+                    isolate,
+                },
+            )?;
+            print_task(&task, json)?;
+        }
+        TaskCommand::List { session, json } => {
+            let tasks = tasks::list_tasks(&task_session(session)?)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tasks)?);
+            } else if tasks.is_empty() {
+                println!("no tasks yet — try: orc task add \"first task\" --session <session>");
+            } else {
+                for task in tasks {
+                    print_task(&task, false)?;
+                }
+            }
+        }
+        TaskCommand::Show { id, session, json } => {
+            print_task(&tasks::read_task(&task_session(session)?, &id)?, json)?
+        }
+        TaskCommand::Assign {
+            id,
+            assignee,
+            run,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::assign_task(&task_session(session)?, &id, assignee, run, actor.into())?,
+            json,
+        )?,
+        TaskCommand::Start {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::start_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
+        TaskCommand::Review {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::review_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
+        TaskCommand::Done {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::done_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
+        TaskCommand::Drop {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::drop_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
+        TaskCommand::Move {
+            id,
+            status,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::move_task(&task_session(session)?, &id, status.into(), actor.into())?,
+            json,
+        )?,
+        TaskCommand::Diff { id, session, json } => {
+            let diff = tasks::diff_task(&task_session(session)?, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&diff)?);
+            } else {
+                println!(
+                    "+{} -{} · {} files",
+                    diff.insertions, diff.deletions, diff.files
+                );
+            }
+        }
+        TaskCommand::Merge {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::merge_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
+    }
+    Ok(0)
+}
+
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
-            println!("orc 0.3.0");
+            println!("orc 0.4.0");
             Ok(0)
         }
         Commands::Run {
@@ -415,9 +711,22 @@ fn dispatch(command: Commands) -> Result<i32> {
             Ok(0)
         }
         Commands::Top { theme } => {
-            orc_tui::run(theme.as_deref())?;
-            Ok(0)
+            let current = std::env::current_exe().context("locate orc binary")?;
+            let sibling = current.with_file_name("pi-orchestra");
+            let executable = if sibling.is_file() {
+                sibling
+            } else {
+                PathBuf::from("pi-orchestra")
+            };
+            let mut command = Command::new(executable);
+            if let Some(theme) = theme {
+                command.args(["--theme", &theme]);
+            }
+            command.arg("runs");
+            let status = command.status().context("open pi-orchestra RUNS shell")?;
+            Ok(status.code().unwrap_or(1))
         }
+        Commands::Task { command } => dispatch_task(command),
     }
 }
 

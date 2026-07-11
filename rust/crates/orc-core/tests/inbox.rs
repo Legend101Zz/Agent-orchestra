@@ -21,7 +21,7 @@ fn prompt_and_kill_protocol_remain_plain_json() {
     let _ = fs::remove_dir_all(&home);
     // SAFETY: tests serialize environment mutation with env_lock.
     unsafe { std::env::set_var("ORC_HOME", &home) };
-    let run = new_run("rpc", &NewRunOptions::python_defaults()).unwrap();
+    let run = new_run("rpc", &NewRunOptions::compatibility_defaults()).unwrap();
     let prompt = publish_prompt(&run, "keep going").unwrap();
     assert_eq!(read_prompt(&prompt).unwrap().message, "keep going");
     let pending = pending_prompts(&run, &HashSet::new()).unwrap();

@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod control;
 pub mod inbox;
 pub mod metrics;
@@ -7,5 +8,6 @@ pub mod quota;
 pub mod registry;
 pub mod runner;
 pub mod search;
+pub mod tasks;
 
 pub use model::{Config, RunMeta, Tokens};

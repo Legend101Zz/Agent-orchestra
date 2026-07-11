@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -60,6 +62,63 @@ struct CachedDetail {
     detail: RunDetail,
 }
 
+type QuotaUpdate = (QuotaResult, Vec<Value>);
+
+fn unknown_quota() -> QuotaResult {
+    QuotaResult {
+        level: "unknown".to_owned(),
+        five_hour_pct: None,
+        weekly_pct: None,
+        window_resets_in_min: None,
+        fetched_at: None,
+        source: None,
+        reason: Some("quota refresh pending".to_owned()),
+        extra: Default::default(),
+    }
+}
+
+fn spawn_quota_worker(ttl: Duration) -> (Receiver<QuotaUpdate>, Sender<()>) {
+    let (update_tx, update_rx) = mpsc::channel();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("orc-tui-quota".to_owned())
+        .spawn(move || {
+            loop {
+                let update = (
+                    quota::get_quota(false),
+                    quota::read_history(96).unwrap_or_default(),
+                );
+                if update_tx.send(update).is_err() {
+                    break;
+                }
+                match stop_rx.recv_timeout(ttl) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+        })
+        .expect("spawn quota refresh worker");
+    (update_rx, stop_tx)
+}
+
+fn apply_quota_updates(
+    updates: &Receiver<QuotaUpdate>,
+    quota_result: &mut QuotaResult,
+    quota_history: &mut Vec<Value>,
+) -> bool {
+    let mut changed = false;
+    loop {
+        match updates.try_recv() {
+            Ok((result, history)) => {
+                *quota_result = result;
+                *quota_history = history;
+                changed = true;
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return changed,
+        }
+    }
+}
+
 impl DisplayRow {
     #[must_use]
     pub fn key(&self, runs: &[RunMeta]) -> String {
@@ -85,6 +144,8 @@ pub struct App {
     pub theme: Theme,
     pub quota: QuotaResult,
     pub quota_history: Vec<Value>,
+    quota_updates: Receiver<QuotaUpdate>,
+    quota_stop: Option<Sender<()>>,
     pub config: Value,
     pub query: String,
     pub search_ids: HashSet<String>,
@@ -106,8 +167,8 @@ impl App {
             .unwrap_or("ember");
         let mut snapshot = Snapshot::default();
         snapshot.refresh()?;
-        let quota = quota::get_quota(false);
-        let quota_history = quota::read_history(96).unwrap_or_default();
+        let ttl = Duration::from_secs(quota::load_config().cache_ttl_sec.max(1));
+        let (quota_updates, quota_stop) = spawn_quota_worker(ttl);
         let mut app = Self {
             snapshot,
             rows: Vec::new(),
@@ -120,8 +181,10 @@ impl App {
             detail_tab: 0,
             detail_scroll: 0,
             theme: Theme::named(theme_name),
-            quota,
-            quota_history,
+            quota: unknown_quota(),
+            quota_history: Vec::new(),
+            quota_updates,
+            quota_stop: Some(quota_stop),
             config,
             query: String::new(),
             search_ids: HashSet::new(),
@@ -140,6 +203,7 @@ impl App {
 
     #[cfg(test)]
     pub fn with_runs(runs: Vec<RunMeta>, theme: Theme) -> Self {
+        let (_quota_tx, quota_updates) = mpsc::channel();
         let mut app = Self {
             snapshot: Snapshot::from_runs(runs),
             rows: Vec::new(),
@@ -160,8 +224,11 @@ impl App {
                 fetched_at: Some(0.0),
                 source: Some("fixture".to_owned()),
                 reason: None,
+                extra: Default::default(),
             },
             quota_history: Vec::new(),
+            quota_updates,
+            quota_stop: None,
             config: serde_json::json!({"advisory_budget_usd": 0.5}),
             query: String::new(),
             search_ids: HashSet::new(),
@@ -179,8 +246,13 @@ impl App {
     }
 
     pub fn refresh(&mut self) -> Result<bool> {
+        let quota_changed = apply_quota_updates(
+            &self.quota_updates,
+            &mut self.quota,
+            &mut self.quota_history,
+        );
         if self.last_refresh.elapsed() < Duration::from_millis(500) {
-            return Ok(false);
+            return Ok(quota_changed);
         }
         self.last_refresh = Instant::now();
         let changed = self.snapshot.refresh()?;
@@ -188,7 +260,7 @@ impl App {
             self.rebuild_rows();
             self.rebuild_session_members();
         }
-        Ok(changed)
+        Ok(changed || quota_changed)
     }
 
     fn attention_rank(status: &str, attention: Option<&str>) -> usize {
@@ -661,6 +733,14 @@ impl App {
     }
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(stop) = self.quota_stop.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
 fn parse_detail(
     run: &RunMeta,
     run_dir: &std::path::Path,
@@ -735,4 +815,38 @@ fn parse_detail(
             .push("link  HANDOFF FROM PRIOR WORKER".to_owned());
     }
     detail
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use serde_json::json;
+
+    use super::{QuotaResult, apply_quota_updates, unknown_quota};
+
+    #[test]
+    fn quota_updates_are_applied_without_blocking_rendering() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send((
+                QuotaResult {
+                    level: "warn".to_owned(),
+                    five_hour_pct: Some(20.0),
+                    weekly_pct: Some(40.0),
+                    window_resets_in_min: Some(12),
+                    fetched_at: Some(1.0),
+                    source: Some("fixture".to_owned()),
+                    reason: None,
+                    extra: Default::default(),
+                },
+                vec![json!({"five_hour_pct": 20.0})],
+            ))
+            .expect("queue quota fixture");
+        let mut quota = unknown_quota();
+        let mut history = Vec::new();
+        assert!(apply_quota_updates(&receiver, &mut quota, &mut history));
+        assert_eq!(quota.level, "warn");
+        assert_eq!(history.len(), 1);
+    }
 }
