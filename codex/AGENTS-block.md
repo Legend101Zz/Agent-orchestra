@@ -39,6 +39,12 @@ When `ORC_SESSION` or `ORC_PANE_ID` is present or work resumes, first run
 `orc task list --session "$ORC_SESSION"` and `orc list`; preserve completed work and
 durable inbox context rather than recreating it.
 
+For a normal Bench delegation, inspect `ORC_WORKERS`, then use `orc task add`,
+`orc task assign --run <worker-pane>`, `orc task start`, and
+`orc dispatch send ... --pane <worker-pane>`, always with explicit `--session`
+and `--actor`. Only `confirmed` delivery means the worker received the brief;
+missing executables/capabilities and stopped panes are unavailable.
+
 The word `pi-orchestra` is also a trigger for that procedure. Keep pane/session
 environment intact, use explicit `--session` plus `--actor brain|human` for task
 commands, and offer (never assume) configured workers. Local Hermes help did not

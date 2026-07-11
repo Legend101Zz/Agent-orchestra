@@ -48,6 +48,18 @@ an explicit `--session` and `--actor brain|human`. `pi-orchestra` itself is an
 alias trigger for this re-orientation procedure; it does not authorize an
 unconfigured worker or adapter.
 
+For a supported Bench delegation, inspect the offered panes in `ORC_WORKERS`,
+then keep task and delivery state linked explicitly:
+
+    orc task add "<title>" --session "$ORC_SESSION" --actor brain --json
+    orc task assign T0001 hermes --run <worker-pane> --session "$ORC_SESSION" --actor brain
+    orc task start T0001 --session "$ORC_SESSION" --actor brain
+    orc dispatch send T0001 hermes "<bounded brief>" --pane <worker-pane> --session "$ORC_SESSION" --actor brain --json
+
+Only a `confirmed` dispatch means the worker received the brief. A missing
+executable, absent `dispatch_args` capability, stopped pane, timeout, or
+non-zero exit is unavailable/failed and must be reported as such.
+
 ## Quota rules (IMPORTANT)
 
 - `orc` prints `ORC WARNING:` / `ORC BLOCKED:` / `ORC NOTE:` lines on stderr.

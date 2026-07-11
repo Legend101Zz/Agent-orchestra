@@ -97,7 +97,11 @@ if [ -f "$ROOT/codex/AGENTS-block.md" ]; then
     sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
     echo "    appended (backup: $AGENTS.pi-orchestra.bak)"
   else
-    echo "    already present"
+    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
+    sed -i '' '/<!-- pi-orchestra:begin -->/,/<!-- pi-orchestra:end -->/d' "$AGENTS"
+    printf '\n' >> "$AGENTS"
+    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
+    echo "    refreshed owned block (backup: $AGENTS.pi-orchestra.bak)"
   fi
 fi
 

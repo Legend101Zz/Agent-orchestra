@@ -26,3 +26,15 @@ pi-rpc() {
   [[ -n "${ORC_SESSION:-}" ]] && session_args=(--session "$ORC_SESSION")
   orc rpc "$task" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
 }
+
+# bench-dispatch: confirmed non-interactive delivery to an offered Bench worker.
+# Usage: bench-dispatch T0001 hermes worker-pane "bounded brief"
+bench-dispatch() {
+  local task="$1" harness="$2" pane="$3" brief="$4"
+  if [[ -z "${ORC_SESSION:-}" || -z "$task" || -z "$harness" || -z "$pane" || -z "$brief" ]]; then
+    echo 'Usage: ORC_SESSION=<id> bench-dispatch <task> <harness> <pane> "brief"' >&2
+    return 1
+  fi
+  orc dispatch send "$task" "$harness" "$brief" --session "$ORC_SESSION" \
+    --pane "$pane" --actor "${ORC_ACTOR:-brain}" --json
+}

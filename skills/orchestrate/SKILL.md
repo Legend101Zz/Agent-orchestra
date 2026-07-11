@@ -45,3 +45,6 @@ must not activate.
 - `pi-orchestra` is an alias trigger for the same re-orientation and board
   maintenance workflow. Offer configured `default_workers`; never assume their
   acceptance or claim an adapter capability that has not been verified locally.
+- Inside a Bench pane, read `ORC_WORKERS` and use the explicit `orc task add →
+  assign → start → orc dispatch send` path. Pass `--session`, `--actor`, and the
+  selected `--pane`; only durable `confirmed` delivery may be described as received.
