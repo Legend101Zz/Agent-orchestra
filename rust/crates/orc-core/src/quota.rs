@@ -1,8 +1,8 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -60,18 +60,52 @@ pub fn load_config() -> Config {
         .unwrap_or_default()
 }
 
+fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<Option<Output>> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            if let Some(mut handle) = child.stdout.take() {
+                handle.read_to_end(&mut stdout)?;
+            }
+            if let Some(mut handle) = child.stderr.take() {
+                handle.read_to_end(&mut stderr)?;
+            }
+            return Ok(Some(Output {
+                status,
+                stdout,
+                stderr,
+            }));
+        }
+        if started.elapsed() >= timeout {
+            child.kill()?;
+            child.wait()?;
+            return Ok(None);
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        std::thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
 pub fn get_key() -> Option<String> {
-    let keychain = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            &std::env::var("USER").unwrap_or_default(),
-            "-s",
-            "minimax_api_key",
-            "-w",
-        ])
-        .output();
-    if let Ok(output) = keychain
+    let mut security = Command::new("security");
+    security.args([
+        "find-generic-password",
+        "-a",
+        &std::env::var("USER").unwrap_or_default(),
+        "-s",
+        "minimax_api_key",
+        "-w",
+    ]);
+    if let Ok(Some(output)) = command_output_with_timeout(&mut security, Duration::from_secs(10))
         && output.status.success()
     {
         let key = String::from_utf8_lossy(&output.stdout).trim().to_owned();
@@ -113,6 +147,10 @@ pub fn parse_remains(raw: &Value, fetched_at: f64) -> Option<QuotaSample> {
 
 pub fn fetch_remains(key: &str) -> Result<Value> {
     let mut response = ureq::get(REMAINS_URL)
+        .config()
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
         .header("Authorization", &format!("Bearer {key}"))
         .header("Content-Type", "application/json")
         .call()
@@ -249,4 +287,23 @@ pub fn read_history(limit: usize) -> Result<Vec<Value>> {
         values.drain(..values.len() - limit);
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    use super::command_output_with_timeout;
+
+    #[test]
+    fn subprocess_timeout_kills_and_reaps_child() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 2"]);
+        let started = Instant::now();
+        let output = command_output_with_timeout(&mut command, Duration::from_millis(30))
+            .expect("spawn timeout fixture");
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 }

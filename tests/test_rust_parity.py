@@ -84,6 +84,8 @@ def test_rpc_send_delivers_once_and_acks(orc_home, tmp_path, monkeypatch, rust_o
         "#!/usr/bin/env bash\n"
         "read -r initial\n"
         "echo '{\"type\":\"agent_start\"}'\n"
+        "sleep 0.5\n"
+        "echo '{\"type\":\"agent_end\",\"messages\":[{\"role\":\"assistant\",\"usage\":{\"input\":8,\"output\":2,\"cacheRead\":0,\"totalTokens\":10,\"cost\":{\"total\":0.00001}}}]}'\n"
         "read -r followup\n"
         "echo \"$followup\" > \"$ORC_HOME/followup.txt\"\n"
         "echo '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"steered\"}}'\n"
@@ -104,6 +106,7 @@ def test_rpc_send_delivers_once_and_acks(orc_home, tmp_path, monkeypatch, rust_o
     assert meta["status"] == "done"
     delivered = json.loads((orc_home / "followup.txt").read_text())
     assert delivered == {"type": "prompt", "message": "focus on tests"}
+    assert meta["tokens"]["total"] == 12
     acks = list((run_dir / "inbox" / "processed").glob("ack-*.json"))
     assert len(acks) == 1
 
