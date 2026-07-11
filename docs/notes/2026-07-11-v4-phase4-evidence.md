@@ -112,3 +112,14 @@ CARGO_TARGET_DIR=/tmp/pi-orchestra-v4-phase4-final-target cargo build --release 
 The evidence note is completed only after those commands, isolated-HOME
 install/reinstall/uninstall, source audits, protected checksum comparison,
 merge, and remote-main proof pass. Phase 5 and Phase 6 remain unstarted.
+
+## Final protected-path comparison
+
+The actual pre-work and final checksums reproduced for Pi auth/bin/settings,
+Claude settings, Codex config, and the live `orc` symlink target string. The
+single platform-managed Pi session log for this workspace changed from
+`4d6f7e2919bc2f08323e517b63c733c880c3804b0e272a5ae539636d89f82291` to
+`308f2ca5460cdb0cf0d862ba38f2fd669d822fd712075027236ef3951bca092c` while
+the required Pi workers ran. It was not opened for editing, restored, or
+otherwise modified by repository work. This is the expected honest
+environmental discrepancy, not a protected configuration change.
