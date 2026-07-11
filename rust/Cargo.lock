@@ -1260,8 +1260,10 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "orc-proto",
  "orc-pty",
+ "serde",
  "serde_json",
  "shell-words",
  "thiserror 2.0.18",

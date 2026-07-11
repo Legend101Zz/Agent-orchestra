@@ -21,7 +21,8 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use orc_proto::{
-    ClientRequest, PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse, TerminalColor,
+    ClientRequest, DaemonMetrics, PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse,
+    TerminalColor,
 };
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
@@ -191,6 +192,17 @@ impl BenchClient {
             ServerResponse::Error { message } => Err(AppError::Daemon(message)),
             response => Err(AppError::Daemon(format!(
                 "unexpected ping response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Fetch daemon backpressure and attachment counters.
+    pub fn metrics(&mut self) -> Result<DaemonMetrics> {
+        match self.request(&ClientRequest::Metrics)? {
+            ServerResponse::Metrics { metrics } => Ok(metrics),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected metrics response: {response:?}"
             ))),
         }
     }

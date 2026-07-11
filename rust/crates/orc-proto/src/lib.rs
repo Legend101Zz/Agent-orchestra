@@ -96,6 +96,30 @@ pub struct PaneSequence {
     pub sequence: u64,
 }
 
+/// Bounded-output counters for one daemon-owned pane.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneMetrics {
+    /// Stable pane identifier.
+    pub id: String,
+    /// Bytes read from the PTY since spawn.
+    pub bytes_read: u64,
+    /// Reader chunks merged into canonical terminal state.
+    pub output_chunks: u64,
+    /// Full screen snapshots requested by attached clients.
+    pub snapshots: u64,
+    /// Intermediate output generations skipped between delivered snapshots.
+    pub coalesced_updates: u64,
+}
+
+/// Aggregate daemon backpressure counters.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonMetrics {
+    /// Metrics in stable pane launch order.
+    pub panes: Vec<PaneMetrics>,
+    /// Current attached client count.
+    pub attached_clients: usize,
+}
+
 /// A request sent from a Bench client to the daemon.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -135,6 +159,8 @@ pub enum ClientRequest {
         /// Caller-provided nonce.
         nonce: u64,
     },
+    /// Request bounded-output and client counters.
+    Metrics,
 }
 
 /// A response sent from the daemon to one client.
@@ -163,6 +189,11 @@ pub enum ServerResponse {
         /// Nonce copied from the request.
         nonce: u64,
     },
+    /// Current bounded-output and client counters.
+    Metrics {
+        /// Aggregate counters.
+        metrics: DaemonMetrics,
+    },
     /// A recoverable protocol or command failure.
     Error {
         /// Plain-language failure message.
@@ -172,7 +203,7 @@ pub enum ServerResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientRequest, PROTOCOL_VERSION, ServerResponse};
+    use super::{ClientRequest, PROTOCOL_VERSION, PaneSnapshot, ServerResponse, TerminalCell};
 
     #[test]
     fn messages_round_trip_as_additive_json() {
@@ -187,5 +218,31 @@ mod tests {
         let encoded = serde_json::to_vec(&response).expect("encode response");
         let decoded: ServerResponse = serde_json::from_slice(&encoded).expect("decode response");
         assert_eq!(decoded, response);
+
+        let additive: ClientRequest =
+            serde_json::from_str(r#"{"type":"hello","version":1,"future_capability":true}"#)
+                .expect("decode additive hello");
+        assert_eq!(additive, request);
+    }
+
+    #[test]
+    fn compact_default_cells_keep_snapshot_bounded() {
+        let snapshot = ServerResponse::Snapshot {
+            panes: vec![PaneSnapshot {
+                id: "pane".to_owned(),
+                title: "fixture".to_owned(),
+                rows: 30,
+                cols: 90,
+                cursor: (0, 0),
+                sequence: 1,
+                cells: vec![TerminalCell::default(); 30 * 90],
+            }],
+        };
+        let encoded = serde_json::to_vec(&snapshot).expect("encode compact snapshot");
+        assert!(
+            encoded.len() < 9_000,
+            "compact snapshot grew to {} bytes",
+            encoded.len()
+        );
     }
 }

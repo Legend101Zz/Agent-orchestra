@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use orc_proto::{PaneSnapshot, TerminalCell, TerminalColor};
+use orc_proto::{PaneMetrics, PaneSnapshot, TerminalCell, TerminalColor};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use thiserror::Error;
 
@@ -56,6 +56,11 @@ pub struct HostedPane {
     writer: Mutex<Box<dyn Write + Send>>,
     parser: Arc<Mutex<vt100::Parser>>,
     sequence: Arc<AtomicU64>,
+    bytes_read: Arc<AtomicU64>,
+    output_chunks: Arc<AtomicU64>,
+    snapshots: AtomicU64,
+    coalesced_updates: AtomicU64,
+    last_snapshot_sequence: AtomicU64,
 }
 
 impl HostedPane {
@@ -114,8 +119,12 @@ impl HostedPane {
             .map_err(|error| PtyError::Portable(error.to_string()))?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK_ROWS)));
         let sequence = Arc::new(AtomicU64::new(0));
+        let bytes_read = Arc::new(AtomicU64::new(0));
+        let output_chunks = Arc::new(AtomicU64::new(0));
         let parser_for_reader = Arc::clone(&parser);
         let sequence_for_reader = Arc::clone(&sequence);
+        let bytes_for_reader = Arc::clone(&bytes_read);
+        let chunks_for_reader = Arc::clone(&output_chunks);
         let signal_for_reader = Arc::clone(&signal);
         thread::Builder::new()
             .name("orc-pty-reader".to_owned())
@@ -128,6 +137,8 @@ impl HostedPane {
                     if read == 0 {
                         break;
                     }
+                    bytes_for_reader.fetch_add(read as u64, Ordering::Relaxed);
+                    chunks_for_reader.fetch_add(1, Ordering::Relaxed);
                     let Ok(mut parser) = parser_for_reader.lock() else {
                         break;
                     };
@@ -150,6 +161,11 @@ impl HostedPane {
             writer: Mutex::new(writer),
             parser,
             sequence,
+            bytes_read,
+            output_chunks,
+            snapshots: AtomicU64::new(0),
+            coalesced_updates: AtomicU64::new(0),
+            last_snapshot_sequence: AtomicU64::new(0),
         })
     }
 
@@ -163,6 +179,24 @@ impl HostedPane {
     #[must_use]
     pub fn sequence(&self) -> u64 {
         self.sequence.load(Ordering::Acquire)
+    }
+
+    /// Return the child process identifier when the platform exposes it.
+    #[must_use]
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
+    /// Return bounded-output counters without locking terminal state.
+    #[must_use]
+    pub fn metrics(&self) -> PaneMetrics {
+        PaneMetrics {
+            id: self.id.clone(),
+            bytes_read: self.bytes_read.load(Ordering::Relaxed),
+            output_chunks: self.output_chunks.load(Ordering::Relaxed),
+            snapshots: self.snapshots.load(Ordering::Relaxed),
+            coalesced_updates: self.coalesced_updates.load(Ordering::Relaxed),
+        }
     }
 
     /// Write bytes to the child without interpreting them.
@@ -204,13 +238,20 @@ impl HostedPane {
                 cells.push(cell.map_or_else(TerminalCell::default, terminal_cell));
             }
         }
+        let sequence = self.sequence.load(Ordering::Acquire);
+        let previous = self.last_snapshot_sequence.swap(sequence, Ordering::AcqRel);
+        if sequence > previous.saturating_add(1) {
+            self.coalesced_updates
+                .fetch_add(sequence - previous - 1, Ordering::Relaxed);
+        }
+        self.snapshots.fetch_add(1, Ordering::Relaxed);
         Ok(PaneSnapshot {
             id: self.id.clone(),
             title: self.title.clone(),
             rows,
             cols,
             cursor: screen.cursor_position(),
-            sequence: self.sequence.load(Ordering::Acquire),
+            sequence,
             cells,
         })
     }
@@ -296,6 +337,42 @@ mod tests {
                 .cells
                 .iter()
                 .any(|cell| cell.foreground != Default::default())
+        );
+    }
+
+    #[test]
+    fn input_path_preserves_kitty_paste_and_mouse_bytes_verbatim() {
+        let bytes = "\x1b[97;5u\x1b[200~世界\x1b[201~\x1b[<0;3;4M".as_bytes();
+        let args = vec![
+            "-c".to_owned(),
+            format!(
+                "stty raw -echo; dd bs=1 count={} 2>/dev/null | od -An -tx1",
+                bytes.len()
+            ),
+        ];
+        let mut pane = HostedPane::spawn("raw", "fixture", "sh", &args, Path::new("/tmp"), 8, 120)
+            .expect("spawn raw input fixture");
+        thread::sleep(Duration::from_millis(30));
+        pane.write_input(bytes).expect("write raw bytes");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pane.has_exited().expect("poll raw fixture") && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let snapshot = pane.snapshot().expect("snapshot raw fixture");
+        let output = snapshot
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<String>();
+        let expected = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains(&expected),
+            "raw bytes changed: {normalized:?}"
         );
     }
 }

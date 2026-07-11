@@ -2,34 +2,106 @@
 //! `pi-orchestra` phase-one Bench client spike.
 
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use orc_app::{ThemeName, benchmark, run};
+use orc_app::{BenchClient, ThemeName, benchmark, run};
 
 #[derive(Debug, Parser)]
 #[command(about = "Attach to the Bench daemon spike")]
 struct Args {
-    #[arg(long, default_value = "/tmp/orcd-spike.sock")]
-    socket: PathBuf,
+    #[arg(long)]
+    socket: Option<PathBuf>,
     #[arg(long, default_value = "ember")]
     theme: String,
     #[arg(long)]
     bench: bool,
     #[arg(long, default_value_t = 1_000)]
     iterations: usize,
+    #[arg(long)]
+    metrics: bool,
+    #[arg(long)]
+    snapshot_once: bool,
+}
+
+fn orchestra_home() -> PathBuf {
+    std::env::var_os("ORC_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".orchestra")))
+        .unwrap_or_else(|| PathBuf::from(".orchestra"))
+}
+
+fn ensure_daemon(socket: &std::path::Path, home: &std::path::Path) -> Result<()> {
+    if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+        return Ok(());
+    }
+    let current = std::env::current_exe().context("locate pi-orchestra")?;
+    let sibling = current.with_file_name("orcd");
+    let executable = if sibling.is_file() {
+        sibling
+    } else {
+        PathBuf::from("orcd")
+    };
+    let mut command = Command::new(executable);
+    command
+        .arg("--home")
+        .arg(home)
+        .arg("--socket")
+        .arg(socket)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().context("start orcd on demand")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().context("poll starting orcd")?
+            && !status.success()
+        {
+            bail!("orcd exited before its socket became ready: {status}");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    bail!("orcd did not create {} within 3 seconds", socket.display())
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let home = orchestra_home();
+    let socket = args.socket.unwrap_or_else(|| home.join("orcd.sock"));
+    ensure_daemon(&socket, &home)?;
     if args.bench {
-        let summary = benchmark(&args.socket, args.iterations)?;
+        let summary = benchmark(&socket, args.iterations)?;
         println!(
             "{{\"iterations\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"max_us\":{}}}",
             args.iterations, summary.p50_us, summary.p95_us, summary.p99_us, summary.max_us
         );
         return Ok(());
     }
-    run(args.socket, ThemeName::named(&args.theme))?;
+    if args.metrics {
+        let metrics = BenchClient::connect(&socket)?.metrics()?;
+        println!("{}", serde_json::to_string(&metrics)?);
+        return Ok(());
+    }
+    if args.snapshot_once {
+        let panes = BenchClient::connect(&socket)?.snapshot()?;
+        let sequences = panes
+            .iter()
+            .map(|pane| (&pane.id, pane.sequence))
+            .collect::<Vec<_>>();
+        println!("{}", serde_json::to_string(&sequences)?);
+        return Ok(());
+    }
+    run(socket, ThemeName::named(&args.theme))?;
     Ok(())
 }
