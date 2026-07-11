@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
@@ -437,9 +437,26 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
             &tasks::move_task(&task_session(session)?, &id, status.into(), actor.into())?,
             json,
         )?,
-        TaskCommand::Diff { .. } | TaskCommand::Merge { .. } => {
-            bail!("task worktree operations are unavailable until Phase 3B")
+        TaskCommand::Diff { id, session, json } => {
+            let diff = tasks::diff_task(&task_session(session)?, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&diff)?);
+            } else {
+                println!(
+                    "+{} -{} · {} files",
+                    diff.insertions, diff.deletions, diff.files
+                );
+            }
         }
+        TaskCommand::Merge {
+            id,
+            session,
+            actor,
+            json,
+        } => print_task(
+            &tasks::merge_task(&task_session(session)?, &id, actor.into())?,
+            json,
+        )?,
     }
     Ok(0)
 }
