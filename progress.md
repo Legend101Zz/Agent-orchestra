@@ -47,3 +47,43 @@
   was explicitly attributed to Codex but killed after nine minutes without a
   report (exit 130; registry fallback estimate was implausibly amplified to
   14,116,214 tokens). It made no repository edits and was not retried or used.
+
+## Phase 1 — PTY / daemon / client spike
+- Built new `orc-proto`, `orc-pty`, `orc-daemon`, and `orc-app` crates plus a
+  standalone reproducible VT parser bake-off. New crates enable missing-docs
+  warnings and use typed library errors / contextual binary errors.
+- Verdict: GO with embedded PTYs; companion-mode fallback was not triggered.
+  Real Claude Code 2.1.198 and Hermes 0.18.0 TUIs render with Unicode, color,
+  alternate-screen state, resize/reflow, detach/reattach replay, and stable
+  child PIDs. Full evidence is in
+  `docs/notes/2026-07-11-tui-spike.md`.
+- Parser results: vt100 165.0 MiB/s (selected, replayable), termwiz 233.1
+  MiB/s (rejected, no screen state), alacritty-terminal 238.5 MiB/s
+  (replayable fallback). Rejected-parser dependencies are isolated from the
+  production workspace lockfile under `rust/spikes/vt-bakeoff`.
+- The first wire shape failed latency: 356,840-byte blank snapshots and about
+  540 ms visible echo. Compact default-cell serialization reduced the fixture
+  to 8,217 bytes; 100-sample PTY-input-to-visible replay is now p50 6.149 ms,
+  p99 6.676 ms, max 6.750 ms. Socket p99 is 48 microseconds.
+- Event-driven idle measured 0.0% CPU for daemon and client. Four unbounded
+  `yes` panes measured daemon 56.2-75.5% CPU and client 4.8-7.2%, with stable
+  RSS during the sample. Pane grids, scrollback, requests, attached clients,
+  panes, and UI event queues are explicitly bounded.
+- Inspected VHS evidence: wide ember, exact 72x30 phosphor, and four-pane
+  flood captures. Ghostty (`TERM=xterm-ghostty`) and signed kitty 0.47.4
+  (`TERM=xterm-kitty`) both held live socket attachments. macOS denied GUI
+  screen capture, so exact-app screenshot evidence is not claimed.
+- Alacritty was attempted for the second-terminal gate, but Homebrew warned
+  and Gatekeeper rejected the cask. No bypass was attempted; it was removed
+  and signed kitty used instead.
+- Final concurrency audit found and fixed a lost-wakeup window by acquiring
+  the shared output epoch before sequence comparison; a regression test now
+  proves output wakes the blocking client without polling.
+- The capped Phase-1 `deleg8` review run
+  (`20260711-131222-review-the-current-phase-03a7`) ignored the 150-second
+  TERM cap, returned no report, and was killed (exit -15; fallback estimate
+  1,990,554 tokens). It made no repository edits and was not used or retried.
+- Phase gates: fmt clean; clippy `-D warnings` clean; all Rust tests and
+  warning-free rustdoc pass; Python remains at 92 passing tests. Raw-byte
+  passthrough for every kitty extended key remains a mandatory Phase-2 item;
+  the spike currently re-encodes common decoded crossterm keys honestly.

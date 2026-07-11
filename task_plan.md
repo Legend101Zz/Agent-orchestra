@@ -14,7 +14,7 @@ phase gated, committed, pushed, and evidenced.
 - [x] Create `v4-bench` from the current `main`
 - [x] Phase 0: quota/subprocess timeouts, steering turn accounting, async TUI
       quota refresh; full Python/Rust/live-smoke gates; commit and push
-- [ ] Phase 1: PTY/vt-parser/daemon/client spike, measurements, explicit verdict
+- [x] Phase 1: PTY/vt-parser/daemon/client spike, measurements, explicit verdict
 - [ ] Phase 2: daemon, protocol, client shell, HOME/STAGE, recovery, fixtures,
       Python deletion, Rust-only install
 - [ ] Phase 3: tasks, worktrees, SCORE, skills
