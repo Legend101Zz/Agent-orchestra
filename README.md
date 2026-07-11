@@ -40,6 +40,43 @@ CARGO_TARGET_DIR=/tmp/pi-orchestra-build cargo build --manifest-path rust/Cargo.
 /tmp/pi-orchestra-build/release/pi-orchestra home
 ```
 
+## First use
+
+After installing, open a fresh terminal (or reload the helper functions), then
+confirm that the installed commands resolve before opening the workspace:
+
+```bash
+source ~/.zshrc                 # only needed in an already-open zsh terminal
+command -v orc orcd pi-orchestra
+orc version
+pi-orchestra home
+```
+
+In HOME, press `n` and choose a brain, review the preselected worker pool,
+then choose a working directory. The daemon launches the session and STAGE
+opens its panes. Close the client with `ctrl-g q` to detach safely; reconnect
+later with:
+
+```bash
+pi-orchestra attach
+```
+
+Use the durable command line when you want to inspect or maintain the board
+outside the UI. Always pass the session shown by HOME and state who made a
+mutation:
+
+```bash
+orc task list --session <session-id>
+orc task add "small, reviewable task" --session <session-id> --actor human
+orc task move T0001 review --session <session-id> --actor human
+orc list
+orc quota
+```
+
+The configured default worker choices are offers, not assumptions: edit the
+pool in HOME before launch. `orc run` requires a working local `pi` executable;
+if it is unavailable, use HOME/STAGE or configure/install the worker first.
+
 ## Phase 3: durable tasks, worktrees, and SCORE
 
 Tasks are plain additive JSON, mutated only through `orc task` with an explicit
