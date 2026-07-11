@@ -42,7 +42,7 @@ enum AppCommand {
         /// Stable session identifier.
         session: Option<String>,
     },
-    /// Open the honest Phase-2 RUNS shell placeholder.
+    /// Open the event-driven RUNS ledger.
     Runs,
 }
 

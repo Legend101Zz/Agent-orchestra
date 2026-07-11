@@ -61,7 +61,9 @@ later with:
 pi-orchestra attach
 ```
 
-Use the durable command line when you want to inspect or maintain the board
+Use the durable command line when you want to inspect, maintain, and delegate
+from the board. A supported worker is marked received only after confirmed
+non-interactive delivery:
 outside the UI. Always pass the session shown by HOME and state who made a
 mutation:
 
@@ -69,6 +71,9 @@ mutation:
 orc task list --session <session-id>
 orc task add "small, reviewable task" --session <session-id> --actor human
 orc task move T0001 review --session <session-id> --actor human
+orc task assign T0001 hermes --run <worker-pane> --session <session-id> --actor brain
+orc task start T0001 --session <session-id> --actor brain
+orc dispatch send T0001 hermes "bounded brief" --pane <worker-pane> --session <session-id> --actor brain --json
 orc list
 orc quota
 ```
@@ -109,7 +114,7 @@ outside Phase 3.
 pi-orchestra home
 pi-orchestra attach                 # newest durable session
 pi-orchestra attach <session-id>
-orc top                             # opens the honest RUNS shell placeholder
+orc top                             # opens the RUNS ledger
 ```
 
 HOME shows durable sessions and a three-step launch flow:
@@ -137,7 +142,8 @@ Useful STAGE keys:
 | `R` on a dead conductor | resume when the harness has `resume_args` |
 | `ctrl-g h` | return HOME |
 | `ctrl-g q` | detach; panes continue in `orcd` |
-| `V` | cycle to/from the RUNS shell |
+| `V` | cycle HOME / SCORE / RUNS |
+| `?` | open or close first-use and recovery help |
 
 When a brain exits, workers remain alive and its last screen becomes
 `CONDUCTOR DOWN` with elapsed time. Recovery uses the configured command,
@@ -173,6 +179,38 @@ Unknown fields survive round trips. Defaults:
 ```
 
 Only `ember` and `phosphor` are supported themes.
+
+## Phase 4: confirmed delivery and polish
+
+Every Bench pane starts with `ORC_SESSION`, `ORC_PANE_ID`, `ORC_WORKERS`, and
+an `ORC_DELEGATE_HINT`. `ORC_WORKERS` is an offer: the brain selects a running
+pane whose harness declares a demonstrated non-interactive `dispatch_args`
+capability. Hermes uses its locally verified `-z/--oneshot` interface. Missing
+executables, missing capability, stopped panes, timeouts, and non-zero exits
+are durable failures and are never presented as receipt.
+
+Dispatch records are bounded to 16 KiB prompt/output excerpts and a bounded
+timeout. A confirmed record writes `delivery_confirmed` into the task history
+and links the worker pane so SCORE and STAGE replay the state after reattach.
+No terminal keystrokes are injected and provider traffic is never proxied.
+
+HOME now includes a first-launch title and teaching empty state. Every view has
+a compact key legend; `?` opens help. STAGE baton motion has bounded per-event
+profiles and the configured reduced-motion path leaves a static filament.
+RUNS embeds the v3 event ledger instead of the Phase 2 placeholder.
+
+Measured Phase 4 release behavior on the development M-series Mac:
+
+- Unix-socket round trip, 5,000 samples: p50 **13 µs**, p95 **15 µs**,
+  p99 **16 µs**, maximum **162 µs**.
+- PTY input to visible replay, 100 samples: p50 **3.365 ms**,
+  p95 **3.544 ms**, p99 **3.628 ms**, maximum **3.645 ms**.
+- After the measurements settled, the isolated daemon measured **0.0% CPU**
+  and **7,536 KiB RSS**.
+- A bounded 20,000-line burst produced 268,890 bytes in 19,825 chunks; 20
+  snapshots coalesced 19,819 intermediate generations. The sampled daemon was
+  10.7% CPU and 14,112 KiB RSS during that short burst. Canonical PTY state was
+  retained; this is a bounded stress sample, not a new two-hour soak claim.
 
 ## Headless CLI
 

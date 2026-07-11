@@ -156,3 +156,23 @@
 - Hermes local help was inspected. It did not demonstrate an AGENTS.md
   equivalent, so no Hermes instruction block was installed; this is documented
   in the source AGENTS block.
+
+## Session 6 — 2026-07-11 (v4 Phase 4)
+- Started a fresh `v4-phase4` branch from remote-verified `origin/main` at
+  `a685133`; the older requested `69da971` was verified as its ancestor and the
+  user authorized current remote main.
+- Added bounded confirmed brain-to-worker delivery through core, daemon
+  protocol, and `orc dispatch`; task history and pane linkage now distinguish
+  confirmed receipt from durable failure across detach/reattach.
+- Bench brains start with session, pane, worker-offer, and delegation-hint
+  environment. Source skills, owned AGENTS block, shell helper, and installer
+  propagation teach the explicit workflow.
+- Shipped the first-launch title and teaching empty state, help page, active
+  view legends, confirmed STAGE label, per-kind baton profiles, reduced-motion
+  degradation, and the RUNS ledger port. TestBackend covers both themes at
+  150x44 and exactly 72x30.
+- Actual Claude produced a bounded brief and actual Hermes `-z` returned the
+  requested dogfood sentinel. No adapter or exact usage claim was made.
+- Phase 4 release measurements: socket p99 16 us; visible-input p99 3.628 ms;
+  settled daemon 0.0% CPU; a 20,000-line burst coalesced 19,819 of 19,825
+  output generations across 20 snapshots.

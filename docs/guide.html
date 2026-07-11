@@ -340,7 +340,7 @@
   column move through the daemon, <code>g</code> focuses the linked STAGE pane, and <code>ctrl-g b</code> returns to SCORE.
   Review cards show isolated-worktree diff statistics; task JSON and worktree lifecycle remain CLI/core-owned.</p>
   <p class="muted" style="margin-top: 14px;"><strong>Historical v3 console reference:</strong> v4 now opens the new
-  <code>pi-orchestra</code> RUNS shell from <code>orc top</code>; the full ledger port is intentionally not claimed in Phase 2.
+  <code>pi-orchestra</code> RUNS ledger from <code>orc top</code>; Phase 4 ports the reviewed v3 ledger into the Bench client.
   HOME and STAGE are production surfaces, and every mutation goes through daemon/core command paths.</p>
   <p class="muted" style="margin-top: 10px;">Open a session and the left side becomes a real topology: the main Codex controller,
   its model, and every MiniMax M3 worker remain visibly connected. The right side carries <em>Conversation</em>, <em>Log</em>, <em>Timeline</em>
@@ -372,7 +372,7 @@
         <li><code>deleg8</code> / <code>pi-rpc</code> are zsh functions for <em>your</em> interactive terminal (new terminals from now on; existing ones need <code>source ~/.zshrc</code>).</li>
         <li>Brains' tool shells are non-interactive, so they don't see those functions — their skills tell them to call <code>orc run … --brain claude</code> directly. Verified working.</li>
         <li><code>pi-orchestra</code> — opens HOME; <code>pi-orchestra attach</code> reconnects to daemon-owned panes.</li>
-        <li><code>orc top</code> — opens the honestly labeled RUNS shell placeholder; the full ledger port is not claimed yet.</li>
+        <li><code>orc top</code> — opens the event-driven RUNS ledger inside the Bench client.</li>
         <li>The <code>orchestrate</code> swarm — fires only when you type the keyword.</li>
       </ul>
     </div>
@@ -394,6 +394,8 @@
       <tr><td>Watch it stream live</td><td><span class="cmd">pi-rpc "task"</span> &nbsp;(Ctrl+C cancels)</td></tr>
       <tr><td>Open HOME / attach STAGE</td><td><span class="cmd">pi-orchestra home</span> · <span class="cmd">pi-orchestra attach</span></td></tr>
       <tr><td>Open the RUNS shell</td><td><span class="cmd">orc top</span></td></tr>
+      <tr><td>Open first-use and recovery help</td><td><span class="cmd">?</span></td></tr>
+      <tr><td>Confirm a worker delivery</td><td><span class="cmd">orc dispatch send T0001 hermes "brief" --pane &lt;worker-pane&gt; --session &lt;id&gt; --actor brain --json</span></td></tr>
       <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
       <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
       <tr><td>Usage &amp; savings report</td><td><span class="cmd">orc stats</span> &nbsp;(workers exact · brains estimated · delegated value)</td></tr>
