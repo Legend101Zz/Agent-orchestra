@@ -73,8 +73,8 @@ fn task_diff_and_merge_are_reachable_from_the_cli_and_json_is_meaningful() {
         "{}",
         String::from_utf8_lossy(&added.stderr)
     );
-    let task: Value = serde_json::from_slice(&added.stdout)
-        .unwrap_or_else(|error| panic!("task json: {error}"));
+    let task: Value =
+        serde_json::from_slice(&added.stdout).unwrap_or_else(|error| panic!("task json: {error}"));
     let id = task["id"].as_str().unwrap_or_default().to_owned();
     let worktree = task["worktree"]["path"]
         .as_str()
@@ -94,8 +94,8 @@ fn task_diff_and_merge_are_reachable_from_the_cli_and_json_is_meaningful() {
         "{}",
         String::from_utf8_lossy(&diff.stderr)
     );
-    let diff: Value = serde_json::from_slice(&diff.stdout)
-        .unwrap_or_else(|error| panic!("diff json: {error}"));
+    let diff: Value =
+        serde_json::from_slice(&diff.stdout).unwrap_or_else(|error| panic!("diff json: {error}"));
     assert_eq!(diff["insertions"], 1);
     assert_eq!(diff["files"], 1);
 

@@ -21,11 +21,17 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
     fs::create_dir_all(&binaries).unwrap();
     fs::create_dir_all(home.join(".pi/agent")).unwrap();
     fs::create_dir_all(home.join(".claude")).unwrap();
+    fs::create_dir_all(home.join(".claude/skills")).unwrap();
     fs::create_dir_all(home.join(".codex")).unwrap();
     fs::write(home.join(".zshrc"), "# existing\n").unwrap();
     fs::write(home.join(".pi/agent/settings.json"), "pi-protected\n").unwrap();
     fs::write(home.join(".claude/settings.json"), "claude-protected\n").unwrap();
     fs::write(home.join(".codex/config.toml"), "codex-protected\n").unwrap();
+    fs::write(
+        home.join(".claude/skills/pi-delegate"),
+        "user-owned skill must survive\n",
+    )
+    .unwrap();
     for name in ["orc", "orcd", "pi-orchestra"] {
         let path = binaries.join(name);
         fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
@@ -51,6 +57,27 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
     }
     assert!(home.join(".orchestra/config.json").is_file());
     fs::write(home.join(".orchestra/keep-me"), "durable\n").unwrap();
+
+    let reinstall = Command::new("bash")
+        .arg(repository_root().join("install.sh"))
+        .env("HOME", &home)
+        .env("ORC_INSTALL_SKIP_BUILD", "1")
+        .env("ORC_INSTALL_BIN_DIR", &binaries)
+        .output()
+        .unwrap();
+    assert!(
+        reinstall.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reinstall.stderr)
+    );
+    let zshrc = fs::read_to_string(home.join(".zshrc")).unwrap();
+    assert_eq!(zshrc.matches("# >>> pi-orchestra >>>").count(), 1);
+    let agents = fs::read_to_string(home.join(".codex/AGENTS.md")).unwrap();
+    assert_eq!(agents.matches("<!-- pi-orchestra:begin -->").count(), 1);
+    assert_eq!(
+        fs::read_to_string(home.join(".claude/skills/pi-delegate")).unwrap(),
+        "user-owned skill must survive\n"
+    );
 
     let uninstall = Command::new("bash")
         .arg(repository_root().join("uninstall.sh"))
@@ -80,6 +107,10 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
     assert_eq!(
         fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
         "codex-protected\n"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join(".claude/skills/pi-delegate")).unwrap(),
+        "user-owned skill must survive\n"
     );
     let _ = fs::remove_dir_all(root);
 }

@@ -13,11 +13,12 @@ case "${1:-}" in
   *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
 esac
 
+TARGET_DIR="${ORC_INSTALL_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$HOME/.local/share/pi-orchestra/target}}"
 if [ "${ORC_INSTALL_SKIP_BUILD:-0}" != 1 ]; then
   echo "==> locked Rust release build"
-  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --locked
+  CARGO_TARGET_DIR="$TARGET_DIR" cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --locked
 fi
-BIN_DIR="${ORC_INSTALL_BIN_DIR:-$ROOT/rust/target/release}"
+BIN_DIR="${ORC_INSTALL_BIN_DIR:-$TARGET_DIR/release}"
 DEST_DIR="$HOME/.local/bin"
 mkdir -p "$DEST_DIR"
 
@@ -63,8 +64,26 @@ fi
 
 echo "==> Claude Code skills"
 mkdir -p "$HOME/.claude/skills"
+install_skill() {
+  local name="$1"
+  local source="$ROOT/skills/$name"
+  local destination="$HOME/.claude/skills/$name"
+  [ -d "$source" ] || return 0
+  if [ -L "$destination" ]; then
+    if [ "$(readlink "$destination")" = "$source" ]; then
+      return 0
+    fi
+    echo "    kept user symlink $destination" >&2
+    return 0
+  fi
+  if [ -e "$destination" ]; then
+    echo "    kept user content $destination" >&2
+    return 0
+  fi
+  ln -s "$source" "$destination"
+}
 for skill in pi-delegate orchestrate; do
-  [ -d "$ROOT/skills/$skill" ] && ln -sfn "$ROOT/skills/$skill" "$HOME/.claude/skills/$skill"
+  install_skill "$skill"
 done
 
 echo "==> Codex AGENTS.md block"

@@ -17,7 +17,20 @@ remove_link() {
 remove_link orc
 remove_link orcd
 remove_link pi-orchestra
-rm -f "$HOME/.claude/skills/pi-delegate" "$HOME/.claude/skills/orchestrate"
+remove_skill() {
+  local name="$1"
+  local destination="$HOME/.claude/skills/$name"
+  local source="$ROOT/skills/$name"
+  if [ -L "$destination" ] && [ "$(readlink "$destination")" = "$source" ]; then
+    rm "$destination"
+  elif [ -e "$destination" ] || [ -L "$destination" ]; then
+    echo "kept user skill $destination" >&2
+  fi
+}
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+remove_skill pi-delegate
+remove_skill orchestrate
 
 RC="$HOME/.zshrc"
 if grep -qF '# >>> pi-orchestra >>>' "$RC" 2>/dev/null; then
