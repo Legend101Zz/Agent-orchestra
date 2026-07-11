@@ -23,6 +23,7 @@ links could overwrite or delete user content.
 - `cf883ff fix: harden task worktree ownership checks`
 - `69b84d5 fix: preserve user install content and isolate builds`
 - `db687b3 feat: complete score board interactions`
+- `f27e5c5 fix: focus linked stage pane from score`
 
 ## Verification
 
@@ -84,6 +85,18 @@ hook. Therefore no Hermes block was installed; the source AGENTS block states
 this explicitly.
 
 ## Caveat
+
+The final protected-path manifest reproduced all user configuration values,
+including the pre-work Codex checksum
+`f0a989ad75b992ef16d4feb1ccba245634dc233aaaf05738362cac303b1ef31c`.
+The live `~/.local/bin/orc` symlink remained broken exactly as captured. One
+platform-managed `~/.pi/agent/sessions/...pi-orchestra...jsonl` checksum
+changed from `c31cfd565b16dddec158cdcc6ec86783b853e7bced0e5dff35faf337efb1736d`
+to `551f1d459ded97a4e3daaa1bab24445f66d29431644effac0db17aeb7521e41b`
+during the agent session. It was never opened, edited, restored, or otherwise
+modified by repository work; restoring it would itself violate the protected
+path rule. This means the literal all-path checksum gate is an environmental
+non-pass, not a configuration change.
 
 The required read-only MiniMax audit was attempted twice via the isolated Rust
 `orc` binary. Both runs failed with `orc: pi executable not found on PATH`
