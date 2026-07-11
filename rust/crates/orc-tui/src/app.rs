@@ -73,6 +73,7 @@ fn unknown_quota() -> QuotaResult {
         fetched_at: None,
         source: None,
         reason: Some("quota refresh pending".to_owned()),
+        extra: Default::default(),
     }
 }
 
@@ -223,6 +224,7 @@ impl App {
                 fetched_at: Some(0.0),
                 source: Some("fixture".to_owned()),
                 reason: None,
+                extra: Default::default(),
             },
             quota_history: Vec::new(),
             quota_updates,
@@ -836,6 +838,7 @@ mod tests {
                     fetched_at: Some(1.0),
                     source: Some("fixture".to_owned()),
                     reason: None,
+                    extra: Default::default(),
                 },
                 vec![json!({"five_hour_pct": 20.0})],
             ))

@@ -38,6 +38,7 @@ fn thresholds_use_the_lower_window() {
         weekly_pct: 90.0,
         window_resets_in_min: 1,
         fetched_at: 1.0,
+        extra: BTreeMap::new(),
     };
     assert_eq!(level_for(&sample, &config()), "ok");
     sample.weekly_pct = 20.0;

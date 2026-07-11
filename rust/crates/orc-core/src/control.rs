@@ -217,10 +217,14 @@ pub fn handoff(prefix: &str, brief: &str, foreground: bool) -> Result<(PathBuf, 
 
 pub fn stats_json() -> Result<Value> {
     let runs = list_runs(false)?;
+    let brains = brain_usage();
     Ok(serde_json::json!({
         "workers": worker_stats(&runs),
         "delegated_value": delegated_value(&runs),
-        "brains": brain_usage(),
+        "brains": {
+            "claude": brains.get("claude"),
+            "codex": brains.get("codex"),
+        },
     }))
 }
 

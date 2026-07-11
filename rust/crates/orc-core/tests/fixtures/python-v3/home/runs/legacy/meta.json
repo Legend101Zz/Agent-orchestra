@@ -1,0 +1,15 @@
+{
+  "id": "legacy",
+  "task": "legacy missing optionals",
+  "brain": "human",
+  "cwd": "/tmp/legacy",
+  "provider": "minimax",
+  "model": "MiniMax-M3",
+  "status": "done",
+  "started_at": "2020-01-01T00:00:00+00:00",
+  "tokens": {
+    "estimated_total": 4
+  },
+  "legacy_unknown": 9,
+  "created_ts": 1.0
+}

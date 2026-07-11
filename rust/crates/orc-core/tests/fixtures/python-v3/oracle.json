@@ -1,0 +1,869 @@
+{
+  "schema": 1,
+  "captured_from": "live Python CLI and registry before Phase 2 deletion",
+  "records": [
+    {
+      "id": "corrupt",
+      "corrupt_bytes": "not json\n"
+    },
+    {
+      "id": "current",
+      "task": "task for current",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731723.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 17
+      },
+      "future": {
+        "kept": true
+      }
+    },
+    {
+      "id": "exact-usage",
+      "task": "task for exact-usage",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731725.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 2198,
+        "input": 120,
+        "output": 30,
+        "cache_read": 2048,
+        "total": 2198,
+        "cost_usd": 0.000201,
+        "token_future": "preserve"
+      }
+    },
+    {
+      "id": "handoff",
+      "task": "task for handoff",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731731.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 17
+      },
+      "handoff_from": "retry",
+      "attention": "handoff_needed"
+    },
+    {
+      "id": "killed",
+      "task": "task for killed",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "killed",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731726.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": -15,
+      "tokens": {
+        "estimated_total": 17
+      }
+    },
+    {
+      "id": "legacy",
+      "task": "legacy missing optionals",
+      "brain": "human",
+      "cwd": "/tmp/legacy",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "status": "done",
+      "started_at": "2020-01-01T00:00:00+00:00",
+      "tokens": {
+        "estimated_total": 4
+      },
+      "legacy_unknown": 9,
+      "created_ts": 1.0
+    },
+    {
+      "id": "orphaned",
+      "task": "task for orphaned",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "orphaned",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731727.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": null,
+      "tokens": {
+        "estimated_total": 17
+      }
+    },
+    {
+      "id": "retry",
+      "task": "task for retry",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731730.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 17
+      },
+      "retry_of": "current"
+    },
+    {
+      "id": "rpc-agent-end",
+      "task": "task for rpc-agent-end",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731728.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 12,
+        "total": 12
+      },
+      "mode": "rpc"
+    },
+    {
+      "id": "session-linked",
+      "task": "task for session-linked",
+      "brain": "codex",
+      "cwd": "/tmp/phase2-cwd",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731729.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 17
+      },
+      "session": "会議-session",
+      "name": "指揮者 élan"
+    },
+    {
+      "id": "truncated",
+      "corrupt_bytes": "{\"id\":\"truncated\""
+    },
+    {
+      "id": "unicode-wide",
+      "task": "調査 世界 élan",
+      "brain": "codex",
+      "cwd": "/tmp/資料",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "pid": null,
+      "status": "done",
+      "started_at": "2026-07-11T01:02:03+00:00",
+      "created_ts": 1783731732.0,
+      "ended_at": "2026-07-11T01:03:04+00:00",
+      "exit_code": 0,
+      "tokens": {
+        "estimated_total": 17
+      },
+      "name": "奏者 🎼",
+      "session": "セッション-界"
+    }
+  ],
+  "python": [
+    {
+      "args": [
+        "list",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": [
+        {
+          "id": "unicode-wide",
+          "task": "調査 世界 élan",
+          "brain": "codex",
+          "cwd": "/tmp/資料",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731732.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "name": "奏者 🎼",
+          "session": "セッション-界",
+          "_dir": "<ORC_HOME>/runs/unicode-wide"
+        },
+        {
+          "id": "handoff",
+          "task": "task for handoff",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731731.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "handoff_from": "retry",
+          "attention": "handoff_needed",
+          "_dir": "<ORC_HOME>/runs/handoff"
+        },
+        {
+          "id": "retry",
+          "task": "task for retry",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731730.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "retry_of": "current",
+          "_dir": "<ORC_HOME>/runs/retry"
+        },
+        {
+          "id": "session-linked",
+          "task": "task for session-linked",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731729.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "session": "会議-session",
+          "name": "指揮者 élan",
+          "_dir": "<ORC_HOME>/runs/session-linked"
+        },
+        {
+          "id": "rpc-agent-end",
+          "task": "task for rpc-agent-end",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731728.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 12,
+            "total": 12
+          },
+          "mode": "rpc",
+          "_dir": "<ORC_HOME>/runs/rpc-agent-end"
+        },
+        {
+          "id": "orphaned",
+          "task": "task for orphaned",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "orphaned",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731727.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": null,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "_dir": "<ORC_HOME>/runs/orphaned"
+        },
+        {
+          "id": "killed",
+          "task": "task for killed",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "killed",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731726.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": -15,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "_dir": "<ORC_HOME>/runs/killed"
+        },
+        {
+          "id": "exact-usage",
+          "task": "task for exact-usage",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731725.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 2198,
+            "input": 120,
+            "output": 30,
+            "cache_read": 2048,
+            "total": 2198,
+            "cost_usd": 0.000201,
+            "token_future": "preserve"
+          },
+          "_dir": "<ORC_HOME>/runs/exact-usage"
+        },
+        {
+          "id": "current",
+          "task": "task for current",
+          "brain": "codex",
+          "cwd": "/tmp/phase2-cwd",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "status": "done",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "created_ts": 1783731723.0,
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "tokens": {
+            "estimated_total": 17
+          },
+          "future": {
+            "kept": true
+          },
+          "_dir": "<ORC_HOME>/runs/current"
+        },
+        {
+          "id": "legacy",
+          "task": "legacy missing optionals",
+          "brain": "human",
+          "cwd": "/tmp/legacy",
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "status": "done",
+          "started_at": "2020-01-01T00:00:00+00:00",
+          "tokens": {
+            "estimated_total": 4
+          },
+          "legacy_unknown": 9,
+          "created_ts": 1.0,
+          "_dir": "<ORC_HOME>/runs/legacy"
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "args": [
+        "show",
+        "exact-usage",
+        "--tail",
+        "2"
+      ],
+      "exit": 0,
+      "stdout": {
+        "id": "exact-usage",
+        "task": "task for exact-usage",
+        "brain": "codex",
+        "cwd": "/tmp/phase2-cwd",
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "pid": null,
+        "status": "done",
+        "started_at": "2026-07-11T01:02:03+00:00",
+        "created_ts": 1783731725.0,
+        "ended_at": "2026-07-11T01:03:04+00:00",
+        "exit_code": 0,
+        "tokens": {
+          "estimated_total": 2198,
+          "input": 120,
+          "output": 30,
+          "cache_read": 2048,
+          "total": 2198,
+          "cost_usd": 0.000201,
+          "token_future": "preserve"
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "args": [
+        "stats",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": {
+        "workers": {
+          "runs": 10,
+          "by_status": {
+            "done": 8,
+            "orphaned": 1,
+            "killed": 1
+          },
+          "exact": {
+            "runs": 2,
+            "input": 120,
+            "output": 30,
+            "cache_read": 2048,
+            "total": 2210,
+            "cost_usd": 0.000201
+          },
+          "estimated": {
+            "runs": 8,
+            "total": 123
+          },
+          "by_brain": {
+            "codex": {
+              "runs": 9,
+              "total": 2329,
+              "cost_usd": 0.000201
+            },
+            "human": {
+              "runs": 1,
+              "total": 4,
+              "cost_usd": 0.0
+            }
+          },
+          "by_session": {
+            "セッション-界": {
+              "runs": 1,
+              "total": 17,
+              "cost_usd": 0.0,
+              "status": "done"
+            },
+            "会議-session": {
+              "runs": 1,
+              "total": 17,
+              "cost_usd": 0.0,
+              "status": "done"
+            }
+          },
+          "by_day": {
+            "2026-07-11": {
+              "runs": 9,
+              "total": 2329
+            },
+            "2020-01-01": {
+              "runs": 1,
+              "total": 4
+            }
+          }
+        },
+        "delegated_value": {
+          "worker_cost_usd": 0.000238,
+          "brain_equiv_usd": 0.000611,
+          "saved_usd": 0.0004,
+          "multiple": 2.6,
+          "exact_share": 0.947
+        },
+        "brains": {
+          "claude": null,
+          "codex": null
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "args": [
+        "quota",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": {
+        "five_hour_pct": 83,
+        "weekly_pct": 49,
+        "window_resets_in_min": 32,
+        "fetched_at": 4102444800.0,
+        "quota_future": "kept",
+        "level": "ok",
+        "source": "cache"
+      },
+      "stderr": ""
+    }
+  ],
+  "rust_at_capture": [
+    {
+      "args": [
+        "list",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": [
+        {
+          "_dir": "<ORC_HOME>/runs/unicode-wide",
+          "brain": "codex",
+          "created_ts": 1783731732.0,
+          "cwd": "/tmp/資料",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "id": "unicode-wide",
+          "model": "MiniMax-M3",
+          "name": "奏者 🎼",
+          "pid": null,
+          "provider": "minimax",
+          "session": "セッション-界",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "調査 世界 élan",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/handoff",
+          "attention": "handoff_needed",
+          "brain": "codex",
+          "created_ts": 1783731731.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "handoff_from": "retry",
+          "id": "handoff",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for handoff",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/retry",
+          "brain": "codex",
+          "created_ts": 1783731730.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "id": "retry",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "retry_of": "current",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for retry",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/session-linked",
+          "brain": "codex",
+          "created_ts": 1783731729.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "id": "session-linked",
+          "model": "MiniMax-M3",
+          "name": "指揮者 élan",
+          "pid": null,
+          "provider": "minimax",
+          "session": "会議-session",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for session-linked",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/rpc-agent-end",
+          "brain": "codex",
+          "created_ts": 1783731728.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "id": "rpc-agent-end",
+          "mode": "rpc",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for rpc-agent-end",
+          "tokens": {
+            "estimated_total": 12,
+            "total": 12
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/orphaned",
+          "brain": "codex",
+          "created_ts": 1783731727.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": null,
+          "id": "orphaned",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "orphaned",
+          "task": "task for orphaned",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/killed",
+          "brain": "codex",
+          "created_ts": 1783731726.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": -15,
+          "id": "killed",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "killed",
+          "task": "task for killed",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/exact-usage",
+          "brain": "codex",
+          "created_ts": 1783731725.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "id": "exact-usage",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for exact-usage",
+          "tokens": {
+            "cache_read": 2048,
+            "cost_usd": 0.000201,
+            "estimated_total": 2198,
+            "input": 120,
+            "output": 30,
+            "token_future": "preserve",
+            "total": 2198
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/current",
+          "brain": "codex",
+          "created_ts": 1783731723.0,
+          "cwd": "/tmp/phase2-cwd",
+          "ended_at": "2026-07-11T01:03:04+00:00",
+          "exit_code": 0,
+          "future": {
+            "kept": true
+          },
+          "id": "current",
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2026-07-11T01:02:03+00:00",
+          "status": "done",
+          "task": "task for current",
+          "tokens": {
+            "estimated_total": 17
+          }
+        },
+        {
+          "_dir": "<ORC_HOME>/runs/legacy",
+          "brain": "human",
+          "created_ts": 1.0,
+          "cwd": "/tmp/legacy",
+          "ended_at": null,
+          "exit_code": null,
+          "id": "legacy",
+          "legacy_unknown": 9,
+          "model": "MiniMax-M3",
+          "pid": null,
+          "provider": "minimax",
+          "started_at": "2020-01-01T00:00:00+00:00",
+          "status": "done",
+          "task": "legacy missing optionals",
+          "tokens": {
+            "estimated_total": 4
+          }
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "args": [
+        "show",
+        "exact-usage",
+        "--tail",
+        "2"
+      ],
+      "exit": 0,
+      "stdout": {
+        "id": "exact-usage",
+        "task": "task for exact-usage",
+        "brain": "codex",
+        "cwd": "/tmp/phase2-cwd",
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "pid": null,
+        "status": "done",
+        "started_at": "2026-07-11T01:02:03+00:00",
+        "created_ts": 1783731725.0,
+        "ended_at": "2026-07-11T01:03:04+00:00",
+        "exit_code": 0,
+        "tokens": {
+          "estimated_total": 2198,
+          "input": 120,
+          "output": 30,
+          "cache_read": 2048,
+          "total": 2198,
+          "cost_usd": 0.000201,
+          "token_future": "preserve"
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "args": [
+        "stats",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": {
+        "brains": {},
+        "delegated_value": {
+          "brain_equiv_usd": 0.000611,
+          "exact_share": 0.947,
+          "multiple": 2.6,
+          "saved_usd": 0.000373,
+          "worker_cost_usd": 0.000238
+        },
+        "workers": {
+          "by_brain": {
+            "codex": {
+              "cost_usd": 0.000201,
+              "runs": 9,
+              "total": 2329
+            },
+            "human": {
+              "cost_usd": 0.0,
+              "runs": 1,
+              "total": 4
+            }
+          },
+          "by_day": {
+            "2020-01-01": {
+              "runs": 1,
+              "total": 4
+            },
+            "2026-07-11": {
+              "runs": 9,
+              "total": 2329
+            }
+          },
+          "by_session": {
+            "セッション-界": {
+              "cost_usd": 0.0,
+              "runs": 1,
+              "status": "done",
+              "total": 17
+            },
+            "会議-session": {
+              "cost_usd": 0.0,
+              "runs": 1,
+              "status": "done",
+              "total": 17
+            }
+          },
+          "by_status": {
+            "done": 8,
+            "killed": 1,
+            "orphaned": 1
+          },
+          "estimated": {
+            "runs": 8,
+            "total": 123
+          },
+          "exact": {
+            "cache_read": 2048,
+            "cost_usd": 0.000201,
+            "input": 120,
+            "output": 30,
+            "runs": 2,
+            "total": 2210
+          },
+          "runs": 10
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "args": [
+        "quota",
+        "--json"
+      ],
+      "exit": 0,
+      "stdout": {
+        "level": "ok",
+        "five_hour_pct": 83.0,
+        "weekly_pct": 49.0,
+        "window_resets_in_min": 32,
+        "fetched_at": 4102444800.0,
+        "source": "cache"
+      },
+      "stderr": ""
+    }
+  ]
+}

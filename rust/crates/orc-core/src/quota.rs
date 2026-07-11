@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -19,6 +20,8 @@ pub struct QuotaSample {
     pub weekly_pct: f64,
     pub window_resets_in_min: i64,
     pub fetched_at: f64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -36,6 +39,8 @@ pub struct QuotaResult {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +147,7 @@ pub fn parse_remains(raw: &Value, fetched_at: f64) -> Option<QuotaSample> {
             / 60_000.0)
             .round() as i64,
         fetched_at,
+        extra: BTreeMap::new(),
     })
 }
 
@@ -183,6 +189,7 @@ fn result_from_sample(sample: &QuotaSample, config: &Config, source: &str) -> Qu
         fetched_at: Some(sample.fetched_at),
         source: Some(source.to_owned()),
         reason: None,
+        extra: sample.extra.clone(),
     }
 }
 
@@ -195,6 +202,7 @@ fn unknown(reason: impl Into<String>) -> QuotaResult {
         fetched_at: None,
         source: None,
         reason: Some(reason.into()),
+        extra: BTreeMap::new(),
     }
 }
 
