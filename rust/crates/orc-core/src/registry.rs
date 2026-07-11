@@ -29,7 +29,7 @@ pub struct NewRunOptions {
 
 impl NewRunOptions {
     #[must_use]
-    pub fn python_defaults() -> Self {
+    pub fn compatibility_defaults() -> Self {
         Self {
             brain: "human".to_owned(),
             cwd: None,

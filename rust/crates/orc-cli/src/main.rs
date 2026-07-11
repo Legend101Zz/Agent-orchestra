@@ -168,7 +168,7 @@ fn fmt_tokens(value: u64) -> String {
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
-            println!("orc 0.3.0");
+            println!("orc 0.4.0");
             Ok(0)
         }
         Commands::Run {

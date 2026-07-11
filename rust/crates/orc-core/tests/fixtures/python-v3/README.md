@@ -1,13 +1,13 @@
 # Python v3 compatibility oracle
 
-This immutable corpus was captured from the live Python CLI and registry before
-their Phase 2 deletion. Regenerate only while that implementation still exists:
+This immutable corpus was captured from the live former CLI and registry before
+their Phase 2 deletion. The historical capture command was:
 
 ```sh
-.venv/bin/python tools/capture_phase2_compat.py
+python3 tools/capture_phase2_compat.py
 ```
 
-The capture seeds current, legacy, exact-usage, killed, orphaned, RPC
+The removed capture helper seeded current, legacy, exact-usage, killed, orphaned, RPC
 `agent_end`, session-linked, retry, handoff, corrupt, truncated, CJK,
 combining-mark, and wide-character records. It invokes Python and Rust `list
 --json`, `show`, `stats --json`, and cached `quota --json`, records exit codes,

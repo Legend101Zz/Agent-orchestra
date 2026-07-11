@@ -1,62 +1,61 @@
 #!/usr/bin/env bash
-# pi-orchestra installer — additive only; backs up before any append; idempotent.
+# pi-orchestra Rust-only installer: locked build, safe links, additive shell blocks.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-USE_RUST=0
+
 case "${1:-}" in
   "") ;;
-  --rust) USE_RUST=1 ;;
   -h|--help)
-    echo "usage: ./install.sh [--rust]"
-    echo "  default  install the Python/Textual implementation"
-    echo "  --rust   build and install rust/target/release/orc"
+    echo "usage: ./install.sh"
+    echo "builds and installs the Rust orc, orcd, and pi-orchestra binaries"
     exit 0
     ;;
   *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
 esac
 
-if [ "$USE_RUST" -eq 1 ]; then
-  echo "==> Rust release build"
+if [ "${ORC_INSTALL_SKIP_BUILD:-0}" != 1 ]; then
+  echo "==> locked Rust release build"
   cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --locked
-  ORC_TARGET="$ROOT/rust/target/release/orc"
-else
-  echo "==> venv + deps"
-  [ -d "$ROOT/.venv" ] || python3 -m venv "$ROOT/.venv"
-  "$ROOT/.venv/bin/pip" -q install -U pip
-  "$ROOT/.venv/bin/pip" -q install -r "$ROOT/requirements.txt"
-  ORC_TARGET="$ROOT/bin/orc"
 fi
+BIN_DIR="${ORC_INSTALL_BIN_DIR:-$ROOT/rust/target/release}"
+DEST_DIR="$HOME/.local/bin"
+mkdir -p "$DEST_DIR"
 
-echo "==> orc symlink"
-mkdir -p "$HOME/.local/bin"
-chmod +x "$ORC_TARGET"
-ln -sfn "$ORC_TARGET" "$HOME/.local/bin/orc"
-
-echo "==> ~/.orchestra"
-mkdir -p "$HOME/.orchestra/runs"
-if [ ! -f "$HOME/.orchestra/config.json" ]; then
-  cat > "$HOME/.orchestra/config.json" <<'EOF'
-{
-  "warn_pct": 25,
-  "block_pct": 10,
-  "cache_ttl_sec": 60,
-  "max_parallel_workers": 3,
-  "idle_timeout_sec": 300
+install_link() {
+  local name="$1"
+  local target="$BIN_DIR/$name"
+  local destination="$DEST_DIR/$name"
+  [ -x "$target" ] || { echo "install.sh: missing executable $target" >&2; exit 1; }
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    local current=""
+    current="$(readlink "$destination" 2>/dev/null || true)"
+    if [ "$current" != "$target" ] && [ ! -e "$destination.pi-orchestra.bak" ] && [ ! -L "$destination.pi-orchestra.bak" ]; then
+      mv "$destination" "$destination.pi-orchestra.bak"
+      echo "    backed up $destination"
+    fi
+  fi
+  ln -sfn "$target" "$destination"
 }
-EOF
+
+echo "==> command links"
+install_link orc
+install_link orcd
+install_link pi-orchestra
+
+echo "==> private orchestra data directory"
+mkdir -p "$HOME/.orchestra/runs" "$HOME/.orchestra/sessions"
+chmod 700 "$HOME/.orchestra"
+if [ ! -f "$HOME/.orchestra/config.json" ]; then
+  printf '%s\n' '{"warn_pct":25,"block_pct":10,"cache_ttl_sec":60,"max_parallel_workers":3,"idle_timeout_sec":300,"theme":"ember"}' > "$HOME/.orchestra/config.json"
 fi
 
-echo "==> ~/.zshrc block"
+echo "==> ~/.zshrc marked block"
 RC="$HOME/.zshrc"
 MARK='# >>> pi-orchestra >>>'
-if ! grep -qF "$MARK" "$RC" 2>/dev/null; then
+touch "$RC"
+if ! grep -qF "$MARK" "$RC"; then
   cp "$RC" "$RC.pi-orchestra.bak"
-  {
-    echo ""
-    echo "$MARK"
-    echo "source \"$ROOT/shell/orchestra.zsh\""
-    echo '# <<< pi-orchestra <<<'
-  } >> "$RC"
+  printf '\n%s\nsource "%s/shell/orchestra.zsh"\n%s\n' "$MARK" "$ROOT" '# <<< pi-orchestra <<<' >> "$RC"
   echo "    appended (backup: $RC.pi-orchestra.bak)"
 else
   echo "    already present"
@@ -64,26 +63,26 @@ fi
 
 echo "==> Claude Code skills"
 mkdir -p "$HOME/.claude/skills"
-for s in pi-delegate orchestrate; do
-  [ -d "$ROOT/skills/$s" ] && ln -sfn "$ROOT/skills/$s" "$HOME/.claude/skills/$s"
+for skill in pi-delegate orchestrate; do
+  [ -d "$ROOT/skills/$skill" ] && ln -sfn "$ROOT/skills/$skill" "$HOME/.claude/skills/$skill"
 done
 
 echo "==> Codex AGENTS.md block"
-A="$HOME/.codex/AGENTS.md"
+AGENTS="$HOME/.codex/AGENTS.md"
 if [ -f "$ROOT/codex/AGENTS-block.md" ]; then
   mkdir -p "$HOME/.codex"
-  touch "$A"
-  if ! grep -qF '<!-- pi-orchestra:begin -->' "$A"; then
-    cp "$A" "$A.pi-orchestra.bak"
-    cat "$ROOT/codex/AGENTS-block.md" >> "$A"
-    echo "    appended (backup: $A.pi-orchestra.bak)"
+  touch "$AGENTS"
+  if ! grep -qF '<!-- pi-orchestra:begin -->' "$AGENTS"; then
+    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
+    printf '\n' >> "$AGENTS"
+    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
+    echo "    appended (backup: $AGENTS.pi-orchestra.bak)"
   else
     echo "    already present"
   fi
 fi
 
-echo "==> protected-config checksums (must match pre-install values)"
-shasum -a 256 "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/auth.json" \
-  "$HOME/.codex/config.toml" 2>/dev/null || true
-
-echo "done. Open a new shell or: source ~/.zshrc"
+echo "==> protected-config checksums"
+shasum -a 256 "$HOME/.pi/agent/settings.json" "$HOME/.claude/settings.json" \
+  "$HOME/.codex/config.toml" "$HOME/.local/bin/orc" 2>/dev/null || true
+echo "done. Open a new shell or run: source ~/.zshrc"

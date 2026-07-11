@@ -32,7 +32,7 @@ fn with_home(test: impl FnOnce(&Path)) {
 }
 
 #[test]
-fn slug_matches_python_rules() {
+fn slug_matches_compatibility_rules() {
     assert_eq!(make_slug("Hello, WORLD / later"), "hello-world-later");
     assert_eq!(make_slug("---"), "task");
     assert_eq!(
@@ -42,9 +42,9 @@ fn slug_matches_python_rules() {
 }
 
 #[test]
-fn new_run_is_python_readable_and_omits_optional_fields() {
+fn new_run_uses_compatible_shape_and_omits_optional_fields() {
     with_home(|_| {
-        let run = new_run("hello", &NewRunOptions::python_defaults()).unwrap();
+        let run = new_run("hello", &NewRunOptions::compatibility_defaults()).unwrap();
         assert!(run.join("inbox").is_dir());
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(run.join("meta.json")).unwrap()).unwrap();
@@ -58,7 +58,7 @@ fn new_run_is_python_readable_and_omits_optional_fields() {
 #[test]
 fn unknown_fields_survive_update() {
     with_home(|_| {
-        let run = new_run("future", &NewRunOptions::python_defaults()).unwrap();
+        let run = new_run("future", &NewRunOptions::compatibility_defaults()).unwrap();
         let mut value: serde_json::Value =
             serde_json::from_slice(&fs::read(run.join("meta.json")).unwrap()).unwrap();
         value["future_field"] = json!({"kept": true});
