@@ -1,0 +1,32 @@
+{
+  "harnesses": {
+    "fixture-brain": {
+      "command": "sh",
+      "args": ["-c", "printf 'Fixture conductor ready\\r\\n'; sleep 300"],
+      "resume_args": ["--resume"],
+      "roles": ["brain"],
+      "adapter": "fixture"
+    },
+    "fixture-hermes": {
+      "command": "sh",
+      "args": ["-c", "printf 'Hermes fixture ready\\r\\n'; sleep 300"],
+      "resume_args": [],
+      "roles": ["worker"],
+      "adapter": "fixture"
+    },
+    "fixture-pi-m3": {
+      "command": "sh",
+      "args": ["-c", "printf 'MiniMax M3 fixture ready\\r\\n'; sleep 300"],
+      "resume_args": [],
+      "roles": ["worker"],
+      "adapter": "fixture"
+    }
+  },
+  "default_workers": ["fixture-hermes", "fixture-pi-m3"],
+  "max_parallel_workers": 3,
+  "app": {
+    "leader_key": "ctrl-g",
+    "reduced_motion": false,
+    "theme": "ember"
+  }
+}

@@ -173,7 +173,12 @@ fn main() -> Result<()> {
             extra: Default::default(),
         },
     )?;
-    serve(&socket, Arc::new(Daemon::new(panes, signal)))?;
+    let daemon = if panes.is_empty() {
+        Daemon::production(home, signal)
+    } else {
+        Daemon::new(panes, signal)
+    };
+    serve(&socket, Arc::new(daemon))?;
     Ok(())
 }
 

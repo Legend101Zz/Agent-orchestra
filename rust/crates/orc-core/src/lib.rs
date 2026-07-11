@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod control;
 pub mod inbox;
 pub mod metrics;

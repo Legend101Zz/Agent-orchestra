@@ -89,6 +89,22 @@ impl HostedPane {
         cols: u16,
         signal: UpdateSignal,
     ) -> Result<Self> {
+        Self::spawn_with_signal_and_env(id, title, program, args, cwd, rows, cols, signal, &[])
+    }
+
+    /// Spawn a command with a shared signal and explicit session attribution environment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_signal_and_env(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        signal: UpdateSignal,
+        environment: &[(String, String)],
+    ) -> Result<Self> {
         validate_size(rows, cols)?;
         let size = PtySize {
             rows,
@@ -104,6 +120,9 @@ impl HostedPane {
         command.cwd(cwd);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        for (key, value) in environment {
+            command.env(key, value);
+        }
         let child = pair
             .slave
             .spawn_command(command)
@@ -150,6 +169,12 @@ impl HostedPane {
                         *epoch = epoch.wrapping_add(1);
                         changed.notify_all();
                     }
+                }
+                sequence_for_reader.fetch_add(1, Ordering::Release);
+                let (epoch, changed) = &*signal_for_reader;
+                if let Ok(mut epoch) = epoch.lock() {
+                    *epoch = epoch.wrapping_add(1);
+                    changed.notify_all();
                 }
             })
             .map_err(PtyError::Io)?;
@@ -253,6 +278,11 @@ impl HostedPane {
             cursor: screen.cursor_position(),
             sequence,
             cells,
+            session_id: None,
+            harness: None,
+            role: None,
+            state: None,
+            down_at: None,
         })
     }
 

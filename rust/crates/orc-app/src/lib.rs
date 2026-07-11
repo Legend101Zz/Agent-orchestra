@@ -1,10 +1,11 @@
 #![warn(missing_docs)]
-//! Ratatui client for the Phase-one Bench spike.
+//! Ratatui HOME and STAGE client for the Bench workspace.
 //!
 //! This crate owns rendering and input forwarding. It must never write
 //! registry/session/task files or outlive the daemon-owned PTYs.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -14,29 +15,28 @@ use std::time::{Duration, Instant};
 
 use crossterm::SynchronizedUpdate;
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use orc_proto::{
-    ClientRequest, DaemonMetrics, PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse,
-    TerminalColor,
+    ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
+    PaneSnapshot, ServerResponse, SessionSummary, TerminalColor,
 };
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::{Marker, border};
 use ratatui::widgets::canvas::{Canvas, Points};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use tachyonfx::{EffectTimer, Interpolation};
 use thiserror::Error;
 
 const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Errors produced by the Bench spike client.
+/// Errors produced by the Bench client.
 #[derive(Debug, Error)]
 pub enum AppError {
     /// Socket or terminal I/O failed.
@@ -84,6 +84,8 @@ struct Theme {
     dim: Color,
     focus: Color,
     pulse: Color,
+    shadow: Color,
+    attention: Color,
 }
 
 impl From<ThemeName> for Theme {
@@ -95,6 +97,8 @@ impl From<ThemeName> for Theme {
                 dim: Color::Rgb(91, 80, 65),
                 focus: Color::Rgb(209, 158, 77),
                 pulse: Color::Rgb(255, 201, 105),
+                shadow: Color::Rgb(8, 7, 7),
+                attention: Color::Rgb(122, 42, 38),
             },
             ThemeName::Phosphor => Self {
                 stage: Color::Rgb(2, 13, 8),
@@ -102,6 +106,8 @@ impl From<ThemeName> for Theme {
                 dim: Color::Rgb(38, 99, 61),
                 focus: Color::Rgb(111, 255, 160),
                 pulse: Color::Rgb(207, 255, 220),
+                shadow: Color::Rgb(0, 5, 3),
+                attention: Color::Rgb(255, 107, 77),
             },
         }
     }
@@ -111,6 +117,32 @@ impl From<ThemeName> for Theme {
 pub struct BenchClient {
     stream: UnixStream,
     reader: BufReader<UnixStream>,
+}
+
+/// HOME shelf data returned by the daemon.
+#[derive(Clone, Debug)]
+pub struct HomeData {
+    /// Durable sessions newest first.
+    pub sessions: Vec<SessionSummary>,
+    /// Configured brain and worker choices.
+    pub harnesses: Vec<HarnessSummary>,
+    /// Preselected but editable worker choices.
+    pub default_workers: Vec<String>,
+    /// Configured worker bound.
+    pub max_parallel_workers: usize,
+    /// Ember or phosphor.
+    pub theme: String,
+    /// Reduced-motion preference.
+    pub reduced_motion: bool,
+}
+
+/// Session replay returned on attach.
+#[derive(Clone, Debug)]
+pub struct SessionData {
+    /// Canonical pane screens.
+    pub panes: Vec<PaneSnapshot>,
+    /// Durable card layout.
+    pub layout: Vec<LayoutRect>,
 }
 
 impl BenchClient {
@@ -207,6 +239,84 @@ impl BenchClient {
         }
     }
 
+    /// Fetch HOME session and harness choices.
+    pub fn home(&mut self) -> Result<HomeData> {
+        match self.request(&ClientRequest::Home)? {
+            ServerResponse::Home {
+                sessions,
+                harnesses,
+                default_workers,
+                max_parallel_workers,
+                theme,
+                reduced_motion,
+            } => Ok(HomeData {
+                sessions,
+                harnesses,
+                default_workers,
+                max_parallel_workers,
+                theme,
+                reduced_motion,
+            }),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected HOME response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Create and launch a session through the daemon/core writer.
+    pub fn create_session(
+        &mut self,
+        brain: String,
+        workers: Vec<String>,
+        cwd: String,
+    ) -> Result<String> {
+        match self.request(&ClientRequest::CreateSession {
+            brain,
+            workers,
+            cwd,
+        })? {
+            ServerResponse::SessionCreated { session_id } => Ok(session_id),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected create-session response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Attach to one durable session and fetch its replay and layout.
+    pub fn attach_session(&mut self, session_id: String) -> Result<SessionData> {
+        match self.request(&ClientRequest::AttachSession { session_id })? {
+            ServerResponse::SessionAttached { panes, layout } => Ok(SessionData { panes, layout }),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected attach response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Persist the complete STAGE card layout through the daemon/core writer.
+    pub fn update_layout(&mut self, session_id: String, layout: Vec<LayoutRect>) -> Result<()> {
+        match self.request(&ClientRequest::UpdateLayout { session_id, layout })? {
+            ServerResponse::Ack => Ok(()),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected layout response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Recover a dead conductor through its configured resume arguments.
+    pub fn respawn_conductor(&mut self, pane_id: String) -> Result<()> {
+        match self.request(&ClientRequest::RespawnConductor { pane_id })? {
+            ServerResponse::Ack => Ok(()),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected respawn response: {response:?}"
+            ))),
+        }
+    }
+
     fn request(&mut self, request: &ClientRequest) -> Result<ServerResponse> {
         serde_json::to_writer(&mut self.stream, request)?;
         self.stream.write_all(b"\n")?;
@@ -259,14 +369,60 @@ pub fn benchmark(socket: &Path, iterations: usize) -> Result<LatencySummary> {
     })
 }
 
+/// Measure focused-pane input through PTY output and visible snapshot replay.
+pub fn visible_input_benchmark(
+    socket: &Path,
+    pane_id: &str,
+    iterations: usize,
+) -> Result<LatencySummary> {
+    let mut client = BenchClient::connect(socket)?;
+    let mut sequences = client
+        .snapshot()?
+        .into_iter()
+        .map(|pane| PaneSequence {
+            id: pane.id,
+            sequence: pane.sequence,
+        })
+        .collect::<Vec<_>>();
+    let mut values = Vec::with_capacity(iterations);
+    for index in 0..iterations {
+        let started = Instant::now();
+        client.input(pane_id.to_owned(), vec![b'a' + (index % 26) as u8])?;
+        let next = client.wait(sequences, Duration::from_secs(1))?;
+        let panes = client.snapshot()?;
+        if !panes.iter().any(|pane| pane.id == pane_id) {
+            return Err(AppError::Daemon(format!(
+                "unknown benchmark pane: {pane_id}"
+            )));
+        }
+        values.push(started.elapsed().as_micros());
+        sequences = next;
+    }
+    values.sort_unstable();
+    let percentile = |pct: usize| {
+        let index = values.len().saturating_sub(1) * pct / 100;
+        values.get(index).copied().unwrap_or_default()
+    };
+    Ok(LatencySummary {
+        p50_us: percentile(50),
+        p95_us: percentile(95),
+        p99_us: percentile(99),
+        max_us: values.last().copied().unwrap_or_default(),
+    })
+}
+
 struct StageState {
     panes: Vec<PaneSnapshot>,
     focus: usize,
     pane_areas: Vec<Rect>,
     pulse: EffectTimer,
     last_tick: Instant,
-    leader_at: Option<Instant>,
     theme: Theme,
+    session_id: Option<String>,
+    layout: Vec<LayoutRect>,
+    zoomed: bool,
+    dragging: Option<(usize, u16, u16)>,
+    raw_router: RawRouter,
 }
 
 impl StageState {
@@ -277,9 +433,25 @@ impl StageState {
             pane_areas: Vec::new(),
             pulse: EffectTimer::from_ms(900, Interpolation::CubicOut),
             last_tick: Instant::now(),
-            leader_at: None,
             theme: theme.into(),
+            session_id: None,
+            layout: Vec::new(),
+            zoomed: false,
+            dragging: None,
+            raw_router: RawRouter::default(),
         }
+    }
+
+    fn for_session(
+        session_id: String,
+        panes: Vec<PaneSnapshot>,
+        layout: Vec<LayoutRect>,
+        theme: ThemeName,
+    ) -> Self {
+        let mut state = Self::new(panes, theme);
+        state.session_id = Some(session_id);
+        state.layout = layout;
+        state
     }
 
     fn apply_snapshot(&mut self, panes: Vec<PaneSnapshot>) {
@@ -304,19 +476,295 @@ impl StageState {
 }
 
 enum UiEvent {
-    Terminal(Event),
+    Raw(Vec<u8>),
+    Resize,
     Snapshot(Vec<PaneSnapshot>),
     WatchFailed,
 }
 
-/// Run the interactive STAGE spike until the leader-key detach command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LeaderAction {
+    Quit,
+    Next,
+    Previous,
+    Zoom,
+    Swap,
+    Grow,
+    Shrink,
+    Home,
+}
+
+#[derive(Default)]
+struct RawRouter {
+    leader: bool,
+    paste: bool,
+    recent: VecDeque<u8>,
+}
+
+impl RawRouter {
+    fn route(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<LeaderAction>) {
+        let mut forwarded = Vec::with_capacity(bytes.len());
+        let mut actions = Vec::new();
+        for &byte in bytes {
+            if self.leader && !self.paste {
+                self.leader = false;
+                let action = match byte {
+                    0x07 => {
+                        forwarded.push(byte);
+                        None
+                    }
+                    b'q' => Some(LeaderAction::Quit),
+                    b'n' | b'\t' => Some(LeaderAction::Next),
+                    b'p' => Some(LeaderAction::Previous),
+                    b'z' => Some(LeaderAction::Zoom),
+                    b's' => Some(LeaderAction::Swap),
+                    b'+' | b'=' => Some(LeaderAction::Grow),
+                    b'-' => Some(LeaderAction::Shrink),
+                    b'h' => Some(LeaderAction::Home),
+                    _ => {
+                        forwarded.push(byte);
+                        None
+                    }
+                };
+                if let Some(action) = action {
+                    actions.push(action);
+                }
+            } else if byte == 0x07 && !self.paste {
+                self.leader = true;
+            } else {
+                forwarded.push(byte);
+            }
+            self.recent.push_back(byte);
+            while self.recent.len() > 6 {
+                self.recent.pop_front();
+            }
+            let recent = self.recent.iter().copied().collect::<Vec<_>>();
+            if recent.ends_with(b"\x1b[200~") {
+                self.paste = true;
+            } else if recent.ends_with(b"\x1b[201~") {
+                self.paste = false;
+            }
+        }
+        (forwarded, actions)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellView {
+    Home,
+    Stage,
+    Runs,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FlowStep {
+    Brain,
+    Workers,
+    Cwd,
+}
+
+struct NewSessionFlow {
+    step: FlowStep,
+    brain_choices: Vec<String>,
+    brain_index: usize,
+    worker_choices: Vec<String>,
+    selected_workers: Vec<String>,
+    worker_index: usize,
+    cwd: String,
+}
+
+impl NewSessionFlow {
+    fn new(home: &HomeData) -> Self {
+        let brain_choices = home
+            .harnesses
+            .iter()
+            .filter(|harness| harness.roles.iter().any(|role| role == "brain"))
+            .map(|harness| harness.id.clone())
+            .collect();
+        let worker_choices = home
+            .harnesses
+            .iter()
+            .filter(|harness| harness.roles.iter().any(|role| role == "worker"))
+            .map(|harness| harness.id.clone())
+            .collect();
+        Self {
+            step: FlowStep::Brain,
+            brain_choices,
+            brain_index: 0,
+            worker_choices,
+            selected_workers: home.default_workers.clone(),
+            worker_index: 0,
+            cwd: std::env::current_dir().map_or_else(
+                |_| ".".to_owned(),
+                |path| path.to_string_lossy().into_owned(),
+            ),
+        }
+    }
+}
+
+struct HomeState {
+    data: HomeData,
+    selected: usize,
+    flow: Option<NewSessionFlow>,
+    message: String,
+}
+
+struct ShellState {
+    view: ShellView,
+    home: HomeState,
+    stage: Option<StageState>,
+    theme: Theme,
+}
+
+fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    let mut lines = vec![
+        "  P I  O R C H E S T R A   ·   HOME".to_owned(),
+        "  THE SEASON   sessions remain alive in orcd".to_owned(),
+        String::new(),
+    ];
+    if let Some(flow) = &state.flow {
+        lines.push("  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd".to_owned());
+        lines.push(String::new());
+        match flow.step {
+            FlowStep::Brain => {
+                lines.push("  STEP 1 / 3   CHOOSE BRAIN".to_owned());
+                for (index, brain) in flow.brain_choices.iter().enumerate() {
+                    lines.push(format!(
+                        "  {}  {brain}",
+                        if index == flow.brain_index {
+                            "BRASS"
+                        } else {
+                            "     "
+                        }
+                    ));
+                }
+                lines.push("  ↑/↓ choose · enter continue · esc cancel".to_owned());
+            }
+            FlowStep::Workers => {
+                lines.push("  STEP 2 / 3   CHOOSE WORKER POOL".to_owned());
+                for (index, worker) in flow.worker_choices.iter().enumerate() {
+                    let selected = flow.selected_workers.contains(worker);
+                    lines.push(format!(
+                        "  {}  [{}] {worker}",
+                        if index == flow.worker_index {
+                            "BRASS"
+                        } else {
+                            "     "
+                        },
+                        if selected { "PRESELECTED" } else { "EDITABLE" }
+                    ));
+                }
+                lines.push("  space edits selection · enter continue".to_owned());
+            }
+            FlowStep::Cwd => {
+                lines.push("  STEP 3 / 3   CHOOSE CWD".to_owned());
+                lines.push(format!("  > {}", flow.cwd));
+                lines.push("  type path · enter launches · esc back".to_owned());
+            }
+        }
+    } else if state.data.sessions.is_empty() {
+        lines.extend([
+            "  NO SESSIONS YET".to_owned(),
+            "  One window can hold a conductor and an editable worker pool.".to_owned(),
+            "  Press n, choose a brain, review Hermes + pi-m3, then choose cwd.".to_owned(),
+        ]);
+    } else {
+        lines.push("  SESSION SHELF".to_owned());
+        for (index, session) in state.data.sessions.iter().enumerate() {
+            let marker = if index == state.selected {
+                "BRASS"
+            } else {
+                "     "
+            };
+            let attention = if session.attention > 0 {
+                format!(" · ATTENTION {}", session.attention)
+            } else {
+                " · READY".to_owned()
+            };
+            lines.push(format!(
+                "  {marker}  ╭ {} · {} workers{attention}",
+                session.id,
+                session.workers.len()
+            ));
+            lines.push(format!(
+                "         ╰ {}  ·  {}  ·  {}",
+                session.brain, session.cwd, session.updated_at
+            ));
+        }
+        lines.push(String::new());
+        lines.push("  enter attach · n new session · V RUNS".to_owned());
+    }
+    if !state.message.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("  {}", state.message));
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.text).bg(theme.stage)),
+        area,
+    );
+}
+
+fn render_runs_placeholder(frame: &mut Frame<'_>, theme: Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    frame.render_widget(
+        Paragraph::new(
+            "  R U N S\n\n  RUNS SHELL ONLY\n  The full v3 ledger port is Phase 4.\n  Press V for HOME.",
+        )
+        .style(Style::default().fg(theme.text).bg(theme.stage)),
+        area,
+    );
+}
+
+fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
+    match shell.view {
+        ShellView::Home => render_home(frame, &shell.home, shell.theme),
+        ShellView::Stage => {
+            if let Some(stage) = shell.stage.as_mut() {
+                render_stage(frame, stage);
+            }
+        }
+        ShellView::Runs => render_runs_placeholder(frame, shell.theme),
+    }
+}
+
+/// Run the interactive HOME/STAGE shell until the leader-key detach command.
 pub fn run(socket: PathBuf, theme: ThemeName) -> Result<()> {
+    run_initial(socket, theme, None, false)
+}
+
+/// Run the client with an optional initial session or the honest RUNS placeholder.
+pub fn run_initial(
+    socket: PathBuf,
+    theme: ThemeName,
+    initial_session: Option<String>,
+    runs: bool,
+) -> Result<()> {
     let mut commands = BenchClient::connect(&socket)?;
-    let panes = commands.snapshot()?;
-    let mut state = StageState::new(panes, theme);
+    let home = commands.home()?;
+    let selected_theme = ThemeName::named(&home.theme);
+    let mut shell = ShellState {
+        view: if runs {
+            ShellView::Runs
+        } else {
+            ShellView::Home
+        },
+        home: HomeState {
+            data: home,
+            selected: 0,
+            flow: None,
+            message: String::new(),
+        },
+        stage: None,
+        theme: selected_theme.into(),
+    };
+    if let Some(session_id) = initial_session {
+        attach_stage(&mut commands, &mut shell, session_id, theme)?;
+    }
     let (events_tx, events_rx) = mpsc::sync_channel(64);
-    spawn_terminal_events(events_tx.clone());
-    spawn_screen_watch(socket, events_tx);
+    spawn_screen_watch(socket, events_tx.clone());
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -330,7 +778,9 @@ pub fn run(socket: PathBuf, theme: ThemeName) -> Result<()> {
         PushKeyboardEnhancementFlags(flags)
     )?;
     let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, &mut commands, &mut state, &events_rx);
+    spawn_raw_terminal_events(events_tx.clone());
+    spawn_resize_events(events_tx);
+    let result = run_shell_loop(&mut terminal, &mut commands, &mut shell, &events_rx, theme);
     ratatui::restore();
     execute!(
         io::stdout(),
@@ -342,26 +792,55 @@ pub fn run(socket: PathBuf, theme: ThemeName) -> Result<()> {
     result
 }
 
-fn run_loop(
+fn attach_stage(
+    commands: &mut BenchClient,
+    shell: &mut ShellState,
+    session_id: String,
+    theme: ThemeName,
+) -> Result<()> {
+    let session = commands.attach_session(session_id.clone())?;
+    shell.stage = Some(StageState::for_session(
+        session_id,
+        session.panes,
+        session.layout,
+        theme,
+    ));
+    shell.view = ShellView::Stage;
+    Ok(())
+}
+
+fn run_shell_loop(
     terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
     commands: &mut BenchClient,
-    state: &mut StageState,
+    shell: &mut ShellState,
     events: &Receiver<UiEvent>,
+    theme: ThemeName,
 ) -> Result<()> {
     let mut redraw = true;
     let mut requested_sizes = HashMap::new();
     loop {
-        state.advance();
-        if redraw || !state.pulse.done() {
+        if let Some(stage) = shell.stage.as_mut() {
+            stage.advance();
+        }
+        let animating = shell
+            .stage
+            .as_ref()
+            .is_some_and(|stage| shell.view == ShellView::Stage && !stage.pulse.done());
+        if redraw || animating {
             let mut stdout = io::stdout();
-            stdout.sync_update(|_| terminal.draw(|frame| render_stage(frame, state)))??;
-            resize_to_cards(commands, state, &mut requested_sizes)?;
+            stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
+            if shell.view == ShellView::Stage
+                && let Some(stage) = shell.stage.as_mut()
+            {
+                resize_to_cards(commands, stage, &mut requested_sizes)?;
+                persist_stage_layout(commands, stage)?;
+            }
             redraw = false;
         }
-        let wait = if state.pulse.done() {
-            Duration::from_secs(30)
-        } else {
+        let wait = if animating {
             Duration::from_millis(16)
+        } else {
+            Duration::from_secs(30)
         };
         let event = match events.recv_timeout(wait) {
             Ok(event) => Some(event),
@@ -370,19 +849,61 @@ fn run_loop(
         };
         match event {
             Some(UiEvent::Snapshot(panes)) => {
-                state.apply_snapshot(panes);
+                if let Some(stage) = shell.stage.as_mut() {
+                    let panes = if let Some(session_id) = &stage.session_id {
+                        panes
+                            .into_iter()
+                            .filter(|pane| pane.session_id.as_ref() == Some(session_id))
+                            .collect()
+                    } else {
+                        panes
+                    };
+                    stage.apply_snapshot(panes);
+                }
                 redraw = true;
             }
-            Some(UiEvent::Terminal(event)) => {
-                if handle_terminal_event(event, commands, state)? {
+            Some(UiEvent::Raw(bytes)) => {
+                if handle_raw_event(&bytes, commands, shell, theme)? {
                     return Ok(());
                 }
+                redraw = true;
+            }
+            Some(UiEvent::Resize) => {
+                requested_sizes.clear();
                 redraw = true;
             }
             Some(UiEvent::WatchFailed) => return Err(AppError::EventSource),
             None => {}
         }
     }
+}
+
+fn persist_stage_layout(commands: &mut BenchClient, state: &mut StageState) -> Result<()> {
+    let Some(session_id) = state.session_id.clone() else {
+        return Ok(());
+    };
+    if state.zoomed || state.pane_areas.len() != state.panes.len() {
+        return Ok(());
+    }
+    let layout = state
+        .panes
+        .iter()
+        .zip(&state.pane_areas)
+        .enumerate()
+        .map(|(order, (pane, area))| LayoutRect {
+            pane_id: pane.id.clone(),
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+            order,
+        })
+        .collect::<Vec<_>>();
+    if layout != state.layout {
+        commands.update_layout(session_id, layout.clone())?;
+        state.layout = layout;
+    }
+    Ok(())
 }
 
 fn resize_to_cards(
@@ -403,10 +924,31 @@ fn resize_to_cards(
     Ok(())
 }
 
-fn spawn_terminal_events(sender: SyncSender<UiEvent>) {
+fn spawn_raw_terminal_events(sender: SyncSender<UiEvent>) {
     thread::spawn(move || {
-        while let Ok(event) = event::read() {
-            if sender.send(UiEvent::Terminal(event)).is_err() {
+        let stdin = io::stdin();
+        let mut stdin = stdin.lock();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = match stdin.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            if sender.send(UiEvent::Raw(buffer[..read].to_vec())).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+fn spawn_resize_events(sender: SyncSender<UiEvent>) {
+    thread::spawn(move || {
+        let Ok(mut signals) = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])
+        else {
+            return;
+        };
+        for _ in signals.forever() {
+            if sender.send(UiEvent::Resize).is_err() {
                 break;
             }
         }
@@ -435,77 +977,320 @@ fn spawn_screen_watch(socket: PathBuf, sender: SyncSender<UiEvent>) {
     });
 }
 
-fn handle_terminal_event(
-    event: Event,
+fn handle_raw_event(
+    bytes: &[u8],
     commands: &mut BenchClient,
-    state: &mut StageState,
+    shell: &mut ShellState,
+    theme: ThemeName,
 ) -> Result<bool> {
-    match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => {
-            if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                if state
-                    .leader_at
-                    .is_some_and(|at| at.elapsed() <= Duration::from_millis(700))
-                {
-                    send_focused(commands, state, vec![0x07])?;
-                    state.leader_at = None;
-                } else {
-                    state.leader_at = Some(Instant::now());
+    if bytes == b"V" {
+        shell.view = match shell.view {
+            ShellView::Home => ShellView::Runs,
+            ShellView::Runs | ShellView::Stage => ShellView::Home,
+        };
+        return Ok(false);
+    }
+    match shell.view {
+        ShellView::Runs => Ok(bytes == b"q"),
+        ShellView::Home => {
+            for key in raw_home_keys(bytes) {
+                if handle_home_key(key, commands, shell, theme)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ShellView::Stage => {
+            let Some(stage) = shell.stage.as_mut() else {
+                return Ok(false);
+            };
+            if bytes == b"R"
+                && let Some(pane) = stage.panes.get(stage.focus)
+                && pane.state.as_deref() == Some("conductor_down")
+            {
+                commands.respawn_conductor(pane.id.clone())?;
+                return Ok(false);
+            }
+            if let Some(mouse) = route_raw_mouse(bytes, stage) {
+                if let Some(mouse) = mouse {
+                    send_focused(commands, stage, mouse)?;
                 }
                 return Ok(false);
             }
-            if state
-                .leader_at
-                .is_some_and(|at| at.elapsed() <= Duration::from_millis(700))
-            {
-                state.leader_at = None;
-                match key.code {
-                    KeyCode::Char('q') => return Ok(true),
-                    KeyCode::Char('n') | KeyCode::Tab => {
-                        if !state.panes.is_empty() {
-                            state.focus = (state.focus + 1) % state.panes.len();
+            let (forwarded, actions) = stage.raw_router.route(bytes);
+            for action in actions {
+                match action {
+                    LeaderAction::Quit => return Ok(true),
+                    LeaderAction::Next => {
+                        if !stage.panes.is_empty() {
+                            stage.focus = (stage.focus + 1) % stage.panes.len();
                         }
-                        return Ok(false);
                     }
-                    KeyCode::Char('p') | KeyCode::BackTab => {
-                        if !state.panes.is_empty() {
-                            state.focus = state
+                    LeaderAction::Previous => {
+                        if !stage.panes.is_empty() {
+                            stage.focus = stage
                                 .focus
                                 .checked_sub(1)
-                                .unwrap_or_else(|| state.panes.len().saturating_sub(1));
+                                .unwrap_or_else(|| stage.panes.len().saturating_sub(1));
                         }
-                        return Ok(false);
                     }
-                    _ => {}
+                    LeaderAction::Zoom => stage.zoomed = !stage.zoomed,
+                    LeaderAction::Swap => {
+                        if stage.panes.len() > 1 {
+                            let next = (stage.focus + 1) % stage.panes.len();
+                            stage.panes.swap(stage.focus, next);
+                            stage.focus = next;
+                        }
+                    }
+                    LeaderAction::Grow | LeaderAction::Shrink => {
+                        ensure_layout(stage);
+                        if let Some(area) = stage.layout.get_mut(stage.focus) {
+                            let grow = action == LeaderAction::Grow;
+                            area.width = if grow {
+                                area.width.saturating_add(2)
+                            } else {
+                                area.width.saturating_sub(2).max(10)
+                            };
+                            area.height = if grow {
+                                area.height.saturating_add(1)
+                            } else {
+                                area.height.saturating_sub(1).max(5)
+                            };
+                        }
+                    }
+                    LeaderAction::Home => shell.view = ShellView::Home,
                 }
             }
-            if let Some(bytes) = key_bytes(key) {
-                send_focused(commands, state, bytes)?;
+            if !forwarded.is_empty() {
+                send_focused(commands, stage, forwarded)?;
             }
+            Ok(false)
         }
-        Event::Paste(text) => {
-            let mut bytes = b"\x1b[200~".to_vec();
-            bytes.extend_from_slice(text.as_bytes());
-            bytes.extend_from_slice(b"\x1b[201~");
-            send_focused(commands, state, bytes)?;
+    }
+}
+
+fn raw_home_keys(bytes: &[u8]) -> Vec<KeyEvent> {
+    if bytes == b"\x1b[A" {
+        return vec![KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)];
+    }
+    if bytes == b"\x1b[B" {
+        return vec![KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)];
+    }
+    let mut keys = Vec::new();
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        for character in text.chars() {
+            let code = match character {
+                '\r' | '\n' => KeyCode::Enter,
+                '\u{1b}' => KeyCode::Esc,
+                '\u{7f}' | '\u{8}' => KeyCode::Backspace,
+                character => KeyCode::Char(character),
+            };
+            keys.push(KeyEvent::new(code, KeyModifiers::NONE));
         }
-        Event::Mouse(mouse) => {
-            if let Some(bytes) = mouse_bytes(mouse, state) {
-                send_focused(commands, state, bytes)?;
+    }
+    keys
+}
+
+fn route_raw_mouse(bytes: &[u8], state: &mut StageState) -> Option<Option<Vec<u8>>> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let body = text.strip_prefix("\x1b[<")?;
+    let suffix = body.chars().last()?;
+    if !matches!(suffix, 'M' | 'm') {
+        return None;
+    }
+    let fields = body[..body.len().saturating_sub(1)]
+        .split(';')
+        .map(str::parse::<u16>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    let [code, terminal_x, terminal_y] = fields.as_slice() else {
+        return None;
+    };
+    let column = terminal_x.saturating_sub(1);
+    let row = terminal_y.saturating_sub(1);
+    let pane_index = state
+        .pane_areas
+        .iter()
+        .position(|area| area.contains((column, row).into()));
+    if *code == 0
+        && let Some(index) = pane_index
+        && let Some(area) = state.pane_areas.get(index)
+        && row == area.y
+    {
+        state.focus = index;
+        state.dragging = Some((
+            index,
+            column.saturating_sub(area.x),
+            row.saturating_sub(area.y),
+        ));
+        return Some(None);
+    }
+    if *code == 32
+        && let Some((index, offset_x, offset_y)) = state.dragging
+        && let Some(pane_id) = state.panes.get(index).map(|pane| pane.id.clone())
+        && let Some(area) = state.pane_areas.get(index).copied()
+    {
+        ensure_layout(state);
+        if let Some(rect) = state.layout.iter_mut().find(|rect| rect.pane_id == pane_id) {
+            rect.x = column.saturating_sub(offset_x);
+            rect.y = row.saturating_sub(offset_y);
+            rect.width = area.width;
+            rect.height = area.height;
+        }
+        return Some(None);
+    }
+    if *code == 3 || suffix == 'm' {
+        state.dragging = None;
+        return Some(None);
+    }
+    let area = *state.pane_areas.get(state.focus)?;
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    if !inner.contains((column, row).into()) {
+        return Some(None);
+    }
+    let x = column.saturating_sub(inner.x) + 1;
+    let y = row.saturating_sub(inner.y) + 1;
+    Some(Some(format!("\x1b[<{code};{x};{y}{suffix}").into_bytes()))
+}
+
+fn handle_home_key(
+    key: KeyEvent,
+    commands: &mut BenchClient,
+    shell: &mut ShellState,
+    theme: ThemeName,
+) -> Result<bool> {
+    let home = &mut shell.home;
+    if home.flow.is_none() {
+        match key.code {
+            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Char('n') => {
+                home.flow = Some(NewSessionFlow::new(&home.data));
+                home.message.clear();
             }
-        }
-        Event::Resize(_, _) => {
-            for (pane, area) in state.panes.iter().zip(&state.pane_areas) {
-                commands.resize(
-                    pane.id.clone(),
-                    area.height.saturating_sub(2),
-                    area.width.saturating_sub(2),
-                )?;
+            KeyCode::Up | KeyCode::Char('k') => {
+                home.selected = home.selected.saturating_sub(1);
             }
+            KeyCode::Down | KeyCode::Char('j') => {
+                home.selected = (home.selected + 1).min(home.data.sessions.len().saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                if let Some(session_id) = home
+                    .data
+                    .sessions
+                    .get(home.selected)
+                    .map(|session| session.id.clone())
+                {
+                    attach_stage(commands, shell, session_id, theme)?;
+                }
+            }
+            _ => {}
         }
-        _ => {}
+        return Ok(false);
+    }
+    let Some(flow) = home.flow.as_mut() else {
+        return Ok(false);
+    };
+    if key.code == KeyCode::Esc {
+        match flow.step {
+            FlowStep::Brain => home.flow = None,
+            FlowStep::Workers => flow.step = FlowStep::Brain,
+            FlowStep::Cwd => flow.step = FlowStep::Workers,
+        }
+        return Ok(false);
+    }
+    match flow.step {
+        FlowStep::Brain => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                flow.brain_index = flow.brain_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                flow.brain_index =
+                    (flow.brain_index + 1).min(flow.brain_choices.len().saturating_sub(1));
+            }
+            KeyCode::Enter if !flow.brain_choices.is_empty() => flow.step = FlowStep::Workers,
+            _ => {}
+        },
+        FlowStep::Workers => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                flow.worker_index = flow.worker_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                flow.worker_index =
+                    (flow.worker_index + 1).min(flow.worker_choices.len().saturating_sub(1));
+            }
+            KeyCode::Char(' ') => {
+                if let Some(worker) = flow.worker_choices.get(flow.worker_index).cloned() {
+                    if let Some(index) = flow
+                        .selected_workers
+                        .iter()
+                        .position(|selected| selected == &worker)
+                    {
+                        flow.selected_workers.remove(index);
+                    } else if flow.selected_workers.len() < home.data.max_parallel_workers {
+                        flow.selected_workers.push(worker);
+                    }
+                }
+            }
+            KeyCode::Enter => flow.step = FlowStep::Cwd,
+            _ => {}
+        },
+        FlowStep::Cwd => match key.code {
+            KeyCode::Backspace => {
+                flow.cwd.pop();
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                flow.cwd.push(character);
+            }
+            KeyCode::Enter => {
+                let Some(brain) = flow.brain_choices.get(flow.brain_index).cloned() else {
+                    home.message = "No brain harness is configured.".to_owned();
+                    return Ok(false);
+                };
+                match commands.create_session(
+                    brain,
+                    flow.selected_workers.clone(),
+                    flow.cwd.clone(),
+                ) {
+                    Ok(session_id) => {
+                        home.flow = None;
+                        attach_stage(commands, shell, session_id, theme)?;
+                    }
+                    Err(error) => home.message = error.to_string(),
+                }
+            }
+            _ => {}
+        },
     }
     Ok(false)
+}
+
+fn ensure_layout(state: &mut StageState) {
+    if state.layout.len() == state.panes.len() {
+        return;
+    }
+    state.layout = state
+        .panes
+        .iter()
+        .zip(&state.pane_areas)
+        .enumerate()
+        .map(|(order, (pane, area))| LayoutRect {
+            pane_id: pane.id.clone(),
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+            order,
+        })
+        .collect();
 }
 
 fn send_focused(commands: &mut BenchClient, state: &StageState, bytes: Vec<u8>) -> Result<()> {
@@ -515,109 +1300,133 @@ fn send_focused(commands: &mut BenchClient, state: &StageState, bytes: Vec<u8>) 
     Ok(())
 }
 
-fn key_bytes(key: KeyEvent) -> Option<Vec<u8>> {
-    let mut bytes = match key.code {
-        KeyCode::Char(character) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let code = character.to_ascii_lowercase() as u32;
-            if (u32::from(b'a')..=u32::from(b'z')).contains(&code) {
-                vec![(code - u32::from(b'a') + 1) as u8]
-            } else {
-                character.to_string().into_bytes()
-            }
-        }
-        KeyCode::Char(character) => character.to_string().into_bytes(),
-        KeyCode::Enter => vec![b'\r'],
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Tab => vec![b'\t'],
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        _ => return None,
-    };
-    if key.modifiers.contains(KeyModifiers::ALT) {
-        bytes.insert(0, 0x1b);
-    }
-    Some(bytes)
-}
-
-fn mouse_bytes(mouse: MouseEvent, state: &StageState) -> Option<Vec<u8>> {
-    let area = *state.pane_areas.get(state.focus)?;
-    let inner = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    if !inner.contains((mouse.column, mouse.row).into()) {
-        return None;
-    }
-    let x = mouse.column.saturating_sub(inner.x) + 1;
-    let y = mouse.row.saturating_sub(inner.y) + 1;
-    let (code, suffix) = match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => (0, 'M'),
-        MouseEventKind::Down(MouseButton::Middle) => (1, 'M'),
-        MouseEventKind::Down(MouseButton::Right) => (2, 'M'),
-        MouseEventKind::Up(_) => (3, 'm'),
-        MouseEventKind::Drag(MouseButton::Left) => (32, 'M'),
-        MouseEventKind::Drag(MouseButton::Middle) => (33, 'M'),
-        MouseEventKind::Drag(MouseButton::Right) => (34, 'M'),
-        MouseEventKind::ScrollUp => (64, 'M'),
-        MouseEventKind::ScrollDown => (65, 'M'),
-        MouseEventKind::ScrollLeft => (66, 'M'),
-        MouseEventKind::ScrollRight => (67, 'M'),
-        MouseEventKind::Moved => (35, 'M'),
-    };
-    Some(format!("\x1b[<{code};{x};{y}{suffix}").into_bytes())
-}
-
 fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
     let area = frame.area();
     frame.render_widget(
         Block::new().style(Style::default().bg(state.theme.stage)),
         area,
     );
-    let horizontal = area.width >= 100;
-    let chunks = if horizontal {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .margin(1)
-            .constraints([
-                Constraint::Percentage(46),
-                Constraint::Length(8),
-                Constraint::Percentage(46),
-            ])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Percentage(46),
-                Constraint::Length(3),
-                Constraint::Percentage(46),
-            ])
-            .split(area)
-    };
-    state.pane_areas = if chunks.len() >= 3 {
-        vec![chunks[0], chunks[2]]
-    } else {
-        Vec::new()
-    };
-    if chunks.len() >= 3 && state.panes.len() >= 2 {
-        render_baton(frame, chunks[1], state);
+    state.pane_areas = stage_areas(area, state);
+    if area.width >= 100 && state.panes.len() >= 2 && !state.zoomed {
+        let baton = Rect::new(
+            area.x + area.width / 2 - 3,
+            area.y + 2,
+            8,
+            area.height.saturating_sub(4),
+        );
+        render_baton(frame, baton, state);
     }
     let areas = state.pane_areas.clone();
-    for (index, (pane, pane_area)) in state.panes.iter().zip(areas).enumerate() {
-        render_pane(frame, pane_area, pane, index == state.focus, state.theme);
+    if state.zoomed {
+        if let (Some(pane), Some(pane_area)) =
+            (state.panes.get(state.focus), areas.first().copied())
+        {
+            render_shadow(frame, pane_area, state.theme);
+            render_pane(frame, pane_area, pane, true, state.theme);
+        }
+    } else {
+        for (index, (pane, pane_area)) in state.panes.iter().zip(areas).enumerate() {
+            render_shadow(frame, pane_area, state.theme);
+            render_pane(frame, pane_area, pane, index == state.focus, state.theme);
+        }
+    }
+}
+
+fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
+    if state.panes.is_empty() {
+        return Vec::new();
+    }
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(3),
+        area.height.saturating_sub(3),
+    );
+    if state.zoomed {
+        return vec![inner];
+    }
+    if state.layout.len() == state.panes.len() {
+        let mut ordered = state.layout.clone();
+        ordered.sort_by_key(|rect| rect.order);
+        return ordered
+            .into_iter()
+            .map(|rect| {
+                let x = rect.x.clamp(inner.x, inner.right().saturating_sub(10));
+                let y = rect.y.clamp(inner.y, inner.bottom().saturating_sub(5));
+                Rect::new(
+                    x,
+                    y,
+                    rect.width.min(inner.right().saturating_sub(x)).max(10),
+                    rect.height.min(inner.bottom().saturating_sub(y)).max(5),
+                )
+            })
+            .collect();
+    }
+    if state.panes.len() == 1 {
+        return vec![inner];
+    }
+    if area.width < 100 {
+        let count = state.panes.len() as u16;
+        let height = inner.height.saturating_sub(count.saturating_sub(1)) / count.max(1);
+        return (0..count)
+            .map(|index| {
+                Rect::new(
+                    inner.x,
+                    inner.y + index * (height + 1),
+                    inner.width,
+                    if index + 1 == count {
+                        inner
+                            .bottom()
+                            .saturating_sub(inner.y + index * (height + 1))
+                    } else {
+                        height
+                    },
+                )
+            })
+            .collect();
+    }
+    let brain_width = inner.width * 53 / 100;
+    let worker_x = inner.x + brain_width + 5;
+    let worker_width = inner.right().saturating_sub(worker_x);
+    let workers = state.panes.len().saturating_sub(1) as u16;
+    let worker_height = inner.height.saturating_sub(workers.saturating_sub(1)) / workers.max(1);
+    let mut areas = vec![Rect::new(
+        inner.x,
+        inner.y + inner.height / 10,
+        brain_width,
+        inner.height * 8 / 10,
+    )];
+    for index in 0..workers {
+        let arc = if workers > 2 && (index == 0 || index + 1 == workers) {
+            2
+        } else {
+            0
+        };
+        areas.push(Rect::new(
+            worker_x + arc,
+            inner.y + index * (worker_height + 1),
+            worker_width.saturating_sub(arc),
+            worker_height,
+        ));
+    }
+    areas
+}
+
+fn render_shadow(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+    let buffer = frame.buffer_mut();
+    let right = area.right();
+    for row in area.y.saturating_add(1)..area.bottom().saturating_add(1) {
+        if let Some(cell) = buffer.cell_mut((right, row)) {
+            cell.set_symbol("▐");
+            cell.set_style(Style::default().fg(theme.shadow).bg(theme.stage));
+        }
+    }
+    let bottom = area.bottom();
+    for col in area.x.saturating_add(1)..area.right() {
+        if let Some(cell) = buffer.cell_mut((col, bottom)) {
+            cell.set_symbol("▄");
+            cell.set_style(Style::default().fg(theme.shadow).bg(theme.stage));
+        }
     }
 }
 
@@ -663,7 +1472,7 @@ fn render_pane(frame: &mut Frame<'_>, area: Rect, pane: &PaneSnapshot, focus: bo
         .title(format!(
             " {}  {} ",
             pane.title.to_uppercase(),
-            pane.sequence
+            pane.state.as_deref().unwrap_or("LIVE")
         ))
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
@@ -676,6 +1485,26 @@ fn render_pane(frame: &mut Frame<'_>, area: Rect, pane: &PaneSnapshot, focus: bo
         .style(Style::default().bg(theme.stage).fg(theme.text));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if pane.state.as_deref() == Some("conductor_down") {
+        let elapsed = pane
+            .down_at
+            .map_or(0, |down| epoch_now().saturating_sub(down));
+        let overlay = Rect::new(
+            inner.x + inner.width.saturating_sub(34) / 2,
+            inner.y + inner.height.saturating_sub(3) / 2,
+            inner.width.min(34),
+            3.min(inner.height),
+        );
+        frame.render_widget(
+            Paragraph::new(format!("CONDUCTOR DOWN\n{elapsed}s elapsed · R resume")).style(
+                Style::default()
+                    .fg(theme.text)
+                    .bg(theme.attention)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            overlay,
+        );
+    }
     let rows = inner.height.min(pane.rows);
     let cols = inner.width.min(pane.cols);
     let buffer = frame.buffer_mut();
@@ -716,6 +1545,12 @@ fn render_pane(frame: &mut Frame<'_>, area: Rect, pane: &PaneSnapshot, focus: bo
     }
 }
 
+fn epoch_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
 const fn ratatui_color(color: TerminalColor, default: Color) -> Color {
     match color {
         TerminalColor::Default => default,
@@ -726,11 +1561,14 @@ const fn ratatui_color(color: TerminalColor, default: Color) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use orc_proto::{PaneSnapshot, TerminalCell};
+    use orc_proto::{HarnessSummary, PaneSnapshot, SessionSummary, TerminalCell};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{StageState, ThemeName, key_bytes, render_stage};
+    use super::{
+        HomeData, HomeState, RawRouter, StageState, Theme, ThemeName, render_home, render_stage,
+        route_raw_mouse,
+    };
 
     fn panes() -> Vec<PaneSnapshot> {
         ["claude", "hermes"]
@@ -747,22 +1585,14 @@ mod tests {
                     cursor: (0, 0),
                     sequence: 1,
                     cells,
+                    session_id: None,
+                    harness: None,
+                    role: None,
+                    state: None,
+                    down_at: None,
                 }
             })
             .collect()
-    }
-
-    #[test]
-    fn key_encoding_preserves_control_and_navigation() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        assert_eq!(
-            key_bytes(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(vec![3])
-        );
-        assert_eq!(
-            key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-            Some(b"\x1b[A".to_vec())
-        );
     }
 
     #[test]
@@ -786,5 +1616,105 @@ mod tests {
                 assert!(text.contains("HERMES"));
             }
         }
+    }
+
+    #[test]
+    fn home_empty_flow_and_shelf_cover_both_themes_and_sizes() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme_name in [ThemeName::Ember, ThemeName::Phosphor] {
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).expect("test HOME terminal");
+                let mut state = HomeState {
+                    data: HomeData {
+                        sessions: Vec::new(),
+                        harnesses: vec![
+                            HarnessSummary {
+                                id: "codex".to_owned(),
+                                roles: vec!["brain".to_owned()],
+                                resumable: true,
+                            },
+                            HarnessSummary {
+                                id: "hermes".to_owned(),
+                                roles: vec!["worker".to_owned()],
+                                resumable: false,
+                            },
+                            HarnessSummary {
+                                id: "pi-m3".to_owned(),
+                                roles: vec!["worker".to_owned()],
+                                resumable: false,
+                            },
+                        ],
+                        default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
+                        max_parallel_workers: 3,
+                        theme: "ember".to_owned(),
+                        reduced_motion: false,
+                    },
+                    selected: 0,
+                    flow: None,
+                    message: String::new(),
+                };
+                terminal
+                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name)))
+                    .expect("render empty HOME");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("NO SESSIONS YET"));
+                state.data.sessions.push(SessionSummary {
+                    id: "session-one".to_owned(),
+                    brain: "codex".to_owned(),
+                    workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
+                    cwd: "/tmp".to_owned(),
+                    updated_at: "2026-07-11T00:00:00Z".to_owned(),
+                    attention: 0,
+                });
+                terminal
+                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name)))
+                    .expect("render HOME shelf");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("session-one"));
+            }
+        }
+    }
+
+    #[test]
+    fn raw_router_preserves_kitty_and_bracketed_paste_and_only_ctrl_g_is_leader() {
+        let mut router = RawRouter::default();
+        let kitty = b"\x1b[97;5u\x1b[57358;1u";
+        assert_eq!(router.route(kitty).0, kitty);
+        let paste = b"\x1b[200~paste\x07inside\x1b[201~";
+        assert_eq!(router.route(&paste[..5]).0, &paste[..5]);
+        assert_eq!(router.route(&paste[5..]).0, &paste[5..]);
+        assert!(router.route(b"\x07").0.is_empty());
+        let (literal, actions) = router.route(b"\x07");
+        assert_eq!(literal, vec![0x07]);
+        assert!(actions.is_empty());
+        assert!(
+            router
+                .route(b"\x07z")
+                .1
+                .contains(&super::LeaderAction::Zoom)
+        );
+    }
+
+    #[test]
+    fn raw_mouse_is_forwarded_content_relative() {
+        let mut state = StageState::new(panes(), ThemeName::Ember);
+        state.pane_areas = vec![ratatui::layout::Rect::new(10, 5, 40, 20)];
+        state.panes.truncate(1);
+        let translated = route_raw_mouse(b"\x1b[<0;13;8M", &mut state)
+            .expect("parse mouse")
+            .expect("forward mouse");
+        assert_eq!(translated, b"\x1b[<0;2;2M");
     }
 }

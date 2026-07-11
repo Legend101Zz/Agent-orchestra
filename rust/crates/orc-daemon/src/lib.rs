@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Unix-socket daemon skeleton for the Bench PTY spike.
+//! Production Unix-socket daemon for the Bench workspace.
 //!
 //! The daemon owns hosted PTYs and screen replay. It must never render UI or
 //! make orchestration policy decisions.
@@ -12,12 +12,17 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use orc_core::bench::{
+    PaneLayout, SessionPaneRecord, create_session as create_bench_session, list_sessions,
+    load_harness_registry, read_session, write_session,
+};
 use orc_proto::{
-    ClientRequest, DaemonMetrics, PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse,
+    ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
+    PaneSnapshot, ServerResponse, SessionSummary,
 };
 use orc_pty::{HostedPane, UpdateSignal};
 use serde::{Deserialize, Serialize};
@@ -30,7 +35,13 @@ static WRITE_NONCE: AtomicU64 = AtomicU64::new(0);
 type PaneSize = (u16, u16);
 type ClientSizes = HashMap<u64, HashMap<String, PaneSize>>;
 
-/// Errors emitted by the spike daemon.
+fn epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+/// Errors emitted by the Bench daemon.
 #[derive(Debug, Error)]
 pub enum DaemonError {
     /// Socket or stream I/O failed.
@@ -54,15 +65,37 @@ pub enum DaemonError {
     /// A recorded process could not be inspected or reaped safely.
     #[error("process identity check failed: {0}")]
     Process(String),
+    /// A core registry or session mutation failed.
+    #[error("daemon core mutation failed: {0}")]
+    Core(#[from] anyhow::Error),
 }
 
 /// Result type returned by daemon operations.
 pub type Result<T> = std::result::Result<T, DaemonError>;
 
 /// Canonical pane state shared by every attached client.
+struct PaneMetadata {
+    session_id: Option<String>,
+    harness: Option<String>,
+    role: Option<String>,
+    command: String,
+    args: Vec<String>,
+    resume_args: Vec<String>,
+    cwd: PathBuf,
+    environment: Vec<(String, String)>,
+    down_at: Option<u64>,
+}
+
+struct PaneEntry {
+    pane: Mutex<HostedPane>,
+    metadata: Mutex<PaneMetadata>,
+}
+
+/// Canonical pane and session state shared by every attached client.
 pub struct Daemon {
-    panes: Vec<Mutex<HostedPane>>,
+    panes: RwLock<Vec<PaneEntry>>,
     signal: UpdateSignal,
+    home: Option<PathBuf>,
     clients: AtomicUsize,
     next_client_id: AtomicU64,
     requested_sizes: Mutex<ClientSizes>,
@@ -73,21 +106,52 @@ impl Daemon {
     #[must_use]
     pub fn new(panes: Vec<HostedPane>, signal: UpdateSignal) -> Self {
         Self {
-            panes: panes.into_iter().map(Mutex::new).collect(),
+            panes: RwLock::new(
+                panes
+                    .into_iter()
+                    .map(|pane| PaneEntry {
+                        metadata: Mutex::new(PaneMetadata {
+                            session_id: None,
+                            harness: None,
+                            role: None,
+                            command: String::new(),
+                            args: Vec::new(),
+                            resume_args: Vec::new(),
+                            cwd: PathBuf::new(),
+                            environment: Vec::new(),
+                            down_at: None,
+                        }),
+                        pane: Mutex::new(pane),
+                    })
+                    .collect(),
+            ),
             signal,
+            home: None,
             clients: AtomicUsize::new(0),
             next_client_id: AtomicU64::new(1),
             requested_sizes: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Construct an empty production daemon that persists process records under `home`.
+    #[must_use]
+    pub fn production(home: PathBuf, signal: UpdateSignal) -> Self {
+        let mut daemon = Self::new(Vec::new(), signal);
+        daemon.home = Some(home);
+        daemon
+    }
+
     /// Return aggregate bounded-output and attachment counters.
     pub fn metrics(&self) -> Result<DaemonMetrics> {
         let panes = self
             .panes
+            .read()
+            .map_err(|_| DaemonError::Poisoned)?
             .iter()
-            .map(|pane| {
-                pane.lock()
+            .map(|entry| {
+                entry
+                    .pane
+                    .lock()
                     .map(|pane| pane.metrics())
                     .map_err(|_| DaemonError::Poisoned)
             })
@@ -178,9 +242,11 @@ impl Daemon {
 
     fn sequences(&self) -> Result<Vec<PaneSequence>> {
         self.panes
+            .read()
+            .map_err(|_| DaemonError::Poisoned)?
             .iter()
-            .map(|pane| {
-                let pane = pane.lock().map_err(|_| DaemonError::Poisoned)?;
+            .map(|entry| {
+                let pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
                 Ok(PaneSequence {
                     id: pane.id().to_owned(),
                     sequence: pane.sequence(),
@@ -210,15 +276,38 @@ impl Daemon {
     }
 
     fn snapshots(&self) -> Result<Vec<PaneSnapshot>> {
-        self.panes
-            .iter()
-            .map(|pane| {
-                pane.lock()
-                    .map_err(|_| DaemonError::Poisoned)?
-                    .snapshot()
-                    .map_err(DaemonError::from)
-            })
-            .collect()
+        self.snapshots_for(None)
+    }
+
+    fn snapshots_for(&self, session_id: Option<&str>) -> Result<Vec<PaneSnapshot>> {
+        let entries = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        let mut snapshots = Vec::new();
+        for entry in entries.iter() {
+            let mut metadata = entry.metadata.lock().map_err(|_| DaemonError::Poisoned)?;
+            if session_id.is_some() && metadata.session_id.as_deref() != session_id {
+                continue;
+            }
+            let mut pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
+            let exited = pane.has_exited()?;
+            if exited && metadata.down_at.is_none() {
+                metadata.down_at = Some(epoch_seconds());
+                self.persist_down_state(pane.id(), &metadata)?;
+            }
+            let mut snapshot = pane.snapshot()?;
+            snapshot.session_id.clone_from(&metadata.session_id);
+            snapshot.harness.clone_from(&metadata.harness);
+            snapshot.role.clone_from(&metadata.role);
+            snapshot.state = Some(if exited && metadata.role.as_deref() == Some("brain") {
+                "conductor_down".to_owned()
+            } else if exited {
+                "stopped".to_owned()
+            } else {
+                "running".to_owned()
+            });
+            snapshot.down_at = metadata.down_at;
+            snapshots.push(snapshot);
+        }
+        Ok(snapshots)
     }
 
     fn with_pane<T>(
@@ -226,13 +315,257 @@ impl Daemon {
         pane_id: &str,
         action: impl FnOnce(&mut HostedPane) -> Result<T>,
     ) -> Result<Option<T>> {
-        for pane in &self.panes {
-            let mut pane = pane.lock().map_err(|_| DaemonError::Poisoned)?;
+        let panes = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        for entry in panes.iter() {
+            let mut pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
             if pane.id() == pane_id {
                 return action(&mut pane).map(Some);
             }
         }
         Ok(None)
+    }
+
+    fn persist_down_state(&self, pane_id: &str, metadata: &PaneMetadata) -> Result<()> {
+        let Some(session_id) = &metadata.session_id else {
+            return Ok(());
+        };
+        let mut session = read_session(session_id)?;
+        if let Some(record) = session.panes.iter_mut().find(|record| record.id == pane_id) {
+            record.state = if metadata.role.as_deref() == Some("brain") {
+                "conductor_down".to_owned()
+            } else {
+                "stopped".to_owned()
+            };
+            record.down_at = Some(orc_core::registry::now_iso());
+        }
+        if metadata.role.as_deref() == Some("brain") {
+            session.reorientation = Some(
+                "Conductor resumed after a crash. Re-orient with the durable session record, inbox, and orc list before dispatching new work."
+                    .to_owned(),
+            );
+        }
+        session.updated_at = orc_core::registry::now_iso();
+        write_session(&session)?;
+        Ok(())
+    }
+
+    fn home_response(&self) -> Result<ServerResponse> {
+        let registry = load_harness_registry()?;
+        let sessions = list_sessions()?
+            .into_iter()
+            .map(|session| SessionSummary {
+                attention: session
+                    .panes
+                    .iter()
+                    .filter(|pane| pane.state == "conductor_down")
+                    .count(),
+                id: session.id,
+                brain: session.brain,
+                workers: session.workers,
+                cwd: session.cwd,
+                updated_at: session.updated_at,
+            })
+            .collect();
+        let harnesses = registry
+            .harnesses
+            .iter()
+            .map(|(id, harness)| HarnessSummary {
+                id: id.clone(),
+                roles: harness.roles.clone(),
+                resumable: !harness.resume_args.is_empty(),
+            })
+            .collect();
+        Ok(ServerResponse::Home {
+            sessions,
+            harnesses,
+            default_workers: registry.default_workers,
+            max_parallel_workers: registry.max_parallel_workers,
+            theme: registry.app.theme,
+            reduced_motion: registry.app.reduced_motion,
+        })
+    }
+
+    fn launch_session(&self, brain: &str, workers: &[String], cwd: &Path) -> Result<String> {
+        let registry = load_harness_registry()?;
+        let mut session = create_bench_session(brain, workers, cwd)?;
+        let mut launches = Vec::with_capacity(workers.len() + 1);
+        launches.push((brain.to_owned(), "brain".to_owned(), 0_usize));
+        launches.extend(
+            workers
+                .iter()
+                .enumerate()
+                .map(|(index, worker)| (worker.clone(), "worker".to_owned(), index + 1)),
+        );
+        let mut entries = Vec::with_capacity(launches.len());
+        for (harness_id, role, index) in launches {
+            let harness = registry.harnesses.get(&harness_id).ok_or_else(|| {
+                DaemonError::Core(anyhow::anyhow!("unknown harness: {harness_id}"))
+            })?;
+            let pane_id = if role == "brain" {
+                format!("{}-brain", session.id)
+            } else {
+                format!("{}-worker-{index}", session.id)
+            };
+            let environment = vec![
+                ("ORC_SESSION".to_owned(), session.id.clone()),
+                ("ORC_PANE_ID".to_owned(), pane_id.clone()),
+            ];
+            let pane = HostedPane::spawn_with_signal_and_env(
+                &pane_id,
+                &harness_id,
+                &harness.command,
+                &harness.args,
+                cwd,
+                30,
+                90,
+                self.signal.clone(),
+                &environment,
+            )?;
+            session.panes.push(SessionPaneRecord {
+                id: pane_id,
+                harness: harness_id.clone(),
+                role: role.clone(),
+                state: "running".to_owned(),
+                pid: pane.process_id(),
+                down_at: None,
+                extra: Default::default(),
+            });
+            entries.push(PaneEntry {
+                pane: Mutex::new(pane),
+                metadata: Mutex::new(PaneMetadata {
+                    session_id: Some(session.id.clone()),
+                    harness: Some(harness_id),
+                    role: Some(role),
+                    command: harness.command.clone(),
+                    args: harness.args.clone(),
+                    resume_args: harness.resume_args.clone(),
+                    cwd: cwd.to_owned(),
+                    environment,
+                    down_at: None,
+                }),
+            });
+        }
+        session.updated_at = orc_core::registry::now_iso();
+        write_session(&session)?;
+        self.panes
+            .write()
+            .map_err(|_| DaemonError::Poisoned)?
+            .extend(entries);
+        self.persist_process_records()?;
+        Ok(session.id)
+    }
+
+    fn persist_process_records(&self) -> Result<()> {
+        let Some(home) = &self.home else {
+            return Ok(());
+        };
+        let entries = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        let mut records = Vec::new();
+        for entry in entries.iter() {
+            let metadata = entry.metadata.lock().map_err(|_| DaemonError::Poisoned)?;
+            let pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
+            if let (Some(session_id), Some(pid)) = (&metadata.session_id, pane.process_id())
+                && let Ok(process) = process_identity(pid)
+            {
+                records.push(PaneProcessRecord {
+                    pane_id: pane.id().to_owned(),
+                    session_id: session_id.clone(),
+                    process,
+                });
+            }
+        }
+        write_daemon_record(
+            &home.join("daemon.json"),
+            &DaemonRecord {
+                version: 1,
+                panes: records,
+                extra: Default::default(),
+            },
+        )
+    }
+
+    fn update_layout(&self, session_id: &str, layout: Vec<LayoutRect>) -> Result<ServerResponse> {
+        if layout.len() > 16 {
+            return Ok(ServerResponse::Error {
+                message: "layout exceeds the 16-pane bound".to_owned(),
+            });
+        }
+        let mut session = read_session(session_id)?;
+        session.layout = layout
+            .into_iter()
+            .map(|rect| PaneLayout {
+                pane_id: rect.pane_id,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                order: rect.order,
+                extra: Default::default(),
+            })
+            .collect();
+        session.updated_at = orc_core::registry::now_iso();
+        write_session(&session)?;
+        Ok(ServerResponse::Ack)
+    }
+
+    fn respawn_conductor(&self, pane_id: &str) -> Result<ServerResponse> {
+        let entries = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.pane.lock().is_ok_and(|pane| pane.id() == pane_id))
+        else {
+            return Ok(ServerResponse::Error {
+                message: format!("unknown pane: {pane_id}"),
+            });
+        };
+        let mut metadata = entry.metadata.lock().map_err(|_| DaemonError::Poisoned)?;
+        if metadata.role.as_deref() != Some("brain") {
+            return Ok(ServerResponse::Error {
+                message: "only the conductor pane can be respawned".to_owned(),
+            });
+        }
+        if metadata.resume_args.is_empty() {
+            return Ok(ServerResponse::Error {
+                message: "RESUME NOT SUPPORTED by this harness".to_owned(),
+            });
+        }
+        let mut pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
+        if !pane.has_exited()? {
+            return Ok(ServerResponse::Error {
+                message: "conductor is still running".to_owned(),
+            });
+        }
+        let prior = pane.snapshot()?;
+        let mut args = metadata.args.clone();
+        args.extend(metadata.resume_args.clone());
+        let replacement = HostedPane::spawn_with_signal_and_env(
+            pane_id,
+            metadata.harness.as_deref().unwrap_or("brain"),
+            &metadata.command,
+            &args,
+            &metadata.cwd,
+            prior.rows,
+            prior.cols,
+            self.signal.clone(),
+            &metadata.environment,
+        )?;
+        *pane = replacement;
+        metadata.down_at = None;
+        if let Some(session_id) = &metadata.session_id {
+            let mut session = read_session(session_id)?;
+            if let Some(record) = session.panes.iter_mut().find(|record| record.id == pane_id) {
+                record.state = "running".to_owned();
+                record.down_at = None;
+                record.pid = pane.process_id();
+            }
+            session.updated_at = orc_core::registry::now_iso();
+            write_session(&session)?;
+        }
+        drop(pane);
+        drop(metadata);
+        drop(entries);
+        self.persist_process_records()?;
+        Ok(ServerResponse::Ack)
     }
 
     fn respond(&self, request: ClientRequest) -> Result<ServerResponse> {
@@ -288,6 +621,36 @@ impl Daemon {
             ClientRequest::Metrics => Ok(ServerResponse::Metrics {
                 metrics: self.metrics()?,
             }),
+            ClientRequest::Home => self.home_response(),
+            ClientRequest::CreateSession {
+                brain,
+                workers,
+                cwd,
+            } => Ok(ServerResponse::SessionCreated {
+                session_id: self.launch_session(&brain, &workers, Path::new(&cwd))?,
+            }),
+            ClientRequest::AttachSession { session_id } => {
+                let session = read_session(&session_id)?;
+                Ok(ServerResponse::SessionAttached {
+                    panes: self.snapshots_for(Some(&session_id))?,
+                    layout: session
+                        .layout
+                        .into_iter()
+                        .map(|rect| LayoutRect {
+                            pane_id: rect.pane_id,
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                            order: rect.order,
+                        })
+                        .collect(),
+                })
+            }
+            ClientRequest::UpdateLayout { session_id, layout } => {
+                self.update_layout(&session_id, layout)
+            }
+            ClientRequest::RespawnConductor { pane_id } => self.respawn_conductor(&pane_id),
         }
     }
 }
@@ -564,6 +927,7 @@ fn write_response(stream: &mut UnixStream, response: &ServerResponse) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -573,7 +937,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use orc_proto::{ClientRequest, PROTOCOL_VERSION, ServerResponse};
+    use orc_core::bench::{HarnessConfig, HarnessRegistry, read_session, write_harness_registry};
+    use orc_proto::{ClientRequest, LayoutRect, PROTOCOL_VERSION, ServerResponse};
     use orc_pty::{HostedPane, update_signal};
 
     use super::{
@@ -874,5 +1239,167 @@ mod tests {
         daemon.forget_client_sizes(2).expect("detach large client");
         let remaining = daemon.snapshots().expect("remaining snapshot");
         assert_eq!((remaining[0].rows, remaining[0].cols), (20, 80));
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn session_launch_attribution_layout_and_repeated_conductor_recovery_are_durable() {
+        let root = std::env::temp_dir().join(format!("orcd-session-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create session root");
+        // SAFETY: daemon crate tests that mutate ORC_HOME are serialized by this single test.
+        unsafe { std::env::set_var("ORC_HOME", &root) };
+        let brain_script = root.join("brain.sh");
+        fs::write(
+            &brain_script,
+            format!(
+                "#!/bin/sh\necho \"$ORC_SESSION|$ORC_PANE_ID|$*\" >> {}\necho last-screen-token\nsleep 0.1\n",
+                root.join("launches.txt").display()
+            ),
+        )
+        .expect("write brain fixture");
+        let worker_script = root.join("worker.sh");
+        fs::write(
+            &worker_script,
+            format!(
+                "#!/bin/sh\necho \"$ORC_SESSION|$ORC_PANE_ID|worker\" >> {}\nsleep 30\n",
+                root.join("launches.txt").display()
+            ),
+        )
+        .expect("write worker fixture");
+        let harness = |script: &Path, resume: &[&str], roles: &[&str]| HarnessConfig {
+            command: "/bin/sh".to_owned(),
+            args: vec![script.to_string_lossy().into_owned()],
+            resume_args: resume.iter().map(|value| (*value).to_owned()).collect(),
+            roles: roles.iter().map(|value| (*value).to_owned()).collect(),
+            adapter: "fixture".to_owned(),
+            extra: BTreeMap::new(),
+        };
+        let mut registry = HarnessRegistry {
+            harnesses: BTreeMap::from([
+                (
+                    "brain-fixture".to_owned(),
+                    harness(&brain_script, &["--resume"], &["brain"]),
+                ),
+                (
+                    "worker-fixture".to_owned(),
+                    harness(&worker_script, &[], &["worker"]),
+                ),
+            ]),
+            default_workers: vec!["worker-fixture".to_owned()],
+            ..HarnessRegistry::default()
+        };
+        write_harness_registry(&registry).expect("write fixture harness registry");
+
+        let daemon = Daemon::production(root.clone(), update_signal());
+        let session_id = daemon
+            .launch_session(
+                "brain-fixture",
+                &["worker-fixture".to_owned()],
+                Path::new("/tmp"),
+            )
+            .expect("launch fixture session");
+        thread::sleep(Duration::from_millis(180));
+        let panes = daemon
+            .snapshots_for(Some(&session_id))
+            .expect("snapshot dead conductor");
+        let brain = panes
+            .iter()
+            .find(|pane| pane.role.as_deref() == Some("brain"))
+            .expect("brain pane");
+        let worker = panes
+            .iter()
+            .find(|pane| pane.role.as_deref() == Some("worker"))
+            .expect("worker pane");
+        assert_eq!(brain.state.as_deref(), Some("conductor_down"));
+        assert_eq!(worker.state.as_deref(), Some("running"));
+        let last_screen = brain
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<String>();
+        assert!(last_screen.contains("last-screen-token"));
+        let worker_pid = read_session(&session_id)
+            .expect("read launched session")
+            .panes
+            .into_iter()
+            .find(|pane| pane.role == "worker")
+            .and_then(|pane| pane.pid)
+            .expect("worker pid");
+
+        let brain_id = brain.id.clone();
+        assert!(matches!(
+            daemon.respawn_conductor(&brain_id).expect("first respawn"),
+            ServerResponse::Ack
+        ));
+        thread::sleep(Duration::from_millis(180));
+        let repeated = daemon
+            .snapshots_for(Some(&session_id))
+            .expect("snapshot repeated crash");
+        assert_eq!(
+            repeated
+                .iter()
+                .find(|pane| pane.id == brain_id)
+                .and_then(|pane| pane.state.as_deref()),
+            Some("conductor_down")
+        );
+        assert!(matches!(
+            daemon.respawn_conductor(&brain_id).expect("second respawn"),
+            ServerResponse::Ack
+        ));
+        assert!(orc_core::registry::pid_alive(Some(worker_pid)));
+        thread::sleep(Duration::from_millis(180));
+        let _ = daemon
+            .snapshots_for(Some(&session_id))
+            .expect("persist second conductor crash");
+
+        daemon
+            .update_layout(
+                &session_id,
+                vec![LayoutRect {
+                    pane_id: brain_id,
+                    x: 2,
+                    y: 1,
+                    width: 60,
+                    height: 28,
+                    order: 0,
+                }],
+            )
+            .expect("persist layout");
+        let durable = read_session(&session_id).expect("read durable recovery session");
+        assert_eq!(durable.layout[0].x, 2);
+        assert!(durable.reorientation.is_some());
+        let launches = fs::read_to_string(root.join("launches.txt")).expect("read attribution");
+        assert!(launches.contains(&format!("{session_id}|{session_id}-brain|")));
+        assert!(launches.contains(&format!("{session_id}|{session_id}-worker-1|worker")));
+        assert!(launches.contains("--resume"));
+
+        let restarted = Daemon::production(root.clone(), update_signal());
+        let ServerResponse::Home { sessions, .. } =
+            restarted.home_response().expect("restart HOME")
+        else {
+            panic!("expected HOME response");
+        };
+        assert_eq!(sessions[0].attention, 1);
+
+        registry
+            .harnesses
+            .get_mut("brain-fixture")
+            .expect("fixture brain config")
+            .resume_args
+            .clear();
+        write_harness_registry(&registry).expect("write unsupported registry");
+        let unsupported = daemon
+            .launch_session("brain-fixture", &[], Path::new("/tmp"))
+            .expect("launch unsupported session");
+        thread::sleep(Duration::from_millis(180));
+        let unsupported_id = format!("{unsupported}-brain");
+        assert!(matches!(
+            daemon
+                .respawn_conductor(&unsupported_id)
+                .expect("unsupported response"),
+            ServerResponse::Error { message } if message.contains("RESUME NOT SUPPORTED")
+        ));
+        let _ = fs::remove_dir_all(root);
     }
 }

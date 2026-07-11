@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! `pi-orchestra` phase-one Bench client spike.
+//! `pi-orchestra` HOME, STAGE, and attach client.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -7,12 +7,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
-use orc_app::{BenchClient, ThemeName, benchmark, run};
+use clap::{Parser, Subcommand};
+use orc_app::{BenchClient, ThemeName, benchmark, visible_input_benchmark};
 
 #[derive(Debug, Parser)]
-#[command(about = "Attach to the Bench daemon spike")]
+#[command(about = "Open or attach to the pi-orchestra Bench")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<AppCommand>,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long, default_value = "ember")]
@@ -25,6 +27,23 @@ struct Args {
     metrics: bool,
     #[arg(long)]
     snapshot_once: bool,
+    #[arg(long)]
+    visible_bench: bool,
+    #[arg(long, default_value = "pane-1")]
+    pane_id: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum AppCommand {
+    /// Open HOME.
+    Home,
+    /// Reconnect to a durable session, defaulting to the newest.
+    Attach {
+        /// Stable session identifier.
+        session: Option<String>,
+    },
+    /// Open the honest Phase-2 RUNS shell placeholder.
+    Runs,
 }
 
 fn orchestra_home() -> PathBuf {
@@ -88,6 +107,14 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    if args.visible_bench {
+        let summary = visible_input_benchmark(&socket, &args.pane_id, args.iterations)?;
+        println!(
+            "{{\"iterations\":{},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"max_us\":{}}}",
+            args.iterations, summary.p50_us, summary.p95_us, summary.p99_us, summary.max_us
+        );
+        return Ok(());
+    }
     if args.metrics {
         let metrics = BenchClient::connect(&socket)?.metrics()?;
         println!("{}", serde_json::to_string(&metrics)?);
@@ -102,6 +129,22 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&sequences)?);
         return Ok(());
     }
-    run(socket, ThemeName::named(&args.theme))?;
+    let (initial_session, runs) = match args.command {
+        Some(AppCommand::Attach { session }) => {
+            let session = if session.is_some() {
+                session
+            } else {
+                BenchClient::connect(&socket)?
+                    .home()?
+                    .sessions
+                    .first()
+                    .map(|session| session.id.clone())
+            };
+            (session, false)
+        }
+        Some(AppCommand::Runs) => (None, true),
+        Some(AppCommand::Home) | None => (None, false),
+    };
+    orc_app::run_initial(socket, ThemeName::named(&args.theme), initial_session, runs)?;
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
@@ -415,8 +415,20 @@ fn dispatch(command: Commands) -> Result<i32> {
             Ok(0)
         }
         Commands::Top { theme } => {
-            orc_tui::run(theme.as_deref())?;
-            Ok(0)
+            let current = std::env::current_exe().context("locate orc binary")?;
+            let sibling = current.with_file_name("pi-orchestra");
+            let executable = if sibling.is_file() {
+                sibling
+            } else {
+                PathBuf::from("pi-orchestra")
+            };
+            let mut command = Command::new(executable);
+            if let Some(theme) = theme {
+                command.args(["--theme", &theme]);
+            }
+            command.arg("runs");
+            let status = command.status().context("open pi-orchestra RUNS shell")?;
+            Ok(status.code().unwrap_or(1))
         }
     }
 }
