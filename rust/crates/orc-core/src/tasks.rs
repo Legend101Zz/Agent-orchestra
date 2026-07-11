@@ -442,6 +442,15 @@ fn expected_worktree_path(session: &str, id: &str) -> PathBuf {
 }
 
 fn worktree_parent_is_safe(path: &Path) -> Result<()> {
+    let root = home().join("worktrees");
+    if !path.starts_with(&root) {
+        bail!("ISOLATION UNAVAILABLE: worktree path escapes its owned root")
+    }
+    fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
+    let root_metadata = fs::symlink_metadata(&root)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        bail!("ISOLATION UNAVAILABLE: worktree root is not an owned directory")
+    }
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("worktree path has no parent"))?;
@@ -449,6 +458,10 @@ fn worktree_parent_is_safe(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(parent)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         bail!("ISOLATION UNAVAILABLE: worktree parent is not an owned directory")
+    }
+    let canonical_root = fs::canonicalize(&root)?;
+    if !fs::canonicalize(parent)?.starts_with(canonical_root) {
+        bail!("ISOLATION UNAVAILABLE: worktree parent escapes its owned root")
     }
     if path.exists() || fs::symlink_metadata(path).is_ok() {
         bail!("ISOLATION UNAVAILABLE: owned worktree path already exists")
@@ -503,13 +516,13 @@ fn base_is_clean(repo: &Path, branch: &str, commit: &str) -> Result<()> {
     Ok(())
 }
 
-fn mark_unavailable(task: &mut Task, reason: String) {
+fn mark_unavailable(task: &mut Task, actor: TaskActor, reason: String) {
     if let Some(worktree) = task.worktree.as_mut() {
         worktree.state = "unavailable".to_owned();
         worktree.reason = Some(reason.clone());
         append_history(
             task,
-            TaskActor::Human,
+            actor,
             "isolation_unavailable",
             None,
             None,
@@ -518,7 +531,7 @@ fn mark_unavailable(task: &mut Task, reason: String) {
     }
 }
 
-fn materialize_worktree(task: &mut Task) -> Result<()> {
+fn materialize_worktree(task: &mut Task, actor: TaskActor) -> Result<()> {
     if task.worktree.is_none() {
         return Ok(());
     }
@@ -560,11 +573,11 @@ fn materialize_worktree(task: &mut Task) -> Result<()> {
         worktree.path = Some(path.to_string_lossy().into_owned());
         worktree.branch = Some(owned_branch);
         worktree.reason = None;
-        append_history(task, TaskActor::Human, "isolated", None, None, None);
+        append_history(task, actor, "isolated", None, None, None);
         Ok(())
     })();
     if let Err(error) = result {
-        mark_unavailable(task, error.to_string());
+        mark_unavailable(task, actor, error.to_string());
     }
     Ok(())
 }
@@ -740,7 +753,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
     );
     write_task(&task)?;
     if new.isolate {
-        materialize_worktree(&mut task)?;
+        materialize_worktree(&mut task, actor)?;
         write_task(&task)?;
     }
     Ok(task)

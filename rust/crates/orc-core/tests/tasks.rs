@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -252,5 +253,52 @@ fn isolated_tasks_diff_merge_and_drop_only_owned_worktrees() {
             .unwrap()
             .contains("two")
     );
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn isolation_refuses_symlinked_roots_and_preserves_the_calling_actor() {
+    let _guard = lock();
+    let home = fresh_home();
+    let repo = home.join("repo");
+    let redirected = home.join("redirected-worktrees");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&redirected).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    git(
+        &repo,
+        &["config", "user.email", "task-test@example.invalid"],
+    );
+    git(&repo, &["config", "user.name", "Task Test"]);
+    fs::write(repo.join("story.txt"), "one\n").unwrap();
+    git(&repo, &["add", "story.txt"]);
+    git(&repo, &["commit", "-m", "initial"]);
+    // SAFETY: this test serializes the process-wide registry root.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_harness_registry(&HarnessRegistry::default()).unwrap();
+    let session = create_session("codex", &["pi-m3".to_owned()], &repo).unwrap();
+    symlink(&redirected, home.join("worktrees")).unwrap();
+
+    let task = add_task(
+        &session.id,
+        TaskActor::Brain,
+        NewTask {
+            title: "must not escape owned root".to_owned(),
+            isolate: true,
+            ..NewTask::default()
+        },
+    )
+    .unwrap();
+    let worktree = task.worktree.as_ref().unwrap();
+    assert_eq!(worktree.state, "unavailable");
+    assert!(
+        worktree
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("worktree root is not an owned directory")
+    );
+    assert_eq!(task.history.last().unwrap().actor, "brain");
+    assert!(fs::read_dir(&redirected).unwrap().next().is_none());
     let _ = fs::remove_dir_all(home);
 }
