@@ -523,6 +523,7 @@ enum LeaderAction {
     Grow,
     Shrink,
     Home,
+    Score,
 }
 
 #[derive(Default)]
@@ -552,6 +553,7 @@ impl RawRouter {
                     b'+' | b'=' => Some(LeaderAction::Grow),
                     b'-' => Some(LeaderAction::Shrink),
                     b'h' => Some(LeaderAction::Home),
+                    b'b' => Some(LeaderAction::Score),
                     _ => {
                         forwarded.push(byte);
                         None
@@ -593,6 +595,8 @@ struct ScoreState {
     tasks: Vec<TaskSummary>,
     selected: usize,
     message: String,
+    dragging: Option<String>,
+    width: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -656,8 +660,9 @@ struct ShellState {
     theme: Theme,
 }
 
-fn render_score(frame: &mut Frame<'_>, score: &ScoreState, theme: Theme) {
+fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
     let area = frame.area();
+    score.width = area.width.max(1);
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
     let columns = ["backlog", "assigned", "running", "review", "done"];
     let width = (area.width / columns.len() as u16).max(1);
@@ -693,8 +698,19 @@ fn render_score(frame: &mut Frame<'_>, score: &ScoreState, theme: Theme) {
             if let Some(diff) = &task.diff {
                 lines.push(format!("  {diff}"));
             }
+            if let Some(tokens) = &task.tokens {
+                lines.push(format!("  {tokens} tokens"));
+            }
             if task.blocked {
                 lines.push("  BLOCKED: dependencies".to_owned());
+            }
+            if selected {
+                if let Some(history) = task.history.last() {
+                    lines.push(format!("  {} {}", history.actor, history.action));
+                }
+                if !score.message.is_empty() {
+                    lines.push(format!("  ERROR: {}", score.message));
+                }
             }
         }
         if lines.len() == 1 {
@@ -707,8 +723,8 @@ fn render_score(frame: &mut Frame<'_>, score: &ScoreState, theme: Theme) {
     }
     frame.render_widget(
         Paragraph::new(format!(
-            " SCORE / {} · j/k select · h/l move · g stage · V views · {}",
-            score.session_id, score.message
+            " SCORE / {} · j/k select · h/l move · drag column · g stage · ctrl-g b board",
+            score.session_id
         ))
         .style(Style::default().fg(theme.dim)),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
@@ -826,7 +842,7 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
             }
         }
         ShellView::Score => {
-            if let Some(score) = shell.score.as_ref() {
+            if let Some(score) = shell.score.as_mut() {
                 render_score(frame, score, shell.theme);
             }
         }
@@ -915,6 +931,8 @@ fn attach_stage(
         session_id,
         selected: 0,
         message: String::new(),
+        dragging: None,
+        width: 1,
     });
     shell.view = ShellView::Stage;
     Ok(())
@@ -1123,8 +1141,48 @@ fn handle_raw_event(
                 return Ok(false);
             };
             if bytes == b"g" {
+                if let (Some(stage), Some(task)) =
+                    (shell.stage.as_mut(), score.tasks.get(score.selected))
+                {
+                    if let Some(pane_id) = &task.assignee_run {
+                        if let Some(index) = stage.panes.iter().position(|pane| &pane.id == pane_id)
+                        {
+                            stage.focus = index;
+                        }
+                    }
+                }
                 shell.view = ShellView::Stage;
                 return Ok(false);
+            }
+            if let Some((button, column, _row, suffix)) = score_mouse(bytes) {
+                let statuses = ["backlog", "assigned", "running", "review", "done"];
+                let index = usize::from(column.saturating_sub(1)).saturating_mul(statuses.len())
+                    / usize::from(score.width.max(1));
+                let target = statuses[index.min(statuses.len().saturating_sub(1))];
+                if button == 0 && suffix == 'M' {
+                    score.dragging = score
+                        .tasks
+                        .iter()
+                        .find(|task| task.status == target)
+                        .map(|task| task.id.clone());
+                    return Ok(false);
+                }
+                if suffix == 'm' {
+                    if let Some(task_id) = score.dragging.take() {
+                        match commands.move_task(
+                            score.session_id.clone(),
+                            task_id,
+                            target.to_owned(),
+                        ) {
+                            Ok(tasks) => {
+                                score.tasks = tasks;
+                                score.message.clear();
+                            }
+                            Err(error) => score.message = error.to_string(),
+                        }
+                    }
+                    return Ok(false);
+                }
             }
             if bytes == b"j" && !score.tasks.is_empty() {
                 score.selected = (score.selected + 1) % score.tasks.len();
@@ -1135,11 +1193,25 @@ fn handle_raw_event(
                     .checked_sub(1)
                     .unwrap_or_else(|| score.tasks.len().saturating_sub(1));
             }
-            let target = match bytes {
-                b"h" => Some("backlog"),
-                b"l" => Some("review"),
-                _ => None,
-            };
+            let target = score
+                .tasks
+                .get(score.selected)
+                .and_then(|task| match bytes {
+                    b"h" => match task.status.as_str() {
+                        "assigned" => Some("backlog"),
+                        "running" => Some("assigned"),
+                        "review" => Some("running"),
+                        _ => None,
+                    },
+                    b"l" => match task.status.as_str() {
+                        "backlog" => Some("assigned"),
+                        "assigned" => Some("running"),
+                        "running" => Some("review"),
+                        "review" => Some("done"),
+                        _ => None,
+                    },
+                    _ => None,
+                });
             if let (Some(status), Some(task)) = (target, score.tasks.get(score.selected)) {
                 match commands.move_task(
                     score.session_id.clone(),
@@ -1214,6 +1286,11 @@ fn handle_raw_event(
                         }
                     }
                     LeaderAction::Home => shell.view = ShellView::Home,
+                    LeaderAction::Score => {
+                        if shell.score.is_some() {
+                            shell.view = ShellView::Score;
+                        }
+                    }
                 }
             }
             if !forwarded.is_empty() {
@@ -1311,6 +1388,29 @@ fn route_raw_mouse(bytes: &[u8], state: &mut StageState) -> Option<Option<Vec<u8
     let x = column.saturating_sub(inner.x) + 1;
     let y = row.saturating_sub(inner.y) + 1;
     Some(Some(format!("\x1b[<{code};{x};{y}{suffix}").into_bytes()))
+}
+
+/// Parse the bounded SGR mouse sequence used for SCORE card dragging.
+///
+/// The client only consumes complete press/release events; every other byte
+/// remains available to the focused STAGE pane through its raw router.
+fn score_mouse(bytes: &[u8]) -> Option<(u16, u16, u16, char)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let body = text.strip_prefix("\u{1b}[<")?;
+    let suffix = body.chars().last()?;
+    if !matches!(suffix, 'M' | 'm') {
+        return None;
+    }
+    let values = body.strip_suffix(suffix)?.split(';').collect::<Vec<_>>();
+    if values.len() != 3 {
+        return None;
+    }
+    Some((
+        values[0].parse().ok()?,
+        values[1].parse().ok()?,
+        values[2].parse().ok()?,
+        suffix,
+    ))
 }
 
 fn handle_home_key(
@@ -1716,13 +1816,15 @@ const fn ratatui_color(color: TerminalColor, default: Color) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use orc_proto::{HarnessSummary, PaneSnapshot, SessionSummary, TerminalCell};
+    use orc_proto::{
+        HarnessSummary, PaneSnapshot, SessionSummary, TaskHistorySummary, TaskSummary, TerminalCell,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     use super::{
-        HomeData, HomeState, RawRouter, StageState, Theme, ThemeName, render_home, render_stage,
-        route_raw_mouse,
+        HomeData, HomeState, RawRouter, ScoreState, StageState, Theme, ThemeName, render_home,
+        render_score, render_stage, route_raw_mouse, score_mouse,
     };
 
     fn panes() -> Vec<PaneSnapshot> {
@@ -1871,5 +1973,57 @@ mod tests {
             .expect("parse mouse")
             .expect("forward mouse");
         assert_eq!(translated, b"\x1b[<0;2;2M");
+    }
+
+    #[test]
+    fn score_snapshots_and_drag_parser_cover_the_two_themes_and_required_sizes() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme_name in [ThemeName::Ember, ThemeName::Phosphor] {
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).expect("test SCORE terminal");
+                let mut state = ScoreState {
+                    session_id: "score-session".to_owned(),
+                    tasks: vec![TaskSummary {
+                        id: "T0001".to_owned(),
+                        title: "review worktree".to_owned(),
+                        status: "review".to_owned(),
+                        assignee: Some("pi-m3".to_owned()),
+                        assignee_run: Some("pane-worker".to_owned()),
+                        isolated: true,
+                        isolation: Some("ready".to_owned()),
+                        blocked: true,
+                        tokens: Some("1.2k".to_owned()),
+                        diff: Some("+4 -1 · 1 files".to_owned()),
+                        history: vec![TaskHistorySummary {
+                            at: "now".to_owned(),
+                            actor: "human".to_owned(),
+                            action: "moved".to_owned(),
+                            to: Some("review".to_owned()),
+                        }],
+                    }],
+                    selected: 0,
+                    message: "dependency still open".to_owned(),
+                    dragging: None,
+                    width: 1,
+                };
+                terminal
+                    .draw(|frame| render_score(frame, &mut state, Theme::from(theme_name)))
+                    .expect("render SCORE");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("SCORE"));
+                assert!(text.contains("T0001"));
+                assert!(text.contains("BLOCKED"));
+                assert!(text.contains("+4 -1"));
+            }
+        }
+        assert_eq!(score_mouse(b"\x1b[<0;12;4M"), Some((0, 12, 4, 'M')));
+        assert_eq!(score_mouse(b"\x1b[<0;70;9m"), Some((0, 70, 9, 'm')));
+        assert_eq!(score_mouse(b"not-mouse"), None);
     }
 }
