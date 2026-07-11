@@ -23,6 +23,13 @@ fn harness_defaults_are_editable_additive_and_sessions_write_atomically() {
     unsafe { std::env::set_var("ORC_HOME", &home) };
     let mut registry = load_harness_registry().unwrap();
     assert_eq!(registry.default_workers, ["hermes", "pi-m3"]);
+    assert_eq!(
+        registry
+            .harnesses
+            .get("pi-m3")
+            .map(|config| config.dispatch_args.as_slice()),
+        Some(["-p".to_owned(), "--no-session".to_owned()].as_slice())
+    );
     registry
         .extra
         .insert("future".to_owned(), json!({"kept": true}));

@@ -3,6 +3,8 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use orc_core::adapter::summarize_registry;
+use orc_core::bench::load_harness_registry;
 use orc_core::control::{self, LaunchOptions};
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
 use orc_core::quota;
@@ -181,6 +183,11 @@ enum Commands {
         #[command(subcommand)]
         command: DispatchCommand,
     },
+    /// Show verified adapter capabilities and explicit degradations.
+    Adapter {
+        #[command(subcommand)]
+        command: AdapterCommand,
+    },
     /// Maintain the durable session task board.
     Task {
         #[command(subcommand)]
@@ -347,6 +354,15 @@ enum DispatchCommand {
         id: String,
         #[arg(long)]
         session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdapterCommand {
+    /// List configured harness capabilities without invoking a provider.
+    List {
         #[arg(long)]
         json: bool,
     },
@@ -578,6 +594,32 @@ fn dispatch_dispatch(command: DispatchCommand) -> Result<i32> {
             let record = orc_core::dispatch::read_dispatch(&session, &id)?;
             print_dispatch(&record, json)?;
             Ok(if record.is_confirmed() { 0 } else { 1 })
+        }
+    }
+}
+
+fn dispatch_adapter(command: AdapterCommand) -> Result<i32> {
+    match command {
+        AdapterCommand::List { json } => {
+            let adapters = summarize_registry(&load_harness_registry()?);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&adapters)?);
+            } else {
+                for adapter in adapters {
+                    let executable = adapter.executable.as_deref().unwrap_or("unavailable");
+                    println!(
+                        "{:<10} pane={} dispatch={} steer={} exact_usage={} executable={}",
+                        adapter.harness,
+                        adapter.interactive_pane,
+                        adapter.headless_delivery,
+                        adapter.steerable,
+                        adapter.exact_usage,
+                        executable,
+                    );
+                    println!("    {}", adapter.degradation);
+                }
+            }
+            Ok(0)
         }
     }
 }
@@ -848,6 +890,7 @@ fn dispatch(command: Commands) -> Result<i32> {
             Ok(status.code().unwrap_or(1))
         }
         Commands::Dispatch { command } => dispatch_dispatch(command),
+        Commands::Adapter { command } => dispatch_adapter(command),
         Commands::Task { command } => dispatch_task(command),
     }
 }

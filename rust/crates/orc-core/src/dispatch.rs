@@ -27,6 +27,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::adapter::locate_executable;
 use crate::bench::{
     HarnessConfig, HarnessRegistry, dispatch_timeout_for, load_harness_registry, read_session,
 };
@@ -343,24 +344,6 @@ fn shell_escape(value: &str) -> String {
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
-}
-
-fn locate_executable(command: &str) -> Option<PathBuf> {
-    if command.contains('/') {
-        let path = PathBuf::from(command);
-        if path.is_file() {
-            return Some(path);
-        }
-        return None;
-    }
-    let paths = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&paths) {
-        let candidate = directory.join(command);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn invoke_harness(

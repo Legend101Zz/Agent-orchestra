@@ -172,7 +172,7 @@ impl Default for HarnessRegistry {
                         &[],
                         &["brain", "worker"],
                         "pi",
-                        &[],
+                        &["-p", "--no-session"],
                     ),
                 ),
             ]),

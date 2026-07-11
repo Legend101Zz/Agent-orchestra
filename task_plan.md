@@ -8,8 +8,9 @@ fix-first findings landed, so implementation now proceeds entirely on
 Ship pi-orchestra v4 Bench according to the approved rev-3 design, with every
 phase gated, committed, pushed, and evidenced.
 
-**Current handoff:** Phase 4 is under final verification on `v4-phase4`. Finish
-only the Phase 4 gates/evidence/merge/push, then stop before Phase 5.
+**Current handoff:** Phase 5 is complete on `v4-phase5` pending final gates,
+evidence, intentional commit, merge, and remote-main proof. Do not start
+Phase 6, a web UI, or a provider proxy.
 
 ## Phases
 - [x] Read the approved design, v3 review/spec, friction log, README, skills,
@@ -23,4 +24,5 @@ only the Phase 4 gates/evidence/merge/push, then stop before Phase 5.
 - [x] Phase 3: tasks, worktrees, SCORE, skills
 - [x] Phase 4: confirmed dispatch, baton event motion, RUNS port, polish,
       measured performance
-- [ ] Phase 5: adapters, documentation, captures, orchestrated dogfood
+- [x] Phase 5: verified Hermes/pi capability handling, documentation, and
+      Bench dogfood with recorded friction

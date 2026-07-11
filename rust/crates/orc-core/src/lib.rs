@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod bench;
 pub mod control;
 pub mod dispatch;

@@ -169,8 +169,8 @@ Unknown fields survive round trips. Defaults:
   "harnesses": {
     "claude": {"command":"claude","args":[],"resume_args":["--continue"],"roles":["brain","worker"],"adapter":"claude"},
     "codex": {"command":"codex","args":[],"resume_args":["resume"],"roles":["brain","worker"],"adapter":"codex"},
-    "hermes": {"command":"hermes","args":["--tui"],"resume_args":[],"roles":["brain","worker"],"adapter":"hermes"},
-    "pi-m3": {"command":"pi","args":["--provider","minimax","--model","MiniMax-M3"],"resume_args":[],"roles":["brain","worker"],"adapter":"pi"}
+    "hermes": {"command":"hermes","args":["--tui"],"resume_args":[],"roles":["brain","worker"],"adapter":"hermes","dispatch_args":["-z"]},
+    "pi-m3": {"command":"pi","args":["--provider","minimax","--model","MiniMax-M3"],"resume_args":[],"roles":["brain","worker"],"adapter":"pi","dispatch_args":["-p","--no-session"]}
   },
   "default_workers": ["hermes", "pi-m3"],
   "max_parallel_workers": 3,
@@ -180,14 +180,49 @@ Unknown fields survive round trips. Defaults:
 
 Only `ember` and `phosphor` are supported themes.
 
+## Phase 5: verified adapters and availability
+
+Check what this machine can honestly offer before creating work:
+
+```bash
+orc adapter list
+orc adapter list --json
+```
+
+This command never contacts a provider. It reports the configured executable,
+the declared non-interactive path, steering support, and exact-usage semantics.
+An executable or a registry entry by itself is not delivery proof.
+
+- **Hermes:** `hermes --help` verified `-z/--oneshot`, so a configured Hermes
+  worker can receive a bounded brief. Hermes has no verified durable steering
+  or exact-usage event, so both are displayed as unavailable.
+- **pi / MiniMax M3:** `pi --help` verified `-p`, `--mode`, `--provider`, and
+  `--model`; a real MiniMax M3 probe passed. pi supports one-shot delivery and
+  `orc rpc` follow-ups. Exact usage is recorded only if the completed pi event
+  contains usage—absence remains estimated, never fabricated.
+- **Claude and Codex:** they remain interactive-pane choices only in this
+  release. No headless delivery, steering, or exact-usage adapter is claimed.
+
+Fresh registries include the `dispatch_args` shown above. Existing
+`~/.orchestra/harnesses.json` files are intentionally not rewritten: add the
+verified `dispatch_args` yourself after inspecting the local command help, or
+leave the worker visibly unavailable. `orc adapter list` makes that degradation
+explicit.
+
+`orc run` is usable only when `pi --list-models minimax` lists `MiniMax-M3` and
+a small local run succeeds. If either check fails, do not use `--force` or
+claim the worker is available; use an available Bench worker or fix the local
+pi installation first.
+
 ## Phase 4: confirmed delivery and polish
 
 Every Bench pane starts with `ORC_SESSION`, `ORC_PANE_ID`, `ORC_WORKERS`, and
 an `ORC_DELEGATE_HINT`. `ORC_WORKERS` is an offer: the brain selects a running
 pane whose harness declares a demonstrated non-interactive `dispatch_args`
-capability. Hermes uses its locally verified `-z/--oneshot` interface. Missing
-executables, missing capability, stopped panes, timeouts, and non-zero exits
-are durable failures and are never presented as receipt.
+capability. Hermes uses its locally verified `-z/--oneshot` interface and a
+fresh pi registry uses `-p --no-session`. Missing executables, missing
+capability, stopped panes, timeouts, and non-zero exits are durable failures
+and are never presented as receipt.
 
 Dispatch records are bounded to 16 KiB prompt/output excerpts and a bounded
 timeout. A confirmed record writes `delivery_confirmed` into the task history

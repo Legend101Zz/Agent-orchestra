@@ -271,11 +271,12 @@ fn dispatch_without_a_non_interactive_capability_is_failed_with_capability_unava
     let session_id = session_id["id"].as_str().expect("session id").to_owned();
     let task = running_task(&home, &session_id, "missing capability dispatch");
 
-    let pi_config = registry
+    let mut pi_config = registry
         .harnesses
         .get("pi-m3")
         .cloned()
         .expect("pi-m3 harness");
+    pi_config.dispatch_args.clear();
     registry
         .harnesses
         .insert("no-cap-fixture".to_owned(), pi_config);

@@ -176,3 +176,28 @@
 - Phase 4 release measurements: socket p99 16 us; visible-input p99 3.628 ms;
   settled daemon 0.0% CPU; a 20,000-line burst coalesced 19,819 of 19,825
   output generations across 20 snapshots.
+
+## Session 7 — 2026-07-12 (v4 Phase 5)
+- Started `v4-phase5` from remote-verified `origin/main` at
+  `43c0c5463d13b2e6a7ad4978a6e8ea6aa88e1313` while preserving the local Ghostty
+  repair, updated next-session prompt, and untracked `findings.md`.
+- Verified Hermes help before implementation: `-z/--oneshot` is a bounded
+  non-interactive path. Verified pi help and `pi --list-models minimax`, then
+  completed a real no-tools MiniMax M3 probe. The new typed adapter summary
+  exposes only Hermes and pi capabilities: Hermes delivery only; pi delivery,
+  RPC steering, and conditional exact usage. Claude/Codex remain explicitly
+  best-effort interactive panes.
+- Fresh registries now declare pi `-p --no-session` dispatch. Existing user
+  registries are never rewritten; `orc adapter list` reports their unavailable
+  delivery path until the user opts in with locally verified arguments.
+- Ran an isolated real Bench dogfood: a clean worktree base allowed a
+  worktree-isolated SCORE task, linked to a running Hermes pane. The durable
+  dispatch returned exit 0 and `HERMES_DOGFOOD_OK`, then wrote
+  `delivery_confirmed`. The original dirty working checkout correctly refused
+  isolation. A raw `orchestrate` prompt reached the Hermes brain, but it spent
+  the bounded trial inspecting the global orchestra home instead of performing
+  the requested task; the human completed the explicit board path and the
+  friction is recorded rather than attributed to the brain.
+- A real release `orc run` completed with exact MiniMax usage (1,576 total
+  tokens and $0.000440). The quota warning was relayed verbatim. Full commands,
+  constraints, and gate results are in the dated Phase 5 evidence note.

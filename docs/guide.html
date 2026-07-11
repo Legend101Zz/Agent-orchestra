@@ -370,7 +370,7 @@
       <h3>Only when you want it</h3>
       <ul>
         <li><code>deleg8</code> / <code>pi-rpc</code> are zsh functions for <em>your</em> interactive terminal (new terminals from now on; existing ones need <code>source ~/.zshrc</code>).</li>
-        <li>Brains' tool shells are non-interactive, so they don't see those functions — their skills tell them to call <code>orc run … --brain claude</code> directly. Verified working.</li>
+        <li>Brains' tool shells are non-interactive, so they don't see those functions. Claude and Codex can use their installed instructions; Hermes has no verified AGENTS-equivalent hook and must be given the explicit board command path.</li>
         <li><code>pi-orchestra</code> — opens HOME; <code>pi-orchestra attach</code> reconnects to daemon-owned panes.</li>
         <li><code>orc top</code> — opens the event-driven RUNS ledger inside the Bench client.</li>
         <li>The <code>orchestrate</code> swarm — fires only when you type the keyword.</li>
@@ -396,6 +396,7 @@
       <tr><td>Open the RUNS shell</td><td><span class="cmd">orc top</span></td></tr>
       <tr><td>Open first-use and recovery help</td><td><span class="cmd">?</span></td></tr>
       <tr><td>Confirm a worker delivery</td><td><span class="cmd">orc dispatch send T0001 hermes "brief" --pane &lt;worker-pane&gt; --session &lt;id&gt; --actor brain --json</span></td></tr>
+      <tr><td>Inspect real adapter availability</td><td><span class="cmd">orc adapter list --json</span> <span class="muted">(no provider call)</span></td></tr>
       <tr><td>List / inspect / kill runs</td><td><span class="cmd">orc list</span> · <span class="cmd">orc show &lt;id&gt;</span> · <span class="cmd">orc kill &lt;id&gt;</span></td></tr>
       <tr><td>Check the fuel gauge</td><td><span class="cmd">orc quota</span> &nbsp;(exit 0 ok · 2 warn · 3 block · 4 unknown)</td></tr>
       <tr><td>Usage &amp; savings report</td><td><span class="cmd">orc stats</span> &nbsp;(workers exact · brains estimated · delegated value)</td></tr>
@@ -410,6 +411,21 @@
       <tr><td>Install the Rust stack</td><td><span class="cmd">./install.sh</span> <span class="muted">(orc + orcd + pi-orchestra)</span></td></tr>
     </table>
     </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">07b · capability truth</p>
+  <h2>What a worker can actually do</h2>
+  <div class="panel">
+    <p>Run <code>orc adapter list</code> before planning a delegation. It reports the local executable plus only the capability shapes verified for this release; a listed harness is an editable offer, not a receipt claim.</p>
+    <table>
+      <tr><th>Harness</th><th>Verified path</th><th>Intentional degradation</th></tr>
+      <tr><td>Hermes</td><td><code>hermes -z "brief"</code> for bounded delivery</td><td>No durable steering or exact usage</td></tr>
+      <tr><td>pi / MiniMax M3</td><td><code>pi -p --provider minimax --model MiniMax-M3</code>; <code>orc rpc</code> for follow-ups</td><td>Usage is exact only when the finished pi event includes it</td></tr>
+      <tr><td>Claude / Codex</td><td>Interactive Bench panes</td><td>No verified headless adapter is claimed</td></tr>
+    </table>
+    <p class="muted">Fresh registries declare Hermes <code>-z</code> and pi <code>-p --no-session</code>. Existing registries are not rewritten: inspect local help, then opt in by editing the declared <code>dispatch_args</code>. If the executable or declared capability is missing, Bench keeps the worker unavailable.</p>
   </div>
 </section>
 
