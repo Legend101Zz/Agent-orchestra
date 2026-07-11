@@ -22,7 +22,7 @@ use crossterm::event::{
 use crossterm::execute;
 use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
-    PaneSnapshot, ServerResponse, SessionSummary, TerminalColor,
+    PaneSnapshot, ServerResponse, SessionSummary, TaskSummary, TerminalColor,
 };
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
@@ -260,6 +260,37 @@ impl BenchClient {
             ServerResponse::Error { message } => Err(AppError::Daemon(message)),
             response => Err(AppError::Daemon(format!(
                 "unexpected HOME response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Fetch SCORE cards through the daemon-owned task command path.
+    pub fn task_board(&mut self, session_id: String) -> Result<Vec<TaskSummary>> {
+        match self.request(&ClientRequest::TaskBoard { session_id })? {
+            ServerResponse::TaskBoard { tasks, .. } => Ok(tasks),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected task response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Move a SCORE card as a human through the daemon/core writer.
+    pub fn move_task(
+        &mut self,
+        session_id: String,
+        task_id: String,
+        status: String,
+    ) -> Result<Vec<TaskSummary>> {
+        match self.request(&ClientRequest::MoveTask {
+            session_id,
+            task_id,
+            status,
+        })? {
+            ServerResponse::TaskBoard { tasks, .. } => Ok(tasks),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected task move response: {response:?}"
             ))),
         }
     }
@@ -553,7 +584,15 @@ impl RawRouter {
 enum ShellView {
     Home,
     Stage,
+    Score,
     Runs,
+}
+
+struct ScoreState {
+    session_id: String,
+    tasks: Vec<TaskSummary>,
+    selected: usize,
+    message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -613,7 +652,67 @@ struct ShellState {
     view: ShellView,
     home: HomeState,
     stage: Option<StageState>,
+    score: Option<ScoreState>,
     theme: Theme,
+}
+
+fn render_score(frame: &mut Frame<'_>, score: &ScoreState, theme: Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    let columns = ["backlog", "assigned", "running", "review", "done"];
+    let width = (area.width / columns.len() as u16).max(1);
+    for (index, status) in columns.iter().enumerate() {
+        let x = area.x.saturating_add(width.saturating_mul(index as u16));
+        let column = Rect::new(
+            x,
+            area.y,
+            if index + 1 == columns.len() {
+                area.right().saturating_sub(x)
+            } else {
+                width
+            },
+            area.height,
+        );
+        let mut lines = vec![format!(" {}", status.to_ascii_uppercase())];
+        for task in score.tasks.iter().filter(|task| task.status == *status) {
+            let selected = score
+                .tasks
+                .get(score.selected)
+                .is_some_and(|chosen| chosen.id == task.id);
+            lines.push(format!(
+                "{} {} {}",
+                if selected { "›" } else { " " },
+                task.id,
+                task.title
+            ));
+            lines.push(format!(
+                "  {} · {}",
+                task.assignee.as_deref().unwrap_or("unassigned"),
+                if task.isolated { "isolate" } else { "shared" }
+            ));
+            if let Some(diff) = &task.diff {
+                lines.push(format!("  {diff}"));
+            }
+            if task.blocked {
+                lines.push("  BLOCKED: dependencies".to_owned());
+            }
+        }
+        if lines.len() == 1 {
+            lines.push("  no tasks".to_owned());
+        }
+        frame.render_widget(
+            Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.text)),
+            column,
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(format!(
+            " SCORE / {} · j/k select · h/l move · g stage · V views · {}",
+            score.session_id, score.message
+        ))
+        .style(Style::default().fg(theme.dim)),
+        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+    );
 }
 
 fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
@@ -726,6 +825,11 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
                 render_stage(frame, stage);
             }
         }
+        ShellView::Score => {
+            if let Some(score) = shell.score.as_ref() {
+                render_score(frame, score, shell.theme);
+            }
+        }
         ShellView::Runs => render_runs_placeholder(frame, shell.theme),
     }
 }
@@ -758,6 +862,7 @@ pub fn run_initial(
             message: String::new(),
         },
         stage: None,
+        score: None,
         theme: selected_theme.into(),
     };
     if let Some(session_id) = initial_session {
@@ -800,11 +905,17 @@ fn attach_stage(
 ) -> Result<()> {
     let session = commands.attach_session(session_id.clone())?;
     shell.stage = Some(StageState::for_session(
-        session_id,
+        session_id.clone(),
         session.panes,
         session.layout,
         theme,
     ));
+    shell.score = Some(ScoreState {
+        tasks: commands.task_board(session_id.clone())?,
+        session_id,
+        selected: 0,
+        message: String::new(),
+    });
     shell.view = ShellView::Stage;
     Ok(())
 }
@@ -985,7 +1096,14 @@ fn handle_raw_event(
 ) -> Result<bool> {
     if bytes == b"V" {
         shell.view = match shell.view {
-            ShellView::Home => ShellView::Runs,
+            ShellView::Home => {
+                if shell.score.is_some() {
+                    ShellView::Score
+                } else {
+                    ShellView::Runs
+                }
+            }
+            ShellView::Score => ShellView::Runs,
             ShellView::Runs | ShellView::Stage => ShellView::Home,
         };
         return Ok(false);
@@ -996,6 +1114,43 @@ fn handle_raw_event(
             for key in raw_home_keys(bytes) {
                 if handle_home_key(key, commands, shell, theme)? {
                     return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ShellView::Score => {
+            let Some(score) = shell.score.as_mut() else {
+                return Ok(false);
+            };
+            if bytes == b"g" {
+                shell.view = ShellView::Stage;
+                return Ok(false);
+            }
+            if bytes == b"j" && !score.tasks.is_empty() {
+                score.selected = (score.selected + 1) % score.tasks.len();
+            }
+            if bytes == b"k" && !score.tasks.is_empty() {
+                score.selected = score
+                    .selected
+                    .checked_sub(1)
+                    .unwrap_or_else(|| score.tasks.len().saturating_sub(1));
+            }
+            let target = match bytes {
+                b"h" => Some("backlog"),
+                b"l" => Some("review"),
+                _ => None,
+            };
+            if let (Some(status), Some(task)) = (target, score.tasks.get(score.selected)) {
+                match commands.move_task(
+                    score.session_id.clone(),
+                    task.id.clone(),
+                    status.to_owned(),
+                ) {
+                    Ok(tasks) => {
+                        score.tasks = tasks;
+                        score.message.clear();
+                    }
+                    Err(error) => score.message = error.to_string(),
                 }
             }
             Ok(false)

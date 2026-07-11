@@ -36,6 +36,12 @@ Streaming (long tasks, shows progress):
 If the shell functions are unavailable, call `orc run "task" --cwd DIR --brain claude`
 directly. Inspect/manage runs: `orc list`, `orc show <id>`, `orc kill <id>`.
 
+`pi-orchestra` is also a product-workflow trigger. Before resuming work, read
+`orc task list --session "$ORC_SESSION"` (pass `--session` explicitly when a
+command crosses shells) and `orc list`; preserve completed tasks and durable
+inbox context. Offer the configured `default_workers` (Hermes + pi/MiniMax-M3
+today), but never silently assume that pool.
+
 ## Quota rules (IMPORTANT)
 
 - `orc` prints `ORC WARNING:` / `ORC BLOCKED:` / `ORC NOTE:` lines on stderr.
@@ -55,4 +61,6 @@ directly. Inspect/manage runs: `orc list`, `orc show <id>`, `orc kill <id>`.
 ## Rules
 
 - Pass a clear, specific, self-contained task; vague prompts waste the worker's context.
-- Always set `--brain claude` / `ORC_BRAIN=claude` so the control plane attributes runs.
+- Always set the actual invoking brain with `--brain claude|codex|human` / `ORC_BRAIN`; do not copy a different brain's attribution.
+- Maintain the board through `orc task add|assign|start|review|done|drop|move --session ... --actor brain|human`; never write task JSON directly.
+- Use `orc send`, `orc retry`, and `orc handoff` for durable intervention rather than inventing runner flags. The sole runner is Rust; bounded logs still apply.

@@ -20,9 +20,10 @@ use orc_core::bench::{
     PaneLayout, SessionPaneRecord, create_session as create_bench_session, list_sessions,
     load_harness_registry, read_session, write_session,
 };
+use orc_core::tasks::{TaskActor, TaskStatus, diff_task, list_tasks, move_task};
 use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
-    PaneSnapshot, ServerResponse, SessionSummary,
+    PaneSnapshot, ServerResponse, SessionSummary, TaskHistorySummary, TaskSummary,
 };
 use orc_pty::{HostedPane, UpdateSignal};
 use serde::{Deserialize, Serialize};
@@ -568,6 +569,66 @@ impl Daemon {
         Ok(ServerResponse::Ack)
     }
 
+    fn task_board(&self, session_id: &str) -> Result<ServerResponse> {
+        let tasks = list_tasks(session_id)?;
+        let cards = tasks
+            .iter()
+            .take(256)
+            .map(|task| {
+                let blocked = task.depends_on.iter().any(|dependency| {
+                    tasks
+                        .iter()
+                        .find(|candidate| candidate.id == *dependency)
+                        .is_none_or(|candidate| candidate.status != "done")
+                });
+                let diff = if task.status == "review" {
+                    diff_task(session_id, &task.id).ok().map(|diff| {
+                        format!(
+                            "+{} -{} · {} files",
+                            diff.insertions, diff.deletions, diff.files
+                        )
+                    })
+                } else {
+                    None
+                };
+                TaskSummary {
+                    id: task.id.clone(),
+                    title: task.title.clone(),
+                    status: task.status.clone(),
+                    assignee: task.assignee.clone(),
+                    assignee_run: task.assignee_run.clone(),
+                    isolated: task.worktree.is_some(),
+                    isolation: task.worktree.as_ref().map(|worktree| {
+                        worktree
+                            .reason
+                            .clone()
+                            .unwrap_or_else(|| worktree.state.clone())
+                    }),
+                    blocked,
+                    tokens: None,
+                    diff,
+                    history: task
+                        .history
+                        .iter()
+                        .rev()
+                        .take(8)
+                        .rev()
+                        .map(|entry| TaskHistorySummary {
+                            at: entry.at.clone(),
+                            actor: entry.actor.clone(),
+                            action: entry.action.clone(),
+                            to: entry.to.clone(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        Ok(ServerResponse::TaskBoard {
+            session_id: session_id.to_owned(),
+            tasks: cards,
+        })
+    }
+
     fn respond(&self, request: ClientRequest) -> Result<ServerResponse> {
         match request {
             ClientRequest::Hello { version } if version == PROTOCOL_VERSION => {
@@ -651,6 +712,16 @@ impl Daemon {
                 self.update_layout(&session_id, layout)
             }
             ClientRequest::RespawnConductor { pane_id } => self.respawn_conductor(&pane_id),
+            ClientRequest::TaskBoard { session_id } => self.task_board(&session_id),
+            ClientRequest::MoveTask {
+                session_id,
+                task_id,
+                status,
+            } => {
+                let status = TaskStatus::parse(&status).map_err(anyhow::Error::from)?;
+                move_task(&session_id, &task_id, status, TaskActor::Human)?;
+                self.task_board(&session_id)
+            }
         }
     }
 }

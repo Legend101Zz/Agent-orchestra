@@ -19,7 +19,7 @@ must not activate.
    session. Pick a session id once, export it, then launch every worker under it:
 
        export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"
-       orc run "chunk description" --cwd /path --brain claude --bg
+       orc run "chunk description" --cwd /path --brain <your-brain> --session "$ORC_SESSION" --bg
 
    Each prints a run id. The whole swarm shows up as a single expandable session
    in `orc top`. Tell the user they can watch live there.
@@ -28,11 +28,15 @@ must not activate.
    workers also self-terminate via the idle watchdog, exit code 124).
 5. **Verify and synthesize**: workers are untrusted — check their outputs against
    the actual files before combining. Produce the final answer yourself.
-6. **Report**: include per-worker status, total estimated tokens (from `orc list
-   --json` → `tokens.estimated_total`), and the post-run `orc quota` numbers.
+6. **Report**: include per-worker status, exact `tokens.total` and `tokens.cost_usd`
+   where present, `~tokens.estimated_total` only as fallback, the `orc stats` receipt,
+   and the post-run `orc quota` numbers.
 
 ## Rules
 
 - Relay every `ORC WARNING`/`ORC BLOCKED` line to the user verbatim.
 - If two consecutive workers fail, stop the whole orchestration and report.
 - Never edit files based on worker claims without spot-checking the claim.
+- Do not invent pi or `orc` flags such as `--thinking`; tighten the prompt instead.
+- On resume, run `orc task list --session "$ORC_SESSION"` plus `orc list` before acting;
+  use `orc send`, `orc retry`, or `orc handoff` and preserve completed task context.

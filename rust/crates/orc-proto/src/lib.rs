@@ -130,6 +130,46 @@ pub struct HarnessSummary {
     pub resumable: bool,
 }
 
+/// Lightweight durable task card rendered by SCORE.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskSummary {
+    /// Stable T-prefixed task identifier.
+    pub id: String,
+    /// Card title.
+    pub title: String,
+    /// Written lifecycle state.
+    pub status: String,
+    /// Assigned worker or pane when known.
+    pub assignee: Option<String>,
+    /// Linked pane or run when known.
+    pub assignee_run: Option<String>,
+    /// Whether this task owns an isolated worktree.
+    pub isolated: bool,
+    /// Plain isolation state or reason.
+    pub isolation: Option<String>,
+    /// Unfinished dependencies.
+    pub blocked: bool,
+    /// Exact or estimated worker tokens when linked.
+    pub tokens: Option<String>,
+    /// Review worktree diff summary when available.
+    pub diff: Option<String>,
+    /// Last actor-attributed task event.
+    pub history: Vec<TaskHistorySummary>,
+}
+
+/// One actor-attributed history line for SCORE detail.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskHistorySummary {
+    /// Event timestamp.
+    pub at: String,
+    /// `human` or `brain`.
+    pub actor: String,
+    /// Event action.
+    pub action: String,
+    /// Resulting state when applicable.
+    pub to: Option<String>,
+}
+
 /// Persisted rectangle sent through a daemon mutation command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LayoutRect {
@@ -249,6 +289,20 @@ pub enum ClientRequest {
         /// Stable brain pane identifier.
         pane_id: String,
     },
+    /// Read a durable SCORE board without scanning task files in the client.
+    TaskBoard {
+        /// Owning session identifier.
+        session_id: String,
+    },
+    /// Move a task through the core state machine as a human action.
+    MoveTask {
+        /// Owning session identifier.
+        session_id: String,
+        /// Stable task ID.
+        task_id: String,
+        /// Requested written status.
+        status: String,
+    },
 }
 
 /// A response sent from the daemon to one client.
@@ -308,6 +362,13 @@ pub enum ServerResponse {
         panes: Vec<PaneSnapshot>,
         /// Persisted card rectangles, possibly empty for a new session.
         layout: Vec<LayoutRect>,
+    },
+    /// Durable SCORE cards for one session.
+    TaskBoard {
+        /// Owning session identifier.
+        session_id: String,
+        /// Parseable task cards; corrupt sibling records are omitted.
+        tasks: Vec<TaskSummary>,
     },
     /// A recoverable protocol or command failure.
     Error {
