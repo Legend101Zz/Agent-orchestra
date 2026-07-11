@@ -1,0 +1,21 @@
+[package]
+name = "vt-bakeoff"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "vt-bakeoff"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+termwiz = { version = "0.23.3", default-features = false }
+vt100 = "0.16.2"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[workspace]
