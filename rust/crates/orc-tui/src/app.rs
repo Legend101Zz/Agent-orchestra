@@ -266,6 +266,12 @@ impl App {
         Ok(changed || quota_changed)
     }
 
+    /// Refresh the ledger immediately after an external registry event.
+    pub fn refresh_now(&mut self) -> Result<bool> {
+        self.last_refresh = Instant::now() - Duration::from_millis(500);
+        self.refresh()
+    }
+
     fn attention_rank(status: &str, attention: Option<&str>) -> usize {
         if attention.is_some() || status == "failed" {
             0

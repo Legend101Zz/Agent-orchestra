@@ -13,6 +13,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use notify::{RecursiveMode, Watcher};
+
 use crossterm::SynchronizedUpdate;
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -547,6 +549,7 @@ enum UiEvent {
     Resize,
     Snapshot(Vec<PaneSnapshot>),
     WatchFailed,
+    RunsChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -952,6 +955,7 @@ pub fn run_initial(
     }
     let (events_tx, events_rx) = mpsc::sync_channel(64);
     spawn_screen_watch(socket, events_tx.clone());
+    spawn_runs_watch(events_tx.clone());
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -1113,6 +1117,10 @@ fn run_shell_loop(
                 redraw = true;
             }
             Some(UiEvent::WatchFailed) => return Err(AppError::EventSource),
+            Some(UiEvent::RunsChanged) => {
+                let _ = shell.runs.refresh_now();
+                redraw = true;
+            }
             None => {}
         }
     }
@@ -1213,6 +1221,39 @@ fn spawn_screen_watch(socket: PathBuf, sender: SyncSender<UiEvent>) {
         })();
         if result.is_err() {
             let _ = sender.send(UiEvent::WatchFailed);
+        }
+    });
+}
+
+fn spawn_runs_watch(sender: SyncSender<UiEvent>) {
+    spawn_runs_watch_path(orc_core::registry::home().join("runs"), sender);
+}
+
+fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
+    thread::spawn(move || {
+        if std::fs::create_dir_all(&path).is_err() {
+            let _ = sender.send(UiEvent::WatchFailed);
+            return;
+        }
+        let (events, changes) = mpsc::sync_channel(16);
+        let Ok(mut watcher) =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if event.is_ok() {
+                    let _ = events.try_send(());
+                }
+            })
+        else {
+            let _ = sender.send(UiEvent::WatchFailed);
+            return;
+        };
+        if watcher.watch(&path, RecursiveMode::Recursive).is_err() {
+            let _ = sender.send(UiEvent::WatchFailed);
+            return;
+        }
+        while changes.recv().is_ok() {
+            if sender.send(UiEvent::RunsChanged).is_err() {
+                break;
+            }
         }
     });
 }
@@ -2048,6 +2089,23 @@ mod tests {
         assert_ne!(profiles[0], profiles[1]);
         assert_ne!(profiles[1], profiles[2]);
         assert_ne!(profiles[2], profiles[3]);
+    }
+
+    #[test]
+    fn runs_watcher_wakes_on_registry_change_without_polling() {
+        let root = std::env::temp_dir().join(format!("orc-app-runs-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        super::spawn_runs_watch_path(root.join("runs"), sender);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let runs = root.join("runs").join("event-run");
+        std::fs::create_dir_all(&runs).expect("create watched run");
+        std::fs::write(runs.join("meta.json"), b"{}\n").expect("write watched meta");
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(super::UiEvent::RunsChanged)
+        ));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

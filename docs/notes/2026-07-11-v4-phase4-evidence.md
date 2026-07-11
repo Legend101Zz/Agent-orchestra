@@ -54,7 +54,9 @@ detach/reattach, SCORE, availability, and recovery; `?` or escape closes it.
 HOME, STAGE, SCORE, and RUNS retain an always-visible active-view legend without
 covering pane content.
 
-The v3 RUNS ledger is embedded in the Bench client. Baton rendering has four
+The v3 RUNS ledger is embedded in the Bench client and a native filesystem
+watcher wakes it on headless registry changes without polling. A deterministic
+test writes a run record and observes the watcher event. Baton rendering has four
 bounded profiles (settle, dispatch, complete, failed) with different tempo,
 width, and direction; reduced motion suppresses its frame clock and leaves the
 static filament. Session attach uses the settle profile. TestBackend coverage

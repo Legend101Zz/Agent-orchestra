@@ -197,7 +197,8 @@ No terminal keystrokes are injected and provider traffic is never proxied.
 HOME now includes a first-launch title and teaching empty state. Every view has
 a compact key legend; `?` opens help. STAGE baton motion has bounded per-event
 profiles and the configured reduced-motion path leaves a static filament.
-RUNS embeds the v3 event ledger instead of the Phase 2 placeholder.
+RUNS embeds the v3 event ledger instead of the Phase 2 placeholder. A native
+filesystem watcher refreshes it on registry changes without a polling loop.
 
 Measured Phase 4 release behavior on the development M-series Mac:
 
