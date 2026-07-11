@@ -1,7 +1,8 @@
 # pi-orchestra v4 — the Bench: multi-harness orchestration workspace
 
-**Date:** 2026-07-11 (rev 2 — presentation layer pivoted from ratatui to a Tauri
-desktop app after user review; worker defaults changed to hermes + pi)
+**Date:** 2026-07-11 (rev 3 — TUI-only flagship, client-server daemon, Python
+deleted, worktree-per-task in scope; supersedes rev 2's Tauri pivot per user
+decision)
 **Status:** Proposed — awaiting explicit user approval
 **Branch after approval:** `v4-bench`, created from `main` after the fix-first
 items land on `v3-rust` and it merges to `main`
@@ -18,386 +19,393 @@ reconstructs the swarm in their head.
 v4 changes the product contract to:
 
 > Run every harness of a working session — one brain, N workers — inside a
-> single pi-orchestra window; see the instruction flow between them as living
-> connections and the task board they are burning down; and do all of it
-> without ever getting between a harness and its own I/O.
+> single pi-orchestra terminal window; watch instructions flow between them as
+> living connections and tasks burn down a board; survive crashes of the UI
+> *and* of the brain; and never get between a harness and its own I/O.
 
 The origin idea is the [advisor tool pattern](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)
-inverted: instead of a cheap executor consulting an expensive advisor
-server-side, an expensive brain dispatches cheap executors — and pi-orchestra
-is the *inter-harness* coordination fabric that no single harness provides,
-because each harness (Claude Code subagents/agent teams, Codex, hermes
-subagents) only orchestrates within itself.
+inverted: an expensive brain dispatches cheap executors, and pi-orchestra is
+the *inter-harness* coordination fabric no single harness provides.
 
-## Presentation layer decision (the rev-2 pivot)
+## Presentation decision (rev 3): a TUI that earns "how is this a terminal?"
 
-The user's bar: floating cards, smooth glowing Bézier connectors between them,
-shadows, rounded panels, draggable kanban — a UI that feels like a polished web
-app, not a character grid. A ratatui TUI physically cannot render that; apps
-like Claude Code, lazygit, and k9s only *simulate* polish through spacing and
-color within terminal cells. Something that genuinely draws
-`card ── smooth glowing curve ── card` is a browser UI, a desktop WebView, a
-custom GPU renderer, or terminal pixel-graphics protocols. Options weighed:
+The user's call: **terminal only** — no Tauri, no browser — but the UI must
+feel fast, stable, and genuinely delightful, not AI-slop and not stock
+ratatui. So the question becomes: what is the best Rust base, and what
+actually makes a TUI feel amazing?
 
-| Option | Verdict | Why |
+### Framework verdict — keep ratatui, replace the application architecture
+
+| Candidate | Verdict | Why |
 |---|---|---|
-| **A. Tauri 2 desktop app** (Rust backend + WebView frontend, xterm.js terminals) | **Chosen** | Exactly BridgeSpace's stack; [tauri-plugin-pty](https://github.com/Tnze/tauri-plugin-pty) and reference apps prove xterm.js + portable-pty over Tauri IPC works; Vibe Kanban proves Rust-backend + web-frontend for agent orchestration; full CSS/SVG freedom for cards, connectors, drag-and-drop; the app owns its window, so browser chrome can't steal keystrokes from a live harness |
-| B. Local web server + browser tab (`orc serve`) | Deferred to P2 | Same frontend could be served later for remote use, but a browser tab hosting an interactive brain is a UX hazard (`cmd+w` kills your session, shortcuts collide) and it never feels like an app |
-| C. Custom GPU-rendered terminal/UI (wgpu/gpui) | Rejected | Warp/Zed-class engineering effort; unjustifiable for this project |
-| D. Kitty graphics protocol inside the TUI | Rejected | Static pixels in cells; not interactive, not draggable, terminal-dependent |
+| **ratatui** + ecosystem | **Rendering engine** | Cell-diff rendering, mature widgets, [tachyonfx](https://github.com/ratatui/tachyonfx) (ratatui-org effects library: 50+ shader-like cell effects, easing timers, spatial patterns), braille Canvas for sub-cell curves, tui-term precedent for PTY panes. The v3 console proves we can make it look non-stock. |
+| cursive | Rejected | Curses-era model, weaker styling/animation ecosystem. |
+| notcurses (C) bindings | Rejected | Famous for TUI graphics, but Rust bindings are poorly maintained; unacceptable foundation risk. |
+| iocraft / rooibos etc. | Rejected | Young, small ecosystems; nothing they add that we need. |
+| Building on/inside zellij | Rejected as host; **adopted as architecture** | We don't want zellij's chrome or plugin sandbox — but its client-server model is exactly right (below). |
 
-**The ratatui `orc top` console is kept, frozen as the SSH/fallback control
-plane.** It is already built, reviewed, and reads the same files; it gets bug
-fixes and task-list awareness but no new surfaces. The flagship UI is the app.
-The frontend talks to the backend through a thin transport trait over Tauri
-IPC so option B (serving the same UI over WebSocket) stays cheap later.
+`orc top` in its current form is retired as the flagship: it is a synchronous
+poll-every-2s instrument panel, structurally incapable of animation, embedded
+terminals, or crash-survival. Its reviewed visual language (themes, glyph kit,
+attention-first dashboard) is *ported into* the new client as the RUNS view;
+the `orc top` command becomes an alias that opens the new client on that view.
 
-## What exists (do not rebuild)
+### The architecture that makes it stable: client-server (zellij model)
 
-- **v3 Rust core** (`rust/crates/orc-core`): registry (atomic JSON, tolerant
-  models, orphan reconcile), quota gate, pi json/rpc runner with steering
-  inbox, retry/handoff, metrics, search, notifications. 5–20× faster than
-  Python.
-- **v3 ratatui console** (`orc top`): attention-first dashboard, session
-  workspace, timeline, `ember`/`phosphor` themes — now the fallback view.
-- **Skills/blocks**: `pi-delegate` (auto), `orchestrate` (keyword-gated),
-  `codex/AGENTS-block.md` — the trigger-word mechanism exists; v4 extends it.
-- **Python v2** (`orc_pkg`): kept only as the cross-language parity oracle;
-  v4 makes Rust the default install.
+```
+┌ pi-orchestra (client, ratatui) ──────────────┐      ┌ orcd (daemon, per user) ─────────────┐
+│ render @ adaptive fps · input · themes       │◄────►│ owns PTYs (portable-pty)             │
+│ HOME · STAGE · SCORE · RUNS                  │ unix │ vt state per pane (screen replay)    │
+│ crash/quit = detach, nothing dies            │ sock │ session state · event bus            │
+└──────────────────────────────────────────────┘      │ fs watcher over ~/.orchestra         │
+   orc CLI (headless brains, skills) ────────────────►│ tails registry runs (bounded)        │
+                                                      └──────────────┬───────────────────────┘
+                                                                     │ spawns/observes
+                                                       brain pty · worker ptys · orc runs
+```
+
+- **`orcd`** (new crate) owns every interactive PTY and the canonical vt
+  screen state per pane, exactly like zellij's server: the client renders
+  from daemon state over a Unix domain socket. Detach (`ctrl-\` or just
+  closing the terminal) leaves everything running; `pi-orchestra attach`
+  reconnects and replays screen state. Client crash ≠ session death — this
+  is the stability guarantee, structural, not aspirational.
+- The daemon starts on demand (first `pi-orchestra` invocation), one per
+  user, socket at `~/.orchestra/orcd.sock`, logs via `tracing` to
+  `~/.orchestra/orcd.log`. It does no rendering and no policy — PTY hosting,
+  vt parsing, event fan-out, bounded log tailing. `orcd` failure is designed
+  for too: panes are process-group children it can reap on restart via pid
+  records, and registered `orc run` workers never depended on it anyway.
+- Multiple clients may attach (a laptop screen and an external monitor see
+  the same session at different sizes, zellij-style).
+
+### Graceful brain death (user Q1 — now a core feature)
+
+Two distinct failures, both handled:
+
+1. **UI dies / user closes the window** → nothing happens to the session.
+   Panes live in `orcd`; reattach and continue. (This was rev 2's punted
+   "detach/reattach"; the daemon makes it foundational instead.)
+2. **The brain process itself exits** (crash, OOM, accidental `exit`) → the
+   session does not end. Workers keep running (they never depended on the
+   brain process). The session enters a `CONDUCTOR DOWN` attention state:
+   the stage shows the dead pane with its last screen, elapsed-since-death,
+   and one-key recovery — `R` respawns the brain using the harness's
+   configured `resume_args` (`claude --resume`/`--continue`, codex/hermes
+   equivalents recorded in the harness registry), landing the operator back
+   in the same brain conversation where the harness supports it. The
+   registry, board, and inbox are durable, so the resumed brain re-orients
+   from `orc task list` + `orc list` — the skills gain a "re-orientation on
+   resume" note. No orchestration state ever lives only in a process.
+
+### What "amazing" means in cells (and how it stays fast)
+
+The terminal emulator (Ghostty, kitty, Alacritty, WezTerm) is our GPU; the
+job is to feed it frames worth rendering:
+
+- **Sub-cell geometry.** Baton lines are cubic Béziers plotted at braille
+  resolution (2×4 dots per cell — ratatui's Canvas braille marker), giving
+  visibly smooth curves, not staircases. Card elevation uses layered
+  half-block/quadrant shading; corners use arc glyphs (`╭╮╰╯`); focus uses an
+  edge-light gradient, not a color flip.
+- **Real motion.** tachyonfx drives pulses of light traveling the baton
+  curves on registry events (dispatch, steer, complete, handoff — each with
+  its own pulse shape/tempo), staged easing when a session opens (cards
+  settle in), and dissolve/sweep transitions between views. Motion budget is
+  concentrated there; everything else animates only on state change. A
+  reduced-motion config collapses pulses to state flashes.
+- **Tear-free.** Every frame is wrapped in synchronized-output
+  (`BeginSynchronizedUpdate`/`EndSynchronizedUpdate`, DEC 2026) so grids of
+  live terminals never shear mid-redraw.
+- **Adaptive frame clock.** Event-driven redraw at rest (0 fps idle — a
+  quiet session costs ~0 CPU); the animation clock runs at 60 fps only while
+  an effect or PTY frame is in flight. Input is echoed to the focused pane on
+  its own path with a sub-16 ms budget, never queued behind rendering.
+- **Honest budgets, measured.** Frame time, input latency, and daemon
+  memory are benchmarked (criterion + scripted measurements) and recorded in
+  the README the same way v3 recorded CLI benchmarks — measured, not asserted.
+- **Kitty keyboard protocol + bracketed paste + mouse passthrough** are
+  negotiated and forwarded verbatim to the focused pane so harness TUIs keep
+  their full input fidelity (spike verifies against all four harnesses).
 
 ## Research: prior art and what we take from each
 
 | Source | What it proves | Take | Reject |
 |---|---|---|---|
-| [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) | Two-tier model pairing is an endorsed pattern | Brain/worker framing, honest cost receipts | Server-side coupling — ours is process-level, harness-agnostic |
-| [BridgeSpace](https://www.bridgemind.ai/products/bridgespace) (Tauri 2 + Rust) | 1–16 terminal panes + kanban + agent config in one desktop window ships | The stack (Tauri), workspace-per-project, terminals-beside-board | Rigid grid layouts (we do a stage, below); command blocks |
-| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) (Rust + React) | Kanban as the command center for coding agents works; Rust backend owns git/terminals, web UI owns the board | Board-centric orchestration UX, task→workspace→terminal linkage | Its worktree-per-task model (our unit is the run/session, worktrees optional); Node server process |
-| [claude-squad](https://github.com/smtg-ai/claude-squad) (Go) | Harness-agnostic launcher via configurable commands | Configurable harness commands; detach-survivability thinking | tmux as pane engine |
-| Claude Code [agent teams](https://code.claude.com/docs/en/agent-teams) | Shared task list + mailbox + lead/teammate model | File-based task semantics (claim, depends_on, locking); idle notifications | Single-harness lock-in — crossing harnesses is our moat |
-| [fulsomenko/kanban](https://github.com/fulsomenko/kanban) (Rust) | Serious task-domain modeling in Rust | Card anatomy, prefix ids (T1…), atomic JSON + file watching, crate split | Sprints, SQLite, undo/redo (YAGNI) |
-| [hermes-agent](https://github.com/nousresearch/hermes-agent) (Nous Research) | Open-source multi-provider agent CLI with subagents, 6 terminal backends | First-class harness, **default worker** alongside pi; inspect `hermes --help` locally for headless/usage-reporting shape | Its gateway/messaging surface (out of scope) |
-| [tauri-plugin-pty](https://github.com/Tnze/tauri-plugin-pty), [tauri-terminal](https://github.com/marc2332/tauri-terminal) | xterm.js + portable-pty in Tauri 2 is an established pattern | PTY host architecture, xterm.js WebGL renderer | Depending on the plugin blindly — spike validates throughput first |
+| [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) | Two-tier model pairing is an endorsed pattern | Brain/worker framing, honest cost receipts | Server-side coupling |
+| [zellij](https://zellij.dev/features/) | Rust client-server terminal workspace: detach, multi-client, floating panes, session resurrection | The architecture wholesale; serialized-layout resurrection idea | Its chrome, keybinding culture, WASM plugin surface |
+| [BridgeSpace](https://www.bridgemind.ai/products/bridgespace) | 1–16 terminals + kanban beside them is a shippable product | Terminals-beside-board, workspace-per-project | Being a GUI |
+| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Kanban as the agent command center; worktree-per-task isolation | Board-centric UX; **the worktree model (user Q4: in scope)** | Web UI, Node server |
+| [claude-squad](https://github.com/smtg-ai/claude-squad) | Harness-agnostic launcher via configurable commands + worktrees | Configurable harness commands | tmux as engine |
+| Claude Code [agent teams](https://code.claude.com/docs/en/agent-teams) | Shared task list + mailbox + lead/teammate | File-based task semantics (claim, depends_on, locking) | Single-harness lock-in |
+| [fulsomenko/kanban](https://github.com/fulsomenko/kanban) | Serious ratatui task domain | Card anatomy, T-prefix ids, atomic JSON + watching | Sprints, SQLite, undo |
+| [hermes-agent](https://github.com/nousresearch/hermes-agent) | Multi-provider agent CLI, subagents, active project | First-class harness, **default worker** with pi | Gateway/messaging surface |
+| [tachyonfx](https://github.com/ratatui/tachyonfx) | Shader-like effects are practical in ratatui at scale | The entire motion layer | Using effects decoratively |
+| [tui-term](https://github.com/a-kenji/tui-term)/portable-pty | PTY panes in ratatui work | portable-pty; vt-parser bake-off (`vt100`, `termwiz`, `alacritty_terminal`) | Its experimental controller |
 
-## Non-negotiable constraints (carried forward + new)
+## Non-negotiable constraints
 
-- All implementation commits land on `v4-bench`. Never force-push; merge to
-  `main` only at explicit gates.
+- All implementation commits land on `v4-bench`; merge to `main` only at
+  explicit gates; never force-push.
 - Never modify `~/.pi/agent/*`, `~/.claude/settings.json`,
   `~/.codex/config.toml`. Installer appends only marked blocks with backups.
-- Registry stays plain JSON/text at `~/.orchestra/runs/<id>/…`; all new files
-  (sessions, tasks) use atomic temp+fsync+rename and additive-field tolerance.
-  Python readers must not break (parity tests prove it).
+- Registry/sessions/tasks stay plain JSON/text with atomic
+  temp+fsync+rename writes and additive-field tolerance. (Python is deleted —
+  user Q2 — but the *format* contract survives via golden fixtures; external
+  tools and old data keep working.)
 - Quota gate fails open on transport problems; every network/subprocess call
   is bounded by a timeout.
-- **Single-writer rule, restated for the app:** the frontend never writes
-  registry/task files. Every mutation — launching, killing, steering, moving a
-  task card — goes through orc-core command functions (same code the CLI
-  uses), and every mutation is recorded with its actor (`brain` | `human`).
-- **The prime directive of the bench:** pi-orchestra must never hinder a
-  harness. Terminal panes get verbatim keyboard passthrough while focused
-  (xterm.js gets the raw stream; app-level shortcuts use chords no harness
-  binds, and `cmd+w`-style window shortcuts are intercepted, never delivered
-  as pane death). orc never proxies a harness's API traffic; coordination is
-  filesystem-only, opted into via `orc` CLI calls.
-- TUI (fallback) keeps its standards: no emojis, theme tokens only, state as
-  words. The app inherits the same token discipline (below).
+- **Single-writer rule:** the client never writes registry/task files; every
+  mutation (launch, kill, steer, task move, merge) goes through orc-core
+  command paths, recorded with its actor (`brain` | `human`).
+- **Prime directive:** never hinder a harness. Focused panes get verbatim
+  input; chrome never overlays pane cells; no API-traffic proxying;
+  coordination is filesystem-only.
+- No emojis anywhere; every color from theme tokens; state as words; the two
+  themes are **ember and phosphor only** (user Q5) — no third theme, ever, in
+  v4.
 
-## Architecture
+## Engineering standards (user-mandated: good code, docs, tests)
+
+- **Docs:** every public item and every module carries rustdoc explaining
+  purpose and invariants (`#![warn(missing_docs)]` on all crates);
+  `cargo doc --no-deps` builds warning-free as a CI gate; each crate has a
+  README-level module doc stating what it owns and what it must never do.
+- **Tests:** TDD for core logic (failing test first). Unit tests per module;
+  integration tests drive the real binaries (fake-pi and fake-hermes become
+  small Rust test helpers); golden fixtures captured from today's Python
+  output *before deletion* pin the registry/CLI JSON contract forever;
+  daemon protocol gets round-trip tests; UI snapshot tests via ratatui's
+  TestBackend for every view in both themes at wide and 72×30 sizes.
+- **Quality gates per phase:** `cargo fmt --check`, `cargo clippy
+  --all-targets -- -D warnings`, `cargo test`, `cargo doc` warning-free,
+  benchmarks re-run when a hot path changes. No `unwrap`/`expect` in orcd or
+  orc-core outside tests (enforced by clippy lint config); errors are typed
+  (`thiserror`) in libraries, contextual (`anyhow`) in binaries; `tracing`
+  spans in the daemon.
+- **Stability:** bounded memory everywhere (scrollback caps, tail windows),
+  no busy loops, adaptive frame clock verified idle-quiet, daemon soak test
+  (hours-long session with flooding pane) before Phase 2 closes.
+
+## Architecture (system view)
 
 ### Control plane vs data plane
 
+Unchanged from rev 2 in substance: the **data plane** is each harness talking
+to its own provider — orc never sits in that path. The **control plane** is
+the filesystem (`~/.orchestra/{runs,sessions,config}`): brains call `orc`
+(via skills / AGENTS blocks), which writes runs, inbox messages, and tasks;
+`orcd` watches and fans out events; the client renders. Panes launched from
+the stage export `ORC_SESSION` and `ORC_PANE_ID`, so runs created inside them
+carry their origin — baton lines are derived from registry linkage, never
+sniffed. Headless use (a brain in a plain terminal saying "orchestrate")
+keeps working with no client at all.
+
+### Crate layout
+
 ```
-   ┌──────────────────── orchestra-app (Tauri 2, one process) ────────────────────┐
-   │  WebView UI: HOME · STAGE · SCORE · RUNS   (React/TS, xterm.js, SVG layer)   │
-   │        │ IPC (typed commands + event stream)                                 │
-   │  Rust side: PTY host (portable-pty) · orc-core calls · fs watcher → events   │
-   │        │ owns interactive PTYs                 observes (mtime cache)        │
-   │        ▼                                            ▲                        │
-   │  BRAIN pty (claude) · W panes (hermes, pi/M3, …)    │                        │
-   └────────┼─────────────────────────────────────────────┼────────────────────────┘
-            │ harness runs `orc run/send/task…`           │
-            ▼                                             │
-     ~/.orchestra/{runs,sessions,config}  ────────────────┘   single source of truth
-     ▲
-     └── orc CLI (headless brains, skills) · orc top (ratatui fallback) — unchanged consumers
-```
-
-- The **data plane** is each harness talking to its own provider. orc never
-  sits in that path.
-- The **control plane** is the filesystem. Brains call `orc` (via skills /
-  AGENTS blocks), which writes runs, inbox messages, and tasks; the app
-  renders from those files plus its own PTY buffers. Connector lines are
-  *derived from registry linkage*, not traffic sniffing: a pane launched from
-  the stage exports `ORC_SESSION` and `ORC_PANE_ID`, every run created inside
-  it carries those, and that is what lets the UI truthfully draw brain→worker
-  curves.
-- Headless use keeps working unchanged — a brain in a plain terminal that says
-  "orchestrate" gets the full flow; the app is an optional host, not a
-  requirement.
-
-### Process model
-
-The app owns interactive PTY children (the brain, and any worker harness
-opened interactively). Registered `orc run` workers stay as today: detached,
-runner-supervised, surviving an app crash. Stated honestly: closing the app
-closes interactive panes like closing a terminal window (documented);
-registered runs never die with it. Detach/reattach for interactive panes is
-P2.
-
-### Session model
-
-Launching `pi-orchestra` opens HOME: past sessions with receipts; a new
-session takes three steps (brain harness → worker pool → cwd).
-`~/.orchestra/sessions/<id>/session.json`:
-
-```json
-{
-  "id": "orch-20260711-104200-auth-refactor",
-  "title": "auth refactor",
-  "brain": {"harness": "claude", "cwd": "/path/to/repo"},
-  "worker_pool": ["hermes", "pi-m3"],
-  "layout": {"mode": "ensemble"},
-  "created_at": "…"
-}
+rust/crates/
+├── orc-core/      registry, quota, runner + adapter seam, tasks, sessions,
+│                  worktrees, metrics, search, notifications  (exists, grows)
+├── orc-cli/       `orc` binary: run/rpc/send/retry/handoff/task/session/…  (exists, grows)
+├── orc-daemon/    new: `orcd` — PTY host, vt state, event bus, socket protocol
+├── orc-proto/     new: client↔daemon message types (serde), versioned
+├── orc-pty/       new: portable-pty wrapper + vt parser choice + input encoder
+└── orc-app/       new: `pi-orchestra` client — views, compositor, motion layer,
+                   themes (ports v3 orc-tui's theme tokens, glyph kit, dashboard)
 ```
 
-### Task model (the board substrate)
+Dependency floor: existing core deps + `portable-pty`, one vt parser (bake-off
+in the spike), `tachyonfx`, a Unix-socket IPC layer (std or `interprocess`),
+`notify` for fs watching, `tracing`. Still no tokio unless the daemon's
+concurrency genuinely demands it over threads — the spike decides and records
+why.
 
-`~/.orchestra/sessions/<id>/tasks/<task-id>.json`, one file per task (atomic
-writes; agent-teams shows file-per-task with claim locking works):
+### Sessions, tasks, worktrees
 
-```json
-{
-  "id": "T3",
-  "title": "draft registry.rs from interface spec",
-  "status": "running",            // backlog | assigned | running | review | done | dropped
-  "assignee_run": "20260711-…-a1b2",
-  "worker": "hermes",
-  "depends_on": ["T1"],
-  "created_by": "brain",
-  "history": [{"at": "…", "actor": "brain", "to": "running"}],
-  "updated_at": "…"
-}
-```
+Session and task models carry over from rev 2 (file-per-task, statuses
+backlog/assigned/running/review/done/dropped, `depends_on`, `assignee_run`,
+actor-attributed `history`), plus **worktree-per-task (user Q4)**:
 
-CLI: `orc task add|assign|start|review|done|drop|move|list --json --session <id>`.
-The brain maintains the board through these commands; the human may drag a
-card in the app, which invokes the same `orc task move` path with
-`actor: "human"` — visible in the card's history, so brain and human never
-silently overwrite each other's judgment. `review` is the honest column:
-worker output is untrusted until the brain (or human) verifies, and the board
-must show that gap rather than jumping to done.
+- `orc task add --isolate` (or session default `"isolation": "worktree"`)
+  creates a git worktree at `~/.orchestra/worktrees/<session>/<task-id>` on
+  branch `orc/<session-slug>/<task-id>`; the assigned worker's cwd is the
+  worktree, so parallel workers physically cannot trample each other.
+- REVIEW column = the brain (or human) reviews the worktree diff
+  (`orc task diff <id>`); `orc task merge <id>` squash-merges to the session's
+  base branch and prunes the worktree; `drop` prunes without merging. All
+  through the CLI, actor recorded; the client only invokes.
+- Non-git cwds degrade gracefully: isolation unavailable, stated plainly.
 
 ### Harness registry and worker defaults
 
-`~/.orchestra/config.json` gains:
+As rev 2, with `resume_args` added for conductor-down recovery:
 
 ```json
 {
   "harnesses": {
-    "claude": {"cmd": "claude", "args": [], "roles": ["brain","worker"], "adapter": "claude"},
-    "codex":  {"cmd": "codex",  "args": [], "roles": ["brain","worker"], "adapter": "codex"},
-    "hermes": {"cmd": "hermes", "args": [], "roles": ["brain","worker"], "adapter": "hermes"},
-    "pi-m3":  {"cmd": "pi", "args": ["--provider","minimax","--model","MiniMax-M3"],
-               "roles": ["brain","worker"], "adapter": "pi"}
+    "claude": {"cmd": "claude", "args": [], "resume_args": ["--continue"], "roles": ["brain","worker"], "adapter": "claude"},
+    "codex":  {"cmd": "codex",  "args": [], "resume_args": ["resume"], "roles": ["brain","worker"], "adapter": "codex"},
+    "hermes": {"cmd": "hermes", "args": [], "resume_args": [], "roles": ["brain","worker"], "adapter": "hermes"},
+    "pi-m3":  {"cmd": "pi", "args": ["--provider","minimax","--model","MiniMax-M3"], "roles": ["brain","worker"], "adapter": "pi"}
   },
   "default_workers": ["hermes", "pi-m3"],
   "max_parallel_workers": 3,
-  "app": {"leader_chord": "cmd+shift+space", "max_panes": 16}
+  "app": {"leader_key": "ctrl-g", "reduced_motion": false, "theme": "ember"}
 }
 ```
 
-**Worker choice is the user's, and the default pool is hermes + pi
-(MiniMax-M3).** The new-session flow and the `orchestrate` skill both offer
-the pool and accept any configured harness — claude, codex, hermes, pi, or a
-custom command. Unknown harnesses still work as plain interactive panes; they
-just lack registered-run superpowers until an adapter exists.
+**The default worker pool is hermes + pi (MiniMax-M3); the choice is always
+the user's** — claude, codex, or any configured command works. Worker
+adapters (capability flags `steerable`, `exact_usage`; honest degradation)
+as rev 2: pi is the reference; hermes is the first new adapter after local
+shape verification (`hermes --help`); claude (`claude -p --output-format
+stream-json`) and codex (`codex exec --json`) best-effort.
 
-### Worker adapters
+### Python deletion (user Q2)
 
-`runner.rs` grows an adapter seam. Each adapter declares capabilities
-(`steerable`, `exact_usage`) and normalizes to the same registry meta; the UI
-and CLI degrade honestly when a capability is absent.
+Full removal in Phase 2, safely ordered: (1) capture golden fixtures — CLI
+JSON output, registry round-trip corpora including legacy/corrupt/CJK metas —
+from the Python implementation while it still runs; (2) port the fake-pi
+integration suite to Rust test helpers; (3) delete `orc_pkg/`, `.venv`,
+`pyproject.toml`, `requirements.txt`, pytest plumbing; (4) `install.sh`
+becomes Rust-only (build + symlink), `uninstall.sh` updated. The compatibility
+contract survives as fixtures, not as a second implementation.
 
-- `pi` — existing json/rpc lifecycle; reference implementation.
-- `hermes` — **default worker, first new adapter.** Shape verified locally
-  first (`hermes --help`): headless invocation, JSON/stream output, usage
-  reporting, exit semantics. If hermes lacks a headless mode, it runs as an
-  interactive stage pane attributed to the session while the adapter is
-  pending — never fake exactness.
-- `claude` — `claude -p --output-format stream-json`, best-effort usage.
-- `codex` — `codex exec --json`, best-effort.
+### Remote access (user Q3 — decision made)
+
+**SSH is the remote story; no web server.** The daemon makes this free:
+`ssh box` then `pi-orchestra attach` gives the full experience, because a TUI
+renders wherever your terminal is (this is the one place a TUI beats every
+GUI). Works with mosh for flaky links. No `orc serve`, no browser surface, no
+extra attack surface. Documented in the README as the recommended pattern.
 
 ### Trigger word
 
-Already 90% built. v4 additions: the skills and `codex/AGENTS-block.md` learn
-(a) "pi-orchestra" as an alias trigger for the orchestrate flow, (b) `orc
-task` board maintenance, (c) worker-pool choice (offer the configured
-`default_workers`, never assume), (d) when running inside a stage pane
-(`ORC_PANE_ID` set), skip the sales pitch and coordinate. A hermes
-instructions block is added if local inspection shows hermes reads an
-AGENTS.md-equivalent. Apply the five skill-wording fixes from the v3 review
-while touching these files.
-
-### Repository layout
-
-```
-rust/crates/
-├── orc-core/        (exists; runner adapter seam; + tasks.rs, session.rs, events.rs)
-├── orc-cli/         (exists; + `orc task`, `orc session`)
-└── orc-tui/         (exists; frozen fallback — bug fixes + task awareness only)
-app/                 new: Tauri 2
-├── src-tauri/       PTY host, typed IPC commands wrapping orc-core, fs watcher → event stream
-└── ui/              React + TypeScript + Vite; xterm.js (WebGL addon); SVG connector layer;
-                     dnd-kit board; design tokens shared with the TUI palette
-```
-
-The transport between ui and src-tauri is one typed interface (commands +
-event subscription) so a future `orc serve` can reuse the UI over WebSocket.
+As rev 2: skills + `codex/AGENTS-block.md` learn "pi-orchestra" as an alias
+trigger, `orc task` board maintenance, worker-pool choice (offer
+`default_workers`, never assume), `ORC_PANE_ID` awareness, a re-orientation
+note for resumed brains, the five v3-review wording fixes, and a hermes block
+if local inspection shows hermes reads an AGENTS.md-equivalent.
 
 ## UI/UX direction
 
-**Subject world: the orchestra pit.** The brain is the conductor; workers are
-players; the kanban is the score; the window is the stage. This vocabulary
-drives the design so nothing reads as a generic dashboard template.
+Subject world: the orchestra pit. Conductor (brain), players (workers), the
+score (board), the stage (workspace). Two committed themes: **ember** (warm
+charcoal stage, brass/amber live-states, bone text, oxblood attention) and
+**phosphor** (CRT monochrome with semantic exceptions) — both already exist
+as token systems and extend to the new surfaces. Anti-slop commitments hold:
+no stock-ratatui uniform bordered boxes, state always written as words,
+typography via glyph weight/spacing hierarchy (a TUI's typography is its
+spacing discipline), empty states that teach real commands.
 
-**Anti-slop commitments.** No cream-paper + terracotta serif landing look; no
-near-black + single acid accent; no broadsheet hairline grid. No default
-shadcn-looking card grids with uniform rounded rectangles and a stats row. The
-palette extends the project's existing ember identity into materials the
-subject owns: deep warm charcoal stage (#1a1614-family, not pure black), brass
-and amber (instrument metal) for live/active, bone/ivory text, oxblood for
-attention states, with `phosphor` surviving as an alternate app theme. One
-characterful display face for session titles and view names (a warm grotesque
-— specimen chosen during Phase 2 with screenshots, not defaulted to Inter),
-a workhorse UI face for controls, and the user's terminal mono inside panes.
-Design tokens live in one file mirrored TUI↔app so both feel like one product.
+**HOME — the season.** Session cards (double-height rows with topology
+glyph, receipts, attention badges); `n` new session: brain → worker pool
+(hermes + pi-m3 preselected) → cwd; `enter` attach.
 
-**The signature element — baton lines.** Connectors between the conductor card
-and player cards are cubic Bézier curves in an SVG layer *under* the cards:
-dim braided filaments when idle; on a registry event (dispatch, steering
-delivery, completion, handoff) a pulse of light travels the curve in the
-event's direction with a small timestamped label that then settles into the
-timeline. Event kinds are distinguished by pulse shape/tempo, not just hue.
-This is where the motion budget is spent; everything else animates only on
-state change (a card settling when a run completes), and `prefers-reduced-motion`
-collapses pulses to state flashes.
+**STAGE — the flagship.** Floating pane cards over a quiet stage backdrop —
+zellij proves floating panes in cells work; ours are arranged in **ensemble
+layout** (conductor left-of-center, players arced right) with drag (mouse) /
+swap (keys), resize, zoom-to-solo, per-session persistence. Cards: arc-glyph
+corners, half-block shadow, header rail (harness, run id, status word, live
+token/cost ticker), brass edge-light on focus. Between conductor and players:
+**baton lines** — braille Béziers under the cards, dim filaments idle, light
+pulses traveling on real events, labels settling into the timeline.
+Leader key `ctrl-g` (double-tap sends literal); all other input verbatim to
+the focused pane.
 
-### Surfaces (one window, four views)
+**SCORE — the board.** Columns Backlog / Assigned / Running / Review / Done;
+cards with T-id, title, worker chip, status word, exact-or-`~` tokens,
+isolation mark when the task has a worktree, history popover (actor-attributed
+moves). Keyboard moves + mouse drag both invoke `orc task move`. `g` flies to
+the assignee's stage card. Review column carries diff stats for worktree
+tasks (`+412 −88 · 9 files`).
 
-**HOME — the season.** Past sessions as wide cards with topology thumbnail,
-receipts (exact-vs-`~` tokens, cost), and attention badges; one action: new
-session (brain → worker pool [hermes + pi preselected] → cwd picker).
+**RUNS — the ledger.** The v3 instrument panel (quota fuel gauges, sparkline,
+attention-first table, search, session timeline) ported into the client, now
+event-driven instead of poll-rebuilt.
 
-**STAGE — the flagship.** Not a rigid grid: an **ensemble layout**. The
-conductor terminal card sits center-left; player cards arc around it in
-orchestra seating, each a floating rounded panel with soft elevation, a header
-rail (harness name, run id, status word, live token/cost ticker) and a live
-xterm.js surface. Baton lines connect conductor→players beneath the cards.
-Cards are draggable and resizable; layouts persist per session; presets
-(solo/duet/quartet/full-16) exist for people who want BridgeSpace-style
-grids. Focus follows click; the focused card gets a brass edge-light and
-verbatim input. Double-click a header (or leader chord) zooms a card to the
-full stage and back. Closing a player card never kills a registered run
-without an explicit confirm.
-
-**SCORE — the board.** Kanban columns Backlog / Assigned / Running / Review /
-Done drawn on a stage-dark surface with faint staff-line texture (restrained —
-a texture, not a theme park). Cards carry T-prefix id, title, worker chip
-(hermes / pi-m3 / codex / claude), status word, exact-or-`~` tokens, and a
-history popover (who moved it, brain or human). Drag between columns invokes
-`orc task move` (actor: human). Clicking a card's worker chip flies to that
-player card on the STAGE — board and stage are two projections of one
-session.
-
-**RUNS — the ledger.** The v3 attention-first data: quota meters, run table,
-session timeline, search — rebuilt as a dense web view over the same
-snapshot code, for when you want the instrument panel rather than the stage.
-
-### Interaction guardrails
-
-- Keyboard: full passthrough to focused terminal; app chords use
-  modifier+combos audited against claude/codex/hermes/pi keymaps in the spike;
-  `cmd+w`/`cmd+q` intercepted with confirm when live panes exist.
-- Empty states teach the real workflow with copyable commands (as v3 does).
-- Errors state what happened and the next action; no toast confetti; no
-  celebration animations when a swarm finishes — a completed session is a
-  receipt, not a party.
+View cycling with `V`, help with `?`, settings with `,` — the key language v3
+users already know.
 
 ## Phasing
 
-**Phase 0 — fix-first + merge base.** Apply review fixes 1–3 (+6) on
-`v3-rust`; full gates (pytest, cargo test/clippy/fmt, live smoke 10/10); merge
-`v3-rust` → `main`; branch `v4-bench`.
+**Phase 0 — fix-first + merge base.** Review fixes 1–3 (+6) on `v3-rust`;
+full existing gates (pytest still exists here, cargo suite, live smoke
+10/10); merge `v3-rust` → `main`; branch `v4-bench`.
 
-**Phase 1 — app spike (go/no-go).** Minimal Tauri 2 app: two xterm.js panes
-running Claude Code and hermes interactively via portable-pty, one hardcoded
-SVG Bézier between them pulsing on a watched-file change. Must survive:
-full-screen TUI redraws at 60fps-ish, paste, mouse, resize, IPC throughput
-under `yes`-style output floods, key passthrough audit, quit interception.
-Verdict written to `docs/notes/2026-07-11-app-spike.md`. Fallback if Tauri
-disappoints: same UI served locally (`orc serve` + browser) — record why.
+**Phase 1 — spike (go/no-go).** Prototype: `orcd` skeleton hosting two PTYs
+(Claude Code + hermes, live), client rendering both panes via the chosen vt
+parser (bake-off: `vt100` vs `termwiz` vs `alacritty_terminal`), one braille
+Bézier with a tachyonfx pulse, synchronized-output frames, adaptive clock.
+Measure: redraw fidelity for full-screen harness TUIs, input latency, CPU at
+4 panes + flood, detach/reattach with screen replay, kitty-keyboard/paste/
+mouse passthrough. Record hermes's headless shape for Phase 5. Verdict to
+`docs/notes/2026-07-11-tui-spike.md`. **Fallback if PTY embedding fails
+fidelity:** companion mode — the brain stays in the user's own terminal; the
+client shows workers, board, and flow (registered runs never needed PTYs).
+Do not grind silently; write the pivot down.
 
-**Phase 2 — HOME + STAGE.** Session records, home shelf, three-step new
-session (worker pool defaults hermes + pi), ensemble layout + drag/resize/
-zoom/persist, pane↔run attribution (`ORC_SESSION`/`ORC_PANE_ID`), design
-tokens + typography pass with screenshot review, `pi-orchestra` launcher in
-`install.sh` (Rust CLI becomes default install; Python behind `--python`).
+**Phase 2 — daemon + client shell + HOME + STAGE + Python deletion.**
+Productionize orcd (socket protocol in orc-proto, multi-client attach,
+tracing, soak test), client compositor + floating cards + ensemble layout +
+focus/leader routing, HOME + three-step new session, pane↔run attribution,
+conductor-down basic recovery (respawn with `resume_args`), golden-fixture
+capture → Python fully deleted → Rust-only installer with `pi-orchestra`
+launcher (`orc top` aliases to the client's RUNS view).
 
-**Phase 3 — tasks + SCORE + skills.** `tasks.rs` + `orc task` CLI with actor
-attribution, SCORE board with drag-to-move, board↔stage flying links, skills
-and AGENTS-block updates (board maintenance, "pi-orchestra" trigger, worker
-pool choice, five review wording fixes, hermes block if applicable), TUI
-gains read-only task list rendering.
+**Phase 3 — tasks + worktrees + SCORE + skills.** tasks.rs + `orc task`
+(add/assign/start/review/done/drop/move/diff/merge, `--isolate`,
+actor-attributed), worktree lifecycle (create/branch/diff/squash-merge/prune,
+non-git degrade), SCORE view with keyboard + mouse drag moves, board↔stage
+flying link, skills/AGENTS updates (trigger alias, board maintenance, worker
+pool, resume re-orientation, five review fixes, hermes block if applicable).
 
-**Phase 4 — baton lines + RUNS.** Event stream from fs watcher → pulse
-animation on real dispatch/steer/complete/handoff; timeline labels; RUNS view
-port of the v3 instrument panel.
+**Phase 4 — baton lines + RUNS + polish.** Event stream → directional pulses
+with per-kind shape/tempo; session-open settle animation; view transitions;
+reduced-motion path; RUNS port; frame/latency benchmarks recorded in README.
 
-**Phase 5 — adapters + docs + dogfood.** hermes adapter first (after local
-shape verification), claude/codex best-effort behind capability flags. README
-+ guide rewrite with app screenshots/screen recording. **Dogfood gate:** build
-at least one Phase 5 deliverable by saying "orchestrate" with the brain
-hosted on the STAGE and the SCORE tracking tasks; friction log in
-`docs/notes/` is a deliverable.
+**Phase 5 — adapters + docs + dogfood.** hermes adapter first (from Phase 1
+notes; interactive-pane degrade if headless is absent — never fake exact
+usage), claude/codex best-effort. README + guide rewrite; VHS captures of
+HOME/STAGE/SCORE. **Dogfood gate:** build at least one Phase 5 deliverable by
+saying "orchestrate" with the brain on the STAGE and tasks on the SCORE
+(worktree-isolated); friction log in `docs/notes/` is a deliverable.
 
-Cut order under pressure: claude/codex adapters → RUNS view (TUI still covers
-it) → layout presets beyond solo/duet/quartet → staff-line texture and
-typography extras. Never cut: Phase 0, passthrough integrity, single-writer
-mutations, fail-open quota, actor-attributed task moves, the hermes+pi default
-pool, baton lines (a static-line degrade is acceptable; absence is not).
+Cut order under pressure: claude/codex adapters → view transitions and
+settle animations (keep event pulses) → mouse drag on STAGE (keyboard swap
+stays) → RUNS extras beyond the v3 port. Never cut: Phase 0, the daemon and
+detach/reattach, conductor-down recovery, passthrough integrity,
+single-writer mutations, actor-attributed moves, worktree isolation, the
+hermes+pi default pool, fail-open quota, baton lines (static degrade
+acceptable; absence is not), the engineering standards.
 
 ## Risks
 
-1. **IPC/render throughput** for flooding terminals — the existential risk;
-   spike measures it with WebGL renderer + output batching before anything
-   else is built.
-2. **Keyboard fidelity** in xterm.js for harness TUIs (kitty keyboard
-   protocol, bracketed paste, mouse modes) — spike audits with the real four
-   harnesses, not `vim`.
-3. **hermes adapter unknowns** — headless mode/usage reporting unverified;
-   mitigation: local inspection first, interactive-pane degrade if absent.
-4. **Frontend toolchain weight** (Node/Vite enters the repo) — contained to
-   `app/ui`; CI gates add `npm build` + typecheck; no server runtime ships.
-5. **macOS packaging/signing** — dev builds fine unsigned; distribution
-   packaging is explicitly out of v4 scope.
-6. **Log amplification** (193 MB/260k tok in v3 dogfood) — player panes tail
-   bounded output; xterm.js scrollback capped; never slurp whole logs.
+1. **vt parsing fidelity for full-screen harness TUIs** — the existential
+   risk; spike with the real four harnesses, named fallback (companion mode).
+2. **Daemon correctness** (orphaned PTYs, socket protocol versioning, replay
+   consistency) — mitigated by zellij's proven blueprint, protocol
+   round-trip tests, pid records + reap-on-restart, soak test.
+3. **Effect-driven CPU burn** — adaptive clock is a hard requirement with an
+   idle-quiet verification test; tachyonfx effects are budgeted per frame.
+4. **Worktree edge cases** (dirty base, submodules, non-git cwd) — degrade
+   with plain words; never auto-resolve conflicts; merge is always explicit.
+5. **hermes adapter unknowns** — headless/usage shape unverified; inspect
+   locally first, degrade honestly.
+6. **Losing the Python oracle** — golden fixtures captured before deletion
+   pin the contract; cross-language parity becomes fixture parity.
 
-## Open questions (with recommendations)
+## Resolved decisions (from user review)
 
-1. **Detach/reattach for interactive panes** — punted to P2; document "stage
-   panes are a window; registered runs are durable."
-2. **Python retirement** — v4 flips default install to Rust, Python behind
-   `--python` as parity oracle; delete in a later major.
-3. **Remote access** (`orc serve`) — P2; transport abstraction keeps it cheap.
-4. **Worktree-per-task** (Vibe Kanban model) — attractive, out of v4 scope;
-   revisit once the board is proven.
-5. **App theme count** — ship ember-derived default + phosphor alternate;
-   no theme builder.
+1. Brain death → daemon + conductor-down recovery (core, Phase 2/4). ✔
+2. Python → fully deleted in Phase 2, fixtures first. ✔
+3. Remote → SSH + `pi-orchestra attach`; no web server. ✔
+4. Worktree-per-task → in scope, Phase 3. ✔
+5. Themes → ember + phosphor only. ✔
 
 ## Approval gate
 
 No implementation, branch, or swarm until the user approves this revision.
 After approval: Phase 0 on `v3-rust`, merge, create `v4-bench` carrying this
-document, then the Phase 1 app spike before any feature work.
+document, then the Phase 1 spike before any feature work.
