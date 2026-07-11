@@ -145,8 +145,13 @@ Release measurements on the development M-series Mac:
 - Five idle samples: daemon **0.0% CPU**, client **0.0% CPU**; observed RSS
   about 6.7 MiB and 2.8 MiB respectively.
 
-The required multi-hour flood result and exact producer/CPU/RSS/coalescing
-numbers are recorded in the Phase 2 evidence note under `docs/notes/`.
+The required four-pane flood ran for 7,608 seconds (2 h 6 m 48 s), with each
+producer writing 1,024 lines then pausing 50 ms. Daemon CPU was 21.2% at the
+start, peaked at 36.5%, and ended at 22.8%; RSS was 31,168 KiB, 52,672 KiB,
+and 33,520 KiB respectively. The captured in-run metrics recorded 33,392
+coalesced updates and no dropped canonical PTY state. The exact interruption
+caveat and raw evidence are recorded in the Phase 2 evidence note under
+`docs/notes/`.
 
 Visual evidence:
 

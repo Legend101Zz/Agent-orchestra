@@ -96,3 +96,35 @@
 - Resume only with
   `docs/prompts/2026-07-11-v4-phase2-next-session.md`. Finish, gate, commit,
   and push Phase 2, then stop without beginning Phase 3.
+
+## Session 4 — 2026-07-11 (v4 Phase 2)
+- Captured the live Python compatibility oracle first and committed it at
+  `89379a0`; the immutable Rust fixtures and fake-pi suite cover legacy,
+  corrupt, Unicode, lifecycle, exact-usage, RPC, quota, retry, and handoff
+  behavior. Python and Rust parity gates were green before deletion.
+- Productionized the bounded per-user daemon/protocol at `0cac6bf`: private
+  socket, safe stale handling, exact restart/reap identity, client caps,
+  multi-size attachment, replay, atomic records, rotating tracing log,
+  output coalescing, lost-wakeup/raw-input regressions, and soak tooling.
+- Shipped HOME, STAGE, raw focused-pane input, daemon-owned layout/session
+  mutation, launch attribution, and conductor-down recovery at `15d00d2`.
+  TestBackend and inspected VHS evidence cover ember/phosphor, wide/72x30,
+  launch, resize/zoom, detach, and reattach.
+- Measured release behavior: socket p99 42 µs; visible-input p99 4.363 ms;
+  daemon/client idle 0.0% CPU. The four-pane flood ran 7,608 seconds; daemon
+  CPU start/peak/end was 21.2/36.5/22.8% and RSS was
+  31,168/52,672/33,520 KiB. The user interrupted final snapshot collection,
+  so the evidence note records the captured 33,392 in-run coalescing count and
+  the missing post-run metrics total explicitly.
+- Kitty 0.47.4 held an active isolated Phase-2 socket. Ghostty launched as a
+  signed app process, but macOS did not spawn the helper and local UI control
+  refused Ghostty access; only process evidence is claimed for Ghostty.
+- Removed the Python runtime/test/package stack and switched install/uninstall
+  to the three Rust binaries at `69a8a40`. Actual isolated-HOME install and
+  uninstall passed while preserving `~/.orchestra`.
+- Final isolated-target gates passed: fmt, clippy `-D warnings`, all tests,
+  warning-free rustdoc, locked release build, no runtime Python plumbing, and
+  no `unwrap`/`expect` in daemon/core production code. All four protected
+  checksums are exact; `findings.md` remains the only unrelated untracked file.
+- Phase 2 is complete. Phase 3 was not started and `v4-bench` was not merged
+  to `main`.
