@@ -7,7 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::bench::read_session;
+use crate::bench::{BenchSession, read_session, write_session};
 use crate::registry::{atomic_write_json, home, now_iso};
 
 const LOCK_ATTEMPTS: usize = 100;
@@ -167,6 +168,12 @@ pub struct TaskWorktree {
     /// Owned branch after isolation is materialized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Human-readable reason when isolation cannot be materialized safely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Squash-merge commit after an explicit successful merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_commit: Option<String>,
     /// Unknown future fields.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -411,6 +418,258 @@ fn next_id(all: &[Task]) -> String {
     format!("T{:04}", highest.saturating_add(1))
 }
 
+fn git(repo: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .with_context(|| format!("run git {}", args.join(" ")))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        bail!("git {} failed: {detail}", args.join(" "))
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn expected_branch(session: &str, id: &str) -> String {
+    let slug = crate::registry::make_slug(session);
+    format!("orc/{slug}/{id}")
+}
+
+fn expected_worktree_path(session: &str, id: &str) -> PathBuf {
+    home().join("worktrees").join(session_key(session)).join(id)
+}
+
+fn worktree_parent_is_safe(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("worktree path has no parent"))?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let metadata = fs::symlink_metadata(parent)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("ISOLATION UNAVAILABLE: worktree parent is not an owned directory")
+    }
+    if path.exists() || fs::symlink_metadata(path).is_ok() {
+        bail!("ISOLATION UNAVAILABLE: owned worktree path already exists")
+    }
+    Ok(())
+}
+
+fn session_base(session: &str) -> Result<(BenchSession, PathBuf, String, String)> {
+    let mut record =
+        read_session(session).with_context(|| format!("missing task session {session}"))?;
+    if record.base_repo.is_none() || record.base_branch.is_none() || record.base_commit.is_none() {
+        let cwd = PathBuf::from(&record.cwd);
+        let repo = match git(&cwd, &["rev-parse", "--show-toplevel"]) {
+            Ok(repo) => repo,
+            Err(_) => bail!("ISOLATION UNAVAILABLE: session cwd is not a Git work tree"),
+        };
+        let branch = git(&cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .map_err(|_| anyhow!("ISOLATION UNAVAILABLE: session base has detached HEAD"))?;
+        let commit = git(&cwd, &["rev-parse", "HEAD"])?;
+        record.base_repo = Some(repo);
+        record.base_branch = Some(branch);
+        record.base_commit = Some(commit);
+        record.updated_at = now_iso();
+        write_session(&record)?;
+    }
+    let repo = PathBuf::from(record.base_repo.clone().unwrap_or_default());
+    let branch = record.base_branch.clone().unwrap_or_default();
+    let commit = record.base_commit.clone().unwrap_or_default();
+    if repo.as_os_str().is_empty() || branch.is_empty() || commit.is_empty() {
+        bail!("ISOLATION UNAVAILABLE: session has no complete recorded Git base")
+    }
+    let actual = git(&repo, &["rev-parse", "--show-toplevel"])?;
+    if fs::canonicalize(&repo)? != fs::canonicalize(actual)? {
+        bail!("ISOLATION UNAVAILABLE: recorded repository root is inconsistent")
+    }
+    Ok((record, repo, branch, commit))
+}
+
+fn base_is_clean(repo: &Path, branch: &str, commit: &str) -> Result<()> {
+    let current_branch = git(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .map_err(|_| anyhow!("ISOLATION UNAVAILABLE: base checkout has detached HEAD"))?;
+    if current_branch != branch {
+        bail!("ISOLATION UNAVAILABLE: base branch is '{current_branch}', expected '{branch}'")
+    }
+    let current_commit = git(repo, &["rev-parse", "HEAD"])?;
+    if current_commit != commit {
+        bail!("ISOLATION UNAVAILABLE: base commit changed; create a fresh session before isolation")
+    }
+    if !git(repo, &["status", "--porcelain"])?.is_empty() {
+        bail!("ISOLATION UNAVAILABLE: base checkout is dirty")
+    }
+    Ok(())
+}
+
+fn mark_unavailable(task: &mut Task, reason: String) {
+    if let Some(worktree) = task.worktree.as_mut() {
+        worktree.state = "unavailable".to_owned();
+        worktree.reason = Some(reason.clone());
+        append_history(
+            task,
+            TaskActor::Human,
+            "isolation_unavailable",
+            None,
+            None,
+            Some(reason),
+        );
+    }
+}
+
+fn materialize_worktree(task: &mut Task) -> Result<()> {
+    if task.worktree.is_none() {
+        return Ok(());
+    }
+    let result = (|| -> Result<()> {
+        let (_session, repo, branch, commit) = session_base(&task.session)?;
+        base_is_clean(&repo, &branch, &commit)?;
+        let path = expected_worktree_path(&task.session, &task.id);
+        worktree_parent_is_safe(&path)?;
+        let owned_branch = expected_branch(&task.session, &task.id);
+        if git(
+            &repo,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{owned_branch}"),
+            ],
+        )
+        .is_ok()
+        {
+            bail!("ISOLATION UNAVAILABLE: owned branch name already exists")
+        }
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &owned_branch,
+                &path.to_string_lossy(),
+                &commit,
+            ],
+        )?;
+        let worktree = task
+            .worktree
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing worktree metadata"))?;
+        worktree.state = "ready".to_owned();
+        worktree.path = Some(path.to_string_lossy().into_owned());
+        worktree.branch = Some(owned_branch);
+        worktree.reason = None;
+        append_history(task, TaskActor::Human, "isolated", None, None, None);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        mark_unavailable(task, error.to_string());
+    }
+    Ok(())
+}
+
+fn owned_worktree(task: &Task) -> Result<(PathBuf, String, PathBuf)> {
+    let worktree = task
+        .worktree
+        .as_ref()
+        .ok_or_else(|| anyhow!("ISOLATION UNAVAILABLE: task is not isolated"))?;
+    if worktree.state == "unavailable" {
+        bail!(
+            "ISOLATION UNAVAILABLE: {}",
+            worktree.reason.as_deref().unwrap_or("no usable Git base")
+        )
+    }
+    if worktree.state != "ready" && worktree.state != "conflict" {
+        bail!("ISOLATION UNAVAILABLE: task worktree is {}", worktree.state)
+    }
+    let path = PathBuf::from(
+        worktree
+            .path
+            .as_deref()
+            .ok_or_else(|| anyhow!("ISOLATION UNAVAILABLE: task has no worktree path"))?,
+    );
+    let branch = worktree
+        .branch
+        .clone()
+        .ok_or_else(|| anyhow!("ISOLATION UNAVAILABLE: task has no worktree branch"))?;
+    if path != expected_worktree_path(&task.session, &task.id)
+        || branch != expected_branch(&task.session, &task.id)
+    {
+        bail!("ISOLATION UNAVAILABLE: task worktree ownership cannot be proven")
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("ISOLATION UNAVAILABLE: missing worktree {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("ISOLATION UNAVAILABLE: worktree path is unsafe")
+    }
+    let (_session, repo, _base_branch, _base_commit) = session_base(&task.session)?;
+    let list = git(&repo, &["worktree", "list", "--porcelain"])?;
+    let target = fs::canonicalize(&path)?;
+    let found = list.split("\n\n").any(|record| {
+        let path_match = record
+            .lines()
+            .find_map(|line| line.strip_prefix("worktree "))
+            .and_then(|value| fs::canonicalize(value).ok())
+            .is_some_and(|value| value == target);
+        let branch_match = record
+            .lines()
+            .any(|line| line == format!("branch refs/heads/{branch}"));
+        path_match && branch_match
+    });
+    if !found || git(&path, &["symbolic-ref", "--quiet", "--short", "HEAD"])? != branch {
+        bail!("ISOLATION UNAVAILABLE: worktree and branch ownership cannot be proven")
+    }
+    Ok((path, branch, repo))
+}
+
+/// Real changed-line and file counts for an isolated task worktree.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskDiff {
+    /// Added text lines, excluding binary-file byte markers.
+    pub insertions: u64,
+    /// Deleted text lines, excluding binary-file byte markers.
+    pub deletions: u64,
+    /// Changed paths.
+    pub files: u64,
+}
+
+/// Read the real Git diff for a task without mutating its worktree.
+pub fn diff_task(session: &str, id: &str) -> Result<TaskDiff> {
+    let task = read_task(session, id)?;
+    let (path, _branch, _repo) = owned_worktree(&task)?;
+    let base = session_base(session)?.3;
+    let text = git(&path, &["diff", "--numstat", &base])?;
+    let mut diff = TaskDiff::default();
+    for line in text.lines() {
+        let mut fields = line.splitn(3, '\t');
+        let additions = fields.next().unwrap_or_default();
+        let deletions = fields.next().unwrap_or_default();
+        if fields.next().is_none() {
+            continue;
+        }
+        diff.files = diff.files.saturating_add(1);
+        diff.insertions = diff
+            .insertions
+            .saturating_add(additions.parse::<u64>().unwrap_or(0));
+        diff.deletions = diff
+            .deletions
+            .saturating_add(deletions.parse::<u64>().unwrap_or(0));
+    }
+    Ok(diff)
+}
+
+fn prune_owned_worktree(task: &mut Task) -> Result<()> {
+    let (path, branch, repo) = owned_worktree(task)?;
+    git(&repo, &["worktree", "remove", &path.to_string_lossy()])?;
+    git(&repo, &["branch", "-D", &branch])?;
+    if let Some(worktree) = task.worktree.as_mut() {
+        worktree.state = "pruned".to_owned();
+        worktree.reason = None;
+    }
+    Ok(())
+}
+
 /// Read every parseable task newest first, ignoring corrupt sibling files.
 pub fn list_tasks(session: &str) -> Result<Vec<Task>> {
     validate_session_id(session)?;
@@ -462,6 +721,8 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
             state: "requested".to_owned(),
             path: None,
             branch: None,
+            reason: None,
+            result_commit: None,
             extra: BTreeMap::new(),
         }),
         created_at: now.clone(),
@@ -478,6 +739,10 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
         None,
     );
     write_task(&task)?;
+    if new.isolate {
+        materialize_worktree(&mut task)?;
+        write_task(&task)?;
+    }
     Ok(task)
 }
 
@@ -567,5 +832,96 @@ pub fn done_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
 
 /// Drop a non-terminal task without deleting its durable record.
 pub fn drop_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
-    move_task(session, id, TaskStatus::Dropped, actor)
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    let from = TaskStatus::parse(&task.status)?;
+    if !from.permits(TaskStatus::Dropped) {
+        return Err(TaskError::InvalidTransition {
+            from: from.as_str().to_owned(),
+            to: TaskStatus::Dropped.as_str().to_owned(),
+        }
+        .into());
+    }
+    if task
+        .worktree
+        .as_ref()
+        .is_some_and(|worktree| matches!(worktree.state.as_str(), "ready" | "conflict"))
+    {
+        prune_owned_worktree(&mut task)?;
+    }
+    task.status = TaskStatus::Dropped.as_str().to_owned();
+    append_history(
+        &mut task,
+        actor,
+        "dropped",
+        Some(from),
+        Some(TaskStatus::Dropped),
+        None,
+    );
+    write_task(&task)?;
+    Ok(task)
+}
+
+/// Explicitly squash-merge a reviewed clean isolated task onto its recorded base.
+///
+/// The operation refuses dirty, moved, detached, or unowned bases. A merge
+/// conflict is recorded on the task and left for a human to resolve; it is
+/// never auto-resolved or marked done.
+pub fn merge_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    if TaskStatus::parse(&task.status)? != TaskStatus::Review {
+        bail!("task {id} must be in review before an explicit merge")
+    }
+    let (path, branch, repo) = owned_worktree(&task)?;
+    let (mut record, _recorded_repo, base_branch, base_commit) = session_base(session)?;
+    base_is_clean(&repo, &base_branch, &base_commit)?;
+    if !git(&path, &["status", "--porcelain"])?.is_empty() {
+        bail!("task {id} worktree is dirty; commit its changes before merge")
+    }
+    if let Err(error) = git(&repo, &["merge", "--squash", "--no-commit", &branch]) {
+        if let Some(worktree) = task.worktree.as_mut() {
+            worktree.state = "conflict".to_owned();
+            worktree.reason = Some(error.to_string());
+        }
+        append_history(
+            &mut task,
+            actor,
+            "merge_conflict",
+            Some(TaskStatus::Review),
+            Some(TaskStatus::Review),
+            Some(error.to_string()),
+        );
+        write_task(&task)?;
+        return Err(error);
+    }
+    if git(&repo, &["diff", "--cached", "--quiet"]).is_ok() {
+        bail!("task {id} has no committed branch changes to merge")
+    }
+    git(
+        &repo,
+        &["commit", "-m", &format!("orc task {id}: {}", task.title)],
+    )?;
+    let result_commit = git(&repo, &["rev-parse", "HEAD"])?;
+    record.base_commit = Some(result_commit.clone());
+    record.updated_at = now_iso();
+    write_session(&record)?;
+    prune_owned_worktree(&mut task)?;
+    if let Some(worktree) = task.worktree.as_mut() {
+        worktree.state = "merged".to_owned();
+        worktree.result_commit = Some(result_commit.clone());
+        worktree.reason = None;
+    }
+    append_history(
+        &mut task,
+        actor,
+        "merged",
+        Some(TaskStatus::Review),
+        Some(TaskStatus::Review),
+        Some(result_commit),
+    );
+    write_task(&task)?;
+    Ok(task)
 }

@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -185,6 +186,18 @@ pub struct BenchSession {
     pub workers: Vec<String>,
     /// Working directory shared by fresh panes.
     pub cwd: String,
+    /// Recorded Git repository root used for task isolation, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_repo: Option<String>,
+    /// Recorded base branch used for explicit task merges, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Recorded base commit used for isolated task branches, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Optional session isolation default, currently `worktree` when selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<String>,
     /// Creation timestamp.
     pub created_at: String,
     /// Last mutation timestamp.
@@ -288,12 +301,17 @@ pub fn create_session(brain: &str, workers: &[String], cwd: &Path) -> Result<Ben
         epoch,
         SESSION_NONCE.fetch_add(1, Ordering::Relaxed) & 0xffff
     );
+    let (base_repo, base_branch, base_commit) = git_base(cwd);
     let now = now_iso();
     let session = BenchSession {
         id,
         brain: brain.to_owned(),
         workers: workers.to_vec(),
         cwd: cwd.to_string_lossy().into_owned(),
+        base_repo,
+        base_branch,
+        base_commit,
+        isolation: None,
         created_at: now.clone(),
         updated_at: now,
         panes: Vec::new(),
@@ -303,6 +321,24 @@ pub fn create_session(brain: &str, workers: &[String], cwd: &Path) -> Result<Ben
     };
     write_session(&session)?;
     Ok(session)
+}
+
+fn git_base(cwd: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let output = |args: &[&str]| {
+        Command::new("git")
+            .args(["-C", &cwd.to_string_lossy()])
+            .args(args)
+            .output()
+            .ok()
+            .filter(|result| result.status.success())
+            .and_then(|result| String::from_utf8(result.stdout).ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let repo = output(&["rev-parse", "--show-toplevel"]);
+    let branch = output(&["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let commit = output(&["rev-parse", "HEAD"]);
+    (repo, branch, commit)
 }
 
 /// Read one durable session record.
