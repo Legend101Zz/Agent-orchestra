@@ -128,3 +128,12 @@
   checksums are exact; `findings.md` remains the only unrelated untracked file.
 - Phase 2 is complete. Phase 3 was not started and `v4-bench` was not merged
   to `main`.
+
+## Session boundary after Phase 2
+- Remote `origin/v4-bench` was proven equal to local HEAD at the Phase 2
+  evidence commit `63a9b39841918bc0551edec0e847976ee3b53945`.
+- The worktree was clean except for the preserved pre-existing untracked
+  `findings.md`; all protected checksums matched their pre-phase values.
+- Resume only with
+  `docs/prompts/2026-07-11-v4-phase3-next-session.md`. Implement, gate,
+  evidence, commit, and push Phase 3, then stop without beginning Phase 4.

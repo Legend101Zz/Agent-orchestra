@@ -8,8 +8,9 @@ fix-first findings landed, so implementation now proceeds entirely on
 Ship pi-orchestra v4 Bench according to the approved rev-3 design, with every
 phase gated, committed, pushed, and evidenced.
 
-**Current handoff:** Phase 2 is complete on `v4-bench`. This session stops
-before Phase 3; Phase 3 requires a separate explicit user instruction.
+**Current handoff:** Phase 2 is complete on `v4-bench`. The next session must
+execute only `docs/prompts/2026-07-11-v4-phase3-next-session.md`, finish and
+push Phase 3, then stop before Phase 4.
 
 ## Phases
 - [x] Read the approved design, v3 review/spec, friction log, README, skills,
