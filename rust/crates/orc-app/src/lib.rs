@@ -1143,13 +1143,10 @@ fn handle_raw_event(
             if bytes == b"g" {
                 if let (Some(stage), Some(task)) =
                     (shell.stage.as_mut(), score.tasks.get(score.selected))
+                    && let Some(pane_id) = &task.assignee_run
+                    && let Some(index) = stage.panes.iter().position(|pane| &pane.id == pane_id)
                 {
-                    if let Some(pane_id) = &task.assignee_run {
-                        if let Some(index) = stage.panes.iter().position(|pane| &pane.id == pane_id)
-                        {
-                            stage.focus = index;
-                        }
-                    }
+                    stage.focus = index;
                 }
                 shell.view = ShellView::Stage;
                 return Ok(false);
