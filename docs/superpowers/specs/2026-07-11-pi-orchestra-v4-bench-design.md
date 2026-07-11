@@ -4,10 +4,11 @@
 deleted, worktree-per-task in scope; supersedes rev 2's Tauri pivot per user
 decision)
 **Status:** Proposed — awaiting explicit user approval
-**Branch after approval:** `v4-bench`, created from `main` after the fix-first
-items land on `v3-rust` and it merges to `main`
+**Branch after approval:** `v4-bench`, created from `main` (`v3-rust` was
+merged via PR #1 *before* the fix-first items landed, so they open Phase 0)
 **Prereq:** the three ordered fixes in `docs/reviews/2026-07-11-v3-rust-review.md`
-(quota timeout, steering turn boundary, TUI quota refresh)
+(quota timeout, steering turn boundary, TUI quota refresh) — now live on
+`main`, to be fixed as the first `v4-bench` commits
 
 ## Product position
 
@@ -330,9 +331,9 @@ users already know.
 
 ## Phasing
 
-**Phase 0 — fix-first + merge base.** Review fixes 1–3 (+6) on `v3-rust`;
-full existing gates (pytest still exists here, cargo suite, live smoke
-10/10); merge `v3-rust` → `main`; branch `v4-bench`.
+**Phase 0 — fix-first.** Review fixes 1–3 (+6) as the first commits on
+`v4-bench` (v3-rust already merged to `main` unfixed via PR #1); full
+existing gates (pytest still exists here, cargo suite, live smoke 10/10).
 
 **Phase 1 — spike (go/no-go).** Prototype: `orcd` skeleton hosting two PTYs
 (Claude Code + hermes, live), client rendering both panes via the chosen vt
@@ -407,5 +408,6 @@ acceptable; absence is not), the engineering standards.
 ## Approval gate
 
 No implementation, branch, or swarm until the user approves this revision.
-After approval: Phase 0 on `v3-rust`, merge, create `v4-bench` carrying this
-document, then the Phase 1 spike before any feature work.
+After approval: create `v4-bench` from `main` (which already carries this
+document), land Phase 0 fix-first as its opening commits, then the Phase 1
+spike before any feature work.

@@ -33,10 +33,11 @@ order:
 
 ## Hard rules
 
-- Phase 0 happens on `v3-rust`; after its gates pass, merge `v3-rust` → `main`
-  (the review authorizes this merge only after fixes 1–3 are verified; never
-  force-push), then create `v4-bench` from `main` for all v4 work. If a
-  Phase 0 gate fails in a way you cannot fix cleanly, stop and report.
+- `v3-rust` was already merged to `main` (PR #1) **before** the fix-first
+  items landed, so the review's P0 defects are live on `main`. Create
+  `v4-bench` from `main` immediately and do ALL work there, starting with
+  Phase 0 as its first commits. Never force-push; if a Phase 0 gate fails in
+  a way you cannot fix cleanly, stop and report.
 - Never modify `~/.pi/agent/*`, `~/.claude/settings.json`,
   `~/.codex/config.toml`, or `~/.local/bin/orc` mid-development.
 - Registry, sessions, tasks: plain JSON, atomic temp+fsync+rename, additive
@@ -67,7 +68,7 @@ order:
 
 ## Phases (each ends with its gates green + a commit + push)
 
-**Phase 0 — fix-first (on `v3-rust`).**
+**Phase 0 — fix-first (first commits on `v4-bench`).**
 1. `quota.rs`: connect + global timeouts (15 s) on the ureq call; 10 s
    timeout on the `security` keychain subprocess.
 2. `runner.rs`: count delivered prompts; finish the RPC loop only when
@@ -79,7 +80,8 @@ order:
    worker thread on the cache-TTL cadence.
    Gate: full pytest (Python still exists in Phase 0), cargo
    test/clippy/fmt, `tests/live_smoke.sh` with the Rust binary first on
-   PATH → 10/10. Merge to `main`, branch `v4-bench`.
+   PATH → 10/10. (No merge step — `v3-rust` is already in `main`; these
+   fixes are the first commits on `v4-bench`.)
 
 **Phase 1 — spike (go/no-go, on `v4-bench`).**
 Prototype the vertical slice: `orcd` skeleton (unix socket, hosts two PTYs
