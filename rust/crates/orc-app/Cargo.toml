@@ -1,0 +1,23 @@
+[package]
+name = "orc-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pi-orchestra"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+orc-proto = { path = "../orc-proto" }
+ratatui.workspace = true
+serde_json.workspace = true
+tachyonfx.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

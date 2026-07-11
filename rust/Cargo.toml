@@ -3,6 +3,10 @@ members = [
     "crates/orc-core",
     "crates/orc-cli",
     "crates/orc-tui",
+    "crates/orc-proto",
+    "crates/orc-pty",
+    "crates/orc-daemon",
+    "crates/orc-app",
 ]
 resolver = "2"
 
@@ -22,8 +26,15 @@ ratatui = "0.30.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 signal-hook = "0.3.18"
+portable-pty = "0.9.0"
+shell-words = "1.1.0"
+tachyonfx = { version = "0.25.1", features = ["std-duration"] }
+thiserror = "2.0.18"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 unicode-width = "0.2.2"
 ureq = { version = "3.3.0", features = ["json"] }
+vt100 = "0.16.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
