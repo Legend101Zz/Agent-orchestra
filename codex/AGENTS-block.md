@@ -38,4 +38,9 @@ Treat `pi-orchestra` as a product-workflow trigger. Use `orc task ... --session 
 When `ORC_SESSION` or `ORC_PANE_ID` is present or work resumes, first run
 `orc task list --session "$ORC_SESSION"` and `orc list`; preserve completed work and
 durable inbox context rather than recreating it.
+
+The word `pi-orchestra` is also a trigger for that procedure. Keep pane/session
+environment intact, use explicit `--session` plus `--actor brain|human` for task
+commands, and offer (never assume) configured workers. Local Hermes help did not
+show an AGENTS.md-equivalent project-instruction hook, so no Hermes block is installed.
 <!-- pi-orchestra:end -->

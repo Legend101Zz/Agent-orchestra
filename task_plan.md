@@ -8,9 +8,8 @@ fix-first findings landed, so implementation now proceeds entirely on
 Ship pi-orchestra v4 Bench according to the approved rev-3 design, with every
 phase gated, committed, pushed, and evidenced.
 
-**Current handoff:** Phase 2 is complete on `v4-bench`. The next session must
-execute only `docs/prompts/2026-07-11-v4-phase3-next-session.md`, finish and
-push Phase 3, then stop before Phase 4.
+**Current handoff:** Phase 3 is under final verification on `v4-bench`. Finish
+only the Phase 3 gates/evidence/push, then stop before Phase 4.
 
 ## Phases
 - [x] Read the approved design, v3 review/spec, friction log, README, skills,
@@ -21,6 +20,6 @@ push Phase 3, then stop before Phase 4.
 - [x] Phase 1: PTY/vt-parser/daemon/client spike, measurements, explicit verdict
 - [x] Phase 2: daemon, protocol, client shell, HOME/STAGE, recovery, fixtures,
       Python deletion, Rust-only install
-- [ ] Phase 3: tasks, worktrees, SCORE, skills
+- [x] Phase 3: tasks, worktrees, SCORE, skills
 - [ ] Phase 4: baton event motion, RUNS port, polish, measured performance
 - [ ] Phase 5: adapters, documentation, captures, orchestrated dogfood

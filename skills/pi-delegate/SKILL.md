@@ -42,6 +42,12 @@ command crosses shells) and `orc list`; preserve completed tasks and durable
 inbox context. Offer the configured `default_workers` (Hermes + pi/MiniMax-M3
 today), but never silently assume that pool.
 
+When `ORC_PANE_ID` is present, the work originated in a daemon-owned pane:
+keep both `ORC_SESSION` and `ORC_PANE_ID` intact, and use task commands with
+an explicit `--session` and `--actor brain|human`. `pi-orchestra` itself is an
+alias trigger for this re-orientation procedure; it does not authorize an
+unconfigured worker or adapter.
+
 ## Quota rules (IMPORTANT)
 
 - `orc` prints `ORC WARNING:` / `ORC BLOCKED:` / `ORC NOTE:` lines on stderr.

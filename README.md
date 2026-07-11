@@ -20,7 +20,8 @@ orc run / rpc / list / show / quota ──────────────�
 ./uninstall.sh
 ```
 
-The installer performs a locked Rust release build and safely links all three
+The installer performs a locked Rust release build in an isolated target under
+your install HOME (or `ORC_INSTALL_CARGO_TARGET_DIR`) and safely links all three
 binaries into `~/.local/bin`:
 
 - `orc`
@@ -35,9 +36,35 @@ preserves `~/.orchestra` data. The installer never edits
 Build without installing:
 
 ```bash
-cargo build --manifest-path rust/Cargo.toml --release --locked
-rust/target/release/pi-orchestra home
+CARGO_TARGET_DIR=/tmp/pi-orchestra-build cargo build --manifest-path rust/Cargo.toml --release --locked
+/tmp/pi-orchestra-build/release/pi-orchestra home
 ```
+
+## Phase 3: durable tasks, worktrees, and SCORE
+
+Tasks are plain additive JSON, mutated only through `orc task` with an explicit
+session and actor. `--json` returns the complete task record or diff object.
+
+```bash
+orc task add "review parser" --isolate --session bench-1 --actor brain --json
+orc task assign T0001 pi-m3 --session bench-1 --actor brain
+orc task start T0001 --session bench-1 --actor brain
+orc task review T0001 --session bench-1 --actor human
+orc task diff T0001 --session bench-1 --json
+orc task merge T0001 --session bench-1 --actor human --json
+```
+
+Isolation creates only an owned `orc/<session>/<task>` branch under the owned
+worktree root. It refuses dirty, detached, non-Git, reused, symlinked, or
+unprovable paths and never auto-resolves merge conflicts. `drop` preserves the
+audit record and prunes only an owned clean worktree.
+
+SCORE is the task board in an attached session: `j/k` selects, `h/l` requests
+the adjacent valid lifecycle move, mouse drag requests a column move through
+the daemon as `human`, `g` focuses the linked STAGE pane, and `ctrl-g b`
+returns from STAGE to SCORE. SCORE is covered with ember/phosphor TestBackend
+snapshots at wide and exactly 72x30 sizes; RUNS and baton animation remain
+outside Phase 3.
 
 ## Bench client
 

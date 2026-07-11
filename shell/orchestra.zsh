@@ -9,7 +9,9 @@ deleg8() {
     echo 'Usage: deleg8 "<task>" [cwd]' >&2
     return 1
   fi
-  orc run "$task" --cwd "$cwd" --brain "${ORC_BRAIN:-human}"
+  local -a session_args
+  [[ -n "${ORC_SESSION:-}" ]] && session_args=(--session "$ORC_SESSION")
+  orc run "$task" --cwd "$cwd" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
 }
 
 # pi-rpc: streaming delegation (JSON-RPC) via orc; Ctrl+C cancels; kill via `orc kill <id>`
@@ -20,5 +22,7 @@ pi-rpc() {
     echo 'Usage: pi-rpc "<task>"' >&2
     return 1
   fi
-  orc rpc "$task" --brain "${ORC_BRAIN:-human}"
+  local -a session_args
+  [[ -n "${ORC_SESSION:-}" ]] && session_args=(--session "$ORC_SESSION")
+  orc rpc "$task" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
 }

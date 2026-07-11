@@ -137,3 +137,22 @@
 - Resume only with
   `docs/prompts/2026-07-11-v4-phase3-next-session.md`. Implement, gate,
   evidence, commit, and push Phase 3, then stop without beginning Phase 4.
+
+## Session 5 — 2026-07-11 (v4 Phase 3)
+- Audited the three existing Phase 3 commits rather than trusting their broad
+  tests. The CLI exposed `task diff` and `task merge` but rejected both; they
+  now exercise the core lifecycle and a real binary integration test proves
+  additive JSON, diff statistics, explicit squash merge, and pruning.
+- Hardened worktree ownership: a symlinked worktree root is refused before Git
+  can write outside the owned root, and isolation history retains the actual
+  human/brain actor.
+- SCORE now renders review diff/token/history/dependency/error context,
+  supports adjacent keyboard moves and SGR mouse drag moves via daemon/core as
+  `human`, focuses the assigned STAGE pane with `g`, and returns with
+  `ctrl-g b`. TestBackend covers ember/phosphor at wide and 72x30.
+- Installer tests now prove idempotence, no duplicated owned blocks, user skill
+  survival, and removal only of owned symlinks. Builds default to an isolated
+  install target instead of the live repository target.
+- Hermes local help was inspected. It did not demonstrate an AGENTS.md
+  equivalent, so no Hermes instruction block was installed; this is documented
+  in the source AGENTS block.

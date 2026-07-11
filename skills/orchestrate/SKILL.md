@@ -40,3 +40,8 @@ must not activate.
 - Do not invent pi or `orc` flags such as `--thinking`; tighten the prompt instead.
 - On resume, run `orc task list --session "$ORC_SESSION"` plus `orc list` before acting;
   use `orc send`, `orc retry`, or `orc handoff` and preserve completed task context.
+- If `ORC_PANE_ID` is present, retain it with `ORC_SESSION`; all board mutations
+  still require explicit `--session` and `--actor brain|human` through `orc task`.
+- `pi-orchestra` is an alias trigger for the same re-orientation and board
+  maintenance workflow. Offer configured `default_workers`; never assume their
+  acceptance or claim an adapter capability that has not been verified locally.
