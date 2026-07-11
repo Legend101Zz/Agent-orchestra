@@ -87,3 +87,12 @@
   warning-free rustdoc pass; Python remains at 92 passing tests. Raw-byte
   passthrough for every kitty extended key remains a mandatory Phase-2 item;
   the spike currently re-encodes common decoded crossterm keys honestly.
+
+## Session boundary after Phase 1
+- User explicitly stopped this session before Phase 2 because context was
+  becoming large. No Phase-2 implementation was started.
+- Remote `origin/v4-bench` is verified at `91624a0`; the worktree is clean
+  except for the pre-existing untracked `findings.md`, which must be preserved.
+- Resume only with
+  `docs/prompts/2026-07-11-v4-phase2-next-session.md`. Finish, gate, commit,
+  and push Phase 2, then stop without beginning Phase 3.

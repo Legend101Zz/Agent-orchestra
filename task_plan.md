@@ -8,6 +8,10 @@ fix-first findings landed, so implementation now proceeds entirely on
 Ship pi-orchestra v4 Bench according to the approved rev-3 design, with every
 phase gated, committed, pushed, and evidenced.
 
+**Current handoff:** Stop after Phase 1 in this session. The next session must
+execute only `docs/prompts/2026-07-11-v4-phase2-next-session.md` and must not
+start Phase 3.
+
 ## Phases
 - [x] Read the approved design, v3 review/spec, friction log, README, skills,
       AGENTS block, and Phase-0 Rust surfaces

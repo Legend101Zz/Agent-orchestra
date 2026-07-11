@@ -3,12 +3,13 @@
 **Date:** 2026-07-11 (rev 3 — TUI-only flagship, client-server daemon, Python
 deleted, worktree-per-task in scope; supersedes rev 2's Tauri pivot per user
 decision)
-**Status:** Proposed — awaiting explicit user approval
-**Branch after approval:** `v4-bench`, created from `main` (`v3-rust` was
-merged via PR #1 *before* the fix-first items landed, so they open Phase 0)
-**Prereq:** the three ordered fixes in `docs/reviews/2026-07-11-v3-rust-review.md`
-(quota timeout, steering turn boundary, TUI quota refresh) — now live on
-`main`, to be fixed as the first `v4-bench` commits
+**Status:** Approved; Phases 0 and 1 shipped on `v4-bench`; Phase 2 is next
+**Branch:** `v4-bench` at remote-verified commit `91624a0` after Phase 1
+**Execution handoff:** `docs/prompts/2026-07-11-v4-phase2-next-session.md`
+**Completed prereq:** the three ordered fixes in
+`docs/reviews/2026-07-11-v3-rust-review.md` landed in Phase 0; the embedded-PTY
+go/no-go passed in Phase 1 with evidence in
+`docs/notes/2026-07-11-tui-spike.md`
 
 ## Product position
 

@@ -1,5 +1,9 @@
 # Next-session prompt — pi-orchestra v4 "Bench" (rev 3: TUI-only, daemon)
 
+**Execution status:** This handoff has been executed through Phase 1. Do not
+reuse it to restart the project. Continue with the Phase-2-only handoff at
+`docs/prompts/2026-07-11-v4-phase2-next-session.md`.
+
 Copy everything below the line into a fresh session started in
 `/Users/comreton/Desktop/pi-orchestra`. Handing this prompt to a session
 constitutes approval of the design document it references.
