@@ -201,7 +201,10 @@ impl App {
         Ok(app)
     }
 
-    #[cfg(test)]
+    /// Construct an in-memory ledger from already-loaded runs.
+    ///
+    /// This avoids filesystem or network work in deterministic render tests
+    /// and capture tooling; interactive clients should use [`Self::new`].
     pub fn with_runs(runs: Vec<RunMeta>, theme: Theme) -> Self {
         let (_quota_tx, quota_updates) = mpsc::channel();
         let mut app = Self {

@@ -75,6 +75,14 @@ impl ThemeName {
             Self::Ember
         }
     }
+
+    #[must_use]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ember => "ember",
+            Self::Phosphor => "phosphor",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -454,6 +462,25 @@ struct StageState {
     zoomed: bool,
     dragging: Option<(usize, u16, u16)>,
     raw_router: RawRouter,
+    confirmed_panes: std::collections::HashSet<String>,
+    baton_kind: BatonKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BatonKind {
+    Settle,
+    Dispatch,
+    Complete,
+    Failed,
+}
+
+fn baton_profile(kind: BatonKind) -> (u32, usize, bool) {
+    match kind {
+        BatonKind::Settle => (700, 1, false),
+        BatonKind::Dispatch => (480, 3, false),
+        BatonKind::Complete => (760, 2, true),
+        BatonKind::Failed => (1050, 1, true),
+    }
 }
 
 impl StageState {
@@ -470,6 +497,8 @@ impl StageState {
             zoomed: false,
             dragging: None,
             raw_router: RawRouter::default(),
+            confirmed_panes: std::collections::HashSet::new(),
+            baton_kind: BatonKind::Settle,
         }
     }
 
@@ -503,6 +532,13 @@ impl StageState {
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
         let _ = self.pulse.process(elapsed);
+    }
+
+    fn set_baton_kind(&mut self, kind: BatonKind) {
+        if self.baton_kind != kind {
+            self.baton_kind = kind;
+            self.pulse = EffectTimer::from_ms(baton_profile(kind).0, Interpolation::CubicOut);
+        }
     }
 }
 
@@ -658,6 +694,9 @@ struct ShellState {
     stage: Option<StageState>,
     score: Option<ScoreState>,
     theme: Theme,
+    runs: orc_tui::App,
+    help: bool,
+    reduced_motion: bool,
 }
 
 fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
@@ -735,8 +774,10 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
     let mut lines = vec![
-        "  P I  O R C H E S T R A   ·   HOME".to_owned(),
-        "  THE SEASON   sessions remain alive in orcd".to_owned(),
+        "  █▀█ █ █▀▀   █▀█ █▀█ █▀▀ █ █ █▀▀ █▀▀ ▀█▀ █▀█ █▀█".to_owned(),
+        "  █▀▀ █ └─█   █▄█ █▀▄ █   █▀█ █▀  └─█  █  █▀▄ █▀█".to_owned(),
+        "  ▀   ▀ ▀▀▀   ▀ ▀ ▀ ▀ ▀▀▀ ▀ ▀ ▀▀▀ ▀▀▀  ▀  ▀ ▀ ▀ ▀".to_owned(),
+        "  HOME · durable sessions remain alive when this client detaches".to_owned(),
         String::new(),
     ];
     if let Some(flow) = &state.flow {
@@ -781,9 +822,11 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
         }
     } else if state.data.sessions.is_empty() {
         lines.extend([
-            "  NO SESSIONS YET".to_owned(),
-            "  One window can hold a conductor and an editable worker pool.".to_owned(),
-            "  Press n, choose a brain, review Hermes + pi-m3, then choose cwd.".to_owned(),
+            "  WELCOME TO THE BENCH".to_owned(),
+            "  Press n to create a session.".to_owned(),
+            "  The brain plans and delegates. Workers execute focused briefs.".to_owned(),
+            "  Hermes + pi-m3 are editable offers; unavailable tools are never selected."
+                .to_owned(),
         ]);
     } else {
         lines.push("  SESSION SHELF".to_owned());
@@ -819,21 +862,39 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
         Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.text).bg(theme.stage)),
         area,
     );
+    render_legend(
+        frame,
+        area,
+        "n new · enter attach · V views · ? help · q quit",
+        theme,
+    );
 }
 
-fn render_runs_placeholder(frame: &mut Frame<'_>, theme: Theme) {
+fn render_legend(frame: &mut Frame<'_>, area: Rect, text: &str, theme: Theme) {
+    frame.render_widget(
+        Paragraph::new(format!(" {text}")).style(Style::default().fg(theme.dim).bg(theme.stage)),
+        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+    );
+}
+
+fn render_help(frame: &mut Frame<'_>, theme: Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
     frame.render_widget(
         Paragraph::new(
-            "  R U N S\n\n  RUNS SHELL ONLY\n  The full v3 ledger port is Phase 4.\n  Press V for HOME.",
+            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  ctrl-g is the STAGE leader. ctrl-g twice sends a literal ctrl-g.\n  ctrl-g h HOME · ctrl-g b SCORE · ctrl-g q detach\n  V cycles HOME, SCORE, RUNS. Focused pane input remains raw.\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
         )
         .style(Style::default().fg(theme.text).bg(theme.stage)),
         area,
     );
+    render_legend(frame, area, "Esc / ? close help", theme);
 }
 
 fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
+    if shell.help {
+        render_help(frame, shell.theme);
+        return;
+    }
     match shell.view {
         ShellView::Home => render_home(frame, &shell.home, shell.theme),
         ShellView::Stage => {
@@ -846,7 +907,7 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
                 render_score(frame, score, shell.theme);
             }
         }
-        ShellView::Runs => render_runs_placeholder(frame, shell.theme),
+        ShellView::Runs => orc_tui::draw(frame, &mut shell.runs),
     }
 }
 
@@ -865,6 +926,7 @@ pub fn run_initial(
     let mut commands = BenchClient::connect(&socket)?;
     let home = commands.home()?;
     let selected_theme = ThemeName::named(&home.theme);
+    let reduced_motion = home.reduced_motion;
     let mut shell = ShellState {
         view: if runs {
             ShellView::Runs
@@ -880,6 +942,10 @@ pub fn run_initial(
         stage: None,
         score: None,
         theme: selected_theme.into(),
+        runs: orc_tui::App::new(Some(selected_theme.as_str()))
+            .map_err(|error| AppError::Daemon(format!("RUNS ledger unavailable: {error}")))?,
+        help: false,
+        reduced_motion,
     };
     if let Some(session_id) = initial_session {
         attach_stage(&mut commands, &mut shell, session_id, theme)?;
@@ -920,14 +986,28 @@ fn attach_stage(
     theme: ThemeName,
 ) -> Result<()> {
     let session = commands.attach_session(session_id.clone())?;
-    shell.stage = Some(StageState::for_session(
-        session_id.clone(),
-        session.panes,
-        session.layout,
-        theme,
-    ));
+    let tasks = commands.task_board(session_id.clone())?;
+    let mut stage =
+        StageState::for_session(session_id.clone(), session.panes, session.layout, theme);
+    stage.confirmed_panes = tasks
+        .iter()
+        .filter_map(|task| {
+            task.history
+                .last()
+                .filter(|history| history.action == "delivery_confirmed")
+                .and(task.assignee_run.clone())
+        })
+        .collect();
+    if tasks.iter().any(|task| {
+        task.history
+            .last()
+            .is_some_and(|history| history.action == "delivery_confirmed")
+    }) {
+        stage.set_baton_kind(BatonKind::Dispatch);
+    }
+    shell.stage = Some(stage);
     shell.score = Some(ScoreState {
-        tasks: commands.task_board(session_id.clone())?,
+        tasks,
         session_id,
         selected: 0,
         message: String::new(),
@@ -948,13 +1028,14 @@ fn run_shell_loop(
     let mut redraw = true;
     let mut requested_sizes = HashMap::new();
     loop {
-        if let Some(stage) = shell.stage.as_mut() {
+        if !shell.reduced_motion
+            && let Some(stage) = shell.stage.as_mut()
+        {
             stage.advance();
         }
-        let animating = shell
-            .stage
-            .as_ref()
-            .is_some_and(|stage| shell.view == ShellView::Stage && !stage.pulse.done());
+        let animating = shell.stage.as_ref().is_some_and(|stage| {
+            !shell.reduced_motion && shell.view == ShellView::Stage && !stage.pulse.done()
+        });
         if redraw || animating {
             let mut stdout = io::stdout();
             stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
@@ -989,6 +1070,36 @@ fn run_shell_loop(
                     };
                     stage.apply_snapshot(panes);
                 }
+                if let Some(score) = shell.score.as_mut()
+                    && let Ok(tasks) = commands.task_board(score.session_id.clone())
+                {
+                    score.tasks = tasks;
+                    if let Some(stage) = shell.stage.as_mut() {
+                        stage.confirmed_panes = score
+                            .tasks
+                            .iter()
+                            .filter_map(|task| {
+                                task.history
+                                    .last()
+                                    .filter(|history| history.action == "delivery_confirmed")
+                                    .and(task.assignee_run.clone())
+                            })
+                            .collect();
+                        let kind = score
+                            .tasks
+                            .iter()
+                            .filter_map(|task| task.history.last())
+                            .find_map(|history| match history.action.as_str() {
+                                "delivery_confirmed" => Some(BatonKind::Dispatch),
+                                "delivery_failed" => Some(BatonKind::Failed),
+                                "done" => Some(BatonKind::Complete),
+                                _ => None,
+                            })
+                            .unwrap_or(BatonKind::Settle);
+                        stage.set_baton_kind(kind);
+                    }
+                }
+                let _ = shell.runs.refresh();
                 redraw = true;
             }
             Some(UiEvent::Raw(bytes)) => {
@@ -1112,6 +1223,16 @@ fn handle_raw_event(
     shell: &mut ShellState,
     theme: ThemeName,
 ) -> Result<bool> {
+    if shell.help {
+        if matches!(bytes, b"?" | b"\x1b") {
+            shell.help = false;
+        }
+        return Ok(false);
+    }
+    if bytes == b"?" {
+        shell.help = true;
+        return Ok(false);
+    }
     if bytes == b"V" {
         shell.view = match shell.view {
             ShellView::Home => {
@@ -1574,14 +1695,34 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
             (state.panes.get(state.focus), areas.first().copied())
         {
             render_shadow(frame, pane_area, state.theme);
-            render_pane(frame, pane_area, pane, true, state.theme);
+            render_pane(
+                frame,
+                pane_area,
+                pane,
+                true,
+                state.confirmed_panes.contains(&pane.id),
+                state.theme,
+            );
         }
     } else {
         for (index, (pane, pane_area)) in state.panes.iter().zip(areas).enumerate() {
             render_shadow(frame, pane_area, state.theme);
-            render_pane(frame, pane_area, pane, index == state.focus, state.theme);
+            render_pane(
+                frame,
+                pane_area,
+                pane,
+                index == state.focus,
+                state.confirmed_panes.contains(&pane.id),
+                state.theme,
+            );
         }
     }
+    render_legend(
+        frame,
+        area,
+        "ctrl-g n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
+        state.theme,
+    );
 }
 
 fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
@@ -1697,8 +1838,16 @@ fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState) {
             + 50.0 * t.powi(3);
         points.push((x, y));
     }
-    let pulse_index = ((points.len() - 1) as f32 * state.pulse.alpha()) as usize;
-    let pulse = [points[pulse_index.min(points.len() - 1)]];
+    let (_, width, reverse) = baton_profile(state.baton_kind);
+    let alpha = if reverse {
+        1.0 - state.pulse.alpha()
+    } else {
+        state.pulse.alpha()
+    };
+    let pulse_index = ((points.len() - 1) as f32 * alpha) as usize;
+    let start = pulse_index.saturating_sub(width.saturating_sub(1));
+    let end = (pulse_index + 1).min(points.len());
+    let pulse = &points[start..end];
     frame.render_widget(
         Canvas::default()
             .marker(Marker::Braille)
@@ -1710,7 +1859,7 @@ fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState) {
                     color: state.theme.dim,
                 });
                 context.draw(&Points {
-                    coords: &pulse,
+                    coords: pulse,
                     color: state.theme.pulse,
                 });
             }),
@@ -1718,13 +1867,21 @@ fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState) {
     );
 }
 
-fn render_pane(frame: &mut Frame<'_>, area: Rect, pane: &PaneSnapshot, focus: bool, theme: Theme) {
+fn render_pane(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pane: &PaneSnapshot,
+    focus: bool,
+    confirmed: bool,
+    theme: Theme,
+) {
     let border_color = if focus { theme.focus } else { theme.dim };
     let block = Block::default()
         .title(format!(
-            " {}  {} ",
+            " {}  {}{} ",
             pane.title.to_uppercase(),
-            pane.state.as_deref().unwrap_or("LIVE")
+            pane.state.as_deref().unwrap_or("LIVE"),
+            if confirmed { " · TASK CONFIRMED" } else { "" }
         ))
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
@@ -1820,8 +1977,9 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::{
-        HomeData, HomeState, RawRouter, ScoreState, StageState, Theme, ThemeName, render_home,
-        render_score, render_stage, route_raw_mouse, score_mouse,
+        BatonKind, HomeData, HomeState, RawRouter, ScoreState, StageState, Theme, ThemeName,
+        baton_profile, render_help, render_home, render_score, render_stage, route_raw_mouse,
+        score_mouse,
     };
 
     fn panes() -> Vec<PaneSnapshot> {
@@ -1856,6 +2014,7 @@ mod tests {
                 let backend = TestBackend::new(width, height);
                 let mut terminal = Terminal::new(backend).expect("test terminal");
                 let mut state = StageState::new(panes(), theme);
+                state.confirmed_panes.insert("pane-1".to_owned());
                 terminal
                     .draw(|frame| render_stage(frame, &mut state))
                     .expect("render stage");
@@ -1868,8 +2027,27 @@ mod tests {
                     .collect::<String>();
                 assert!(text.contains("CLAUDE"));
                 assert!(text.contains("HERMES"));
+                assert!(text.contains("TASK CONFIRMED"));
             }
         }
+    }
+
+    #[test]
+    fn baton_event_kinds_have_distinct_bounded_profiles() {
+        let profiles = [
+            baton_profile(BatonKind::Settle),
+            baton_profile(BatonKind::Dispatch),
+            baton_profile(BatonKind::Complete),
+            baton_profile(BatonKind::Failed),
+        ];
+        assert!(
+            profiles
+                .iter()
+                .all(|(millis, width, _)| *millis <= 1_100 && *width <= 3)
+        );
+        assert_ne!(profiles[0], profiles[1]);
+        assert_ne!(profiles[1], profiles[2]);
+        assert_ne!(profiles[2], profiles[3]);
     }
 
     #[test]
@@ -1917,7 +2095,9 @@ mod tests {
                     .iter()
                     .map(|cell| cell.symbol())
                     .collect::<String>();
-                assert!(text.contains("NO SESSIONS YET"));
+                assert!(text.contains("WELCOME TO THE BENCH"));
+                assert!(text.contains("Press n to create a session"));
+                assert!(text.contains("editable offers"));
                 state.data.sessions.push(SessionSummary {
                     id: "session-one".to_owned(),
                     brain: "codex".to_owned(),
@@ -1937,6 +2117,31 @@ mod tests {
                     .map(|cell| cell.symbol())
                     .collect::<String>();
                 assert!(text.contains("session-one"));
+            }
+        }
+    }
+
+    #[test]
+    fn help_snapshots_cover_first_use_recovery_and_required_sizes() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme_name in [ThemeName::Ember, ThemeName::Phosphor] {
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).expect("test help terminal");
+                terminal
+                    .draw(|frame| render_help(frame, Theme::from(theme_name)))
+                    .expect("render help");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("FIRST USE"));
+                assert!(text.contains("ctrl-g"));
+                assert!(text.contains("SCORE"));
+                assert!(text.contains("UNAVAILABLE"));
+                assert!(text.contains("reattach"));
             }
         }
     }

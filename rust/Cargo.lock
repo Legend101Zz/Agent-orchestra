@@ -1224,6 +1224,7 @@ dependencies = [
  "clap",
  "crossterm",
  "orc-proto",
+ "orc-tui",
  "ratatui",
  "serde_json",
  "signal-hook",

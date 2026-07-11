@@ -13,6 +13,14 @@ use crossterm::execute;
 pub use app::App;
 pub use theme::{EMBER, PHOSPHOR, Theme};
 
+/// Render the complete event-ledger surface into an enclosing terminal frame.
+///
+/// This is the supported embedding seam used by the Bench client's RUNS view;
+/// state refresh and input remain owned by [`App`].
+pub fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
+    ui::draw(frame, app);
+}
+
 pub fn run(theme: Option<&str>) -> Result<()> {
     let mut app = App::new(theme)?;
     let mut terminal = ratatui::try_init()?;
@@ -58,7 +66,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{App, EMBER, ui};
+    use super::{App, EMBER, PHOSPHOR, ui};
 
     fn run(id: &str, status: &str, session: Option<&str>) -> RunMeta {
         RunMeta {
@@ -156,5 +164,35 @@ mod tests {
             .collect::<String>();
         assert!(session.contains("CODEX / CONTROLLER"));
         assert!(session.contains("MINIMAX M3"));
+    }
+
+    #[test]
+    fn runs_ledger_snapshots_cover_both_themes_and_required_sizes() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme in [EMBER, PHOSPHOR] {
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).unwrap();
+                let mut app = App::with_runs(
+                    vec![
+                        run("worker-live", "running", Some("bench-session")),
+                        run("worker-done", "done", Some("bench-session")),
+                    ],
+                    theme,
+                );
+                terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+                let ledger = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(ledger.contains("ORC"));
+                assert!(ledger.contains("CONTROL PLANE"));
+                assert!(ledger.contains("bench-session"));
+                assert!(ledger.contains("STATUS"));
+                assert!(ledger.contains("TOKENS"));
+            }
+        }
     }
 }
