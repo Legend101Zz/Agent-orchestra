@@ -201,3 +201,33 @@
 - A real release `orc run` completed with exact MiniMax usage (1,576 total
   tokens and $0.000440). The quota warning was relayed verbatim. Full commands,
   constraints, and gate results are in the dated Phase 5 evidence note.
+
+## Session 8 — 2026-07-12 (polish + real-use pass)
+- Committed pending prompt/tool fixes (1bd0de8) and pushed to main.
+- Rebuilt HOME as an animated masthead: sparkle avatar frames, shimmer sweep
+  over the title, rounded card, styled flow/shelf with brass selection;
+  ambient 120 ms tick only on HOME, static under reduced_motion. All gates
+  green; pushed as 22f7dda. Live tmux check confirmed the animation and
+  0.4% client CPU while animating (daemon 0.0%).
+- Reinstalled via ./install.sh (links now 12 Jul 10:16); removed the stale
+  ~/.local/bin/orc.pi-orchestra.bak that pointed at the deleted Desktop copy.
+- Dogfood: fresh ORC_HOME=/tmp/orc-bench-demo, temp git project
+  /tmp/orc-demo-project with SPEC.md (stdlib todo API). Session
+  orc-demo-project-1783831681-0000 launched through the real HOME flow with
+  claude brain + hermes + pi-m3 workers; Claude trust prompt accepted through
+  the focused pane. T0001→hermes (server.py), T0002→pi-m3 (test_server.py)
+  dispatched concurrently. Quota at dispatch: 71% five-hour / 14% weekly,
+  level warn (relayed).
+- Both dispatches confirmed (exit 0): hermes wrote server.py, pi-m3 wrote
+  test_server.py; `python3 test_server.py` printed PASS on first run. Tasks
+  moved through review to done on the board.
+- Captured real screenshots via VHS into docs/: home-welcome.{gif,png},
+  home-flow.png, home-shelf.png, stage-workers.png, score-board.png.
+- Bugs logged in findings.md: B1 flaky watcher test, B2 SCORE last-column
+  clipping, B3 ctrl-g h dead on SCORE, B4 cwd editor UX, B5 $TMUX/TERM env
+  leak into panes (pi warned about tmux extended-keys inside an orcd PTY).
+- README rewritten (purpose, architecture, install, guide, verified
+  capabilities, keys, performance, troubleshooting) with the real captures;
+  pushed as f443ca1. Session pushed three commits to main:
+  1bd0de8, 22f7dda, f443ca1. Demo daemons and tmux sessions torn down;
+  stale phase-4/5 temp daemons killed.
