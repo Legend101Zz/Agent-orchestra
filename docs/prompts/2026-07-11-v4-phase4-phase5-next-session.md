@@ -141,6 +141,17 @@ CARGO_TARGET_DIR=/tmp/pi-orchestra-v4-final RUSTDOCFLAGS="-D warnings" cargo doc
 CARGO_TARGET_DIR=/tmp/pi-orchestra-v4-final cargo build --locked --release
 ```
 
+After recording the gate results and before ending the session, remove this
+isolated build directory to reclaim its temporary artifacts:
+
+```sh
+rm -rf /tmp/pi-orchestra-v4-final
+```
+
+Do not remove the repository's `rust/target`, any evidence, or any other
+temporary directory; this cleanup is limited to the exact isolated target
+directory above.
+
 Also verify no Python runtime/package/test plumbing, production
 `orc-core`/`orcd` unwrap/expect absence, installer idempotence and an actual
 isolated-HOME install/uninstall, protected checksums, reproducible visual
