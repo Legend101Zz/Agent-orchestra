@@ -1,0 +1,36 @@
+  ORC / CONTROL PLANE    ACTIVE 0    ATTENTION 0    ember
+│Q U O T A   /   M I N I M A X                │N E E D S   A T T E N T I O│S E S S I O N   S T A T│V A L U E   /   B A S
+│5H  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──  95%     │CLEAR                      │0 workers live         │≈ $0.00 saved
+│WK  ━━━────────────────────────────  11%     │no failed or stalled worker│1 sessions             │4.2× vs brain rates
+│⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿  WARN · reset 77│                           │select a session for bu│0% exact basis
+│                                             │                           │                       │
+│                                             │                           │                       │
+│                                             │                           │                       │
+  C O M P L E T E D   V O L U M E  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  24h · exact
+
+│S E S S I O N S   /   R U N S
+│SESSION / RUN                                               STATUS         CONTROLLER   ELAPSED    TOKENS     COST
+│20260713-000004-redraw-proof                                · orphaned     CODEX        0s         ~5         —
+│20260713-000003-live-appear                                 · orphaned     CODEX        0s         ~7         —
+│▸  SESSION / smoke-session                                  · orphaned     2 workers    —          1.3k       —
+│
+│
+│
+│
+│
+│
+│
+│
+│
+│
+│
+│LIVE OUTPUT / 20260713-000004-REDRAW-PROOF
+│no worker output yet
+│
+│
+│
+│
+│
+│
+ j/k navigate   enter open   / search output   n new   , settings   q quit
+ RUNS · j/k select · enter open · / search · V/h HOME · ? help · q quit

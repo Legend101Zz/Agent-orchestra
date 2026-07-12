@@ -10,7 +10,7 @@ use anyhow::Result;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use crossterm::execute;
 
-pub use app::App;
+pub use app::{App, InputMode, View};
 pub use theme::{EMBER, PHOSPHOR, Theme};
 
 /// Render the complete event-ledger surface into an enclosing terminal frame.

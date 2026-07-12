@@ -237,7 +237,8 @@ are refused and fall back to `ctrl-g`).
 | `ctrl-g q` | detach (panes keep running) |
 | `j/k`, `h/l`, drag (SCORE) | select task, request lifecycle move |
 | `g` (SCORE) | focus the linked STAGE pane |
-| `V`/`h`/`q` (RUNS) | leave the read-only ledger / quit |
+| `j/k`, `enter`, `/`, `t` (RUNS) | select, open, search, theme in the embedded ledger |
+| `V`/`h`/`Esc`, `q` (RUNS) | back HOME from the ledger dashboard / quit |
 | `R` (dead conductor) | resume when the harness supports it |
 
 When a brain exits, workers stay alive and the pane shows `CONDUCTOR DOWN`

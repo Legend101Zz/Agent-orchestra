@@ -1,0 +1,36 @@
+  ORC / SESSION WORKSPACE    ACTIVE 0    ATTENTION 0    ember
+│C O N T R O L L E R   /   W O R K E R S   │S E L E C T E D   W O R K E R
+│single run                                │ CONVERSATION    LOG    TIMELINE    META
+│$0.00 spent · budget not set              │· orphaned   0 follow-ups
+│                                          │W O R K S P A C E
+│CODEX / CONTROLLER                        │PROMPT
+│model not recorded                        │painted with zero keypresses
+│        │  task dispatch                  │
+│        └─ M3 / MINIMAX M3                │WORKER REPLY
+│           · ORPHANED  0s  5  —           │waiting for output
+│           20260713-000004-redraw-proof   │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+ esc back   j/k scroll   [ ] workers   tab detail   s send   r retry   h handoff   x kill  + / - budget
+ RUNS · tab tabs · s send · r retry · h handoff · Esc back · q quit

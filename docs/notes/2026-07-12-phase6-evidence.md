@@ -82,6 +82,43 @@ mechanism targets the real failure class (installs from commits, daemons
 outliving installs), and `install.sh` now probes the running daemon and
 prints restart guidance when it predates the installed build.
 
+## 6B — embedded RUNS view: honest and alive
+
+Root causes fixed: the embed called `orc_tui::draw` but never routed keys
+into `orc_tui::App` (the v3 legend advertised dead functionality), and
+nothing scheduled a redraw between events, so channel-delivered quota and
+registry updates were not painted until the next keypress.
+
+Changes:
+- Keys in `ShellView::Runs` now route into `App::handle_key` via
+  `route_runs_key`. Documented exits stay reserved at the App's top-level
+  dashboard only (`V`/`h`/`Esc` → HOME, `q` → quit); deeper views and
+  active text inputs receive every key, so Esc cancels a search or returns
+  from the session workspace instead of leaving the ledger, and literal `V`
+  types into search. An App-initiated quit leaves only the shell view.
+- The embed legend is view-aware (dashboard / session / settings) and lists
+  only interactions that actually route; "read-only" removed. Legends fit
+  72 columns.
+- A 500 ms ambient tick repaints the RUNS view (kept under reduced_motion —
+  it is data refresh, not animation); `App::refresh` stays internally
+  rate-limited to 500 ms, so no busy loop.
+- `raw_home_keys` now decodes Tab, BackTab, PageUp/PageDown for the embed.
+
+Tests: TestBackend renders of the embedded view (both themes, 150x44 and
+exactly 72x30, asserting the legend line), plus routing tests covering
+selection, expansion, search-input capture of `V`/`Esc`, reserved exits,
+session-view Esc, and tab cycling.
+
+Live tmux smoke (120x36, release build, isolated ORC_HOME):
+captures under `docs/notes/2026-07-13-phase6b-captures/`.
+- `runs-dashboard.txt` — embed renders the control plane with the new legend;
+- `runs-live-redraw-no-keypress.txt` — a registry run written while idle
+  appeared with zero keypresses (the "frozen unless V pressed" symptom);
+- `runs-session-detail.txt` — enter opened the session workspace, tab
+  cycled tabs, the legend switched to session keys, Esc returned to the
+  dashboard; `h` then exited HOME, `V` re-entered RUNS, `q` quit cleanly
+  (exit 0, prompt restored).
+
 ## Gates
 
 (recorded per commit below)

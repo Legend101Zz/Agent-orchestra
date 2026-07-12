@@ -1139,12 +1139,20 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         }
         ShellView::Runs => {
             orc_tui::draw(frame, &mut shell.runs);
-            render_legend(
-                frame,
-                frame.area(),
-                "RUNS ledger (read-only) · V or h HOME · ? help · q quit",
-                shell.theme,
-            );
+            // One line, consistent with what the embedded App actually
+            // answers in its current view.
+            let legend = match shell.runs.view {
+                orc_tui::View::Dashboard => {
+                    "RUNS · j/k select · enter open · / search · V/h HOME · ? help · q quit"
+                }
+                orc_tui::View::Session => {
+                    "RUNS · tab tabs · s send · r retry · h handoff · Esc back · q quit"
+                }
+                orc_tui::View::Settings => {
+                    "RUNS settings · t theme · n notifications · Esc back · q quit"
+                }
+            };
+            render_legend(frame, frame.area(), legend, shell.theme);
         }
     }
 }
@@ -1286,7 +1294,15 @@ fn run_shell_loop(
             !shell.reduced_motion && shell.view == ShellView::Stage && !stage.pulse.done()
         });
         let home_ambient = !shell.reduced_motion && !shell.help && shell.view == ShellView::Home;
-        if redraw || animating || home_ambient {
+        // The RUNS embed repaints on a modest tick so quota/history updates
+        // arriving on the App's internal channel become visible without a
+        // keypress. This is data refresh, not animation, so it is kept under
+        // reduced_motion; App::refresh is internally rate-limited to 500 ms.
+        let runs_ambient = !shell.help && shell.view == ShellView::Runs;
+        if runs_ambient {
+            let _ = shell.runs.refresh();
+        }
+        if redraw || animating || home_ambient || runs_ambient {
             let mut stdout = io::stdout();
             stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
             if shell.view == ShellView::Stage
@@ -1301,6 +1317,8 @@ fn run_shell_loop(
             Duration::from_millis(16)
         } else if home_ambient {
             Duration::from_millis(120)
+        } else if runs_ambient {
+            Duration::from_millis(500)
         } else {
             Duration::from_secs(30)
         };
@@ -1569,10 +1587,12 @@ fn handle_raw_event(
         return Ok(false);
     }
     // Bare `?` and `V` are view keys only where no raw input is expected:
-    // STAGE forwards every unprefixed byte to the focused pane, and the
-    // launch flow needs literal `V` and `?` for paths and titles.
+    // STAGE forwards every unprefixed byte to the focused pane, the launch
+    // flow needs literal `V` and `?` for paths and titles, and an active
+    // RUNS text input (search, brief) must accept them as characters.
     let raw_input_view = shell.view == ShellView::Stage
-        || (shell.view == ShellView::Home && shell.home.flow.is_some());
+        || (shell.view == ShellView::Home && shell.home.flow.is_some())
+        || (shell.view == ShellView::Runs && shell.runs.input_mode != orc_tui::InputMode::None);
     if !raw_input_view {
         if bytes == b"?" {
             shell.help = true;
@@ -1596,12 +1616,8 @@ fn handle_raw_event(
     match shell.view {
         ShellView::Runs => {
             for key in raw_home_keys(bytes) {
-                match key.code {
-                    KeyCode::Char('q') => return Ok(true),
-                    KeyCode::Char('h') | KeyCode::Esc => {
-                        shell.view = ShellView::Home;
-                    }
-                    _ => {}
+                if route_runs_key(shell, key) {
+                    return Ok(true);
                 }
             }
             Ok(false)
@@ -1800,18 +1816,49 @@ fn handle_raw_event(
     }
 }
 
-fn raw_home_keys(bytes: &[u8]) -> Vec<KeyEvent> {
-    if bytes == b"\x1b[A" {
-        return vec![KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)];
+/// Route one decoded key into the embedded RUNS control plane.
+///
+/// Returns true when the whole client should quit. The documented exits act
+/// only at the App's top-level dashboard while no text input is active;
+/// deeper views and active inputs receive every key, so the embedded
+/// legends describe what actually happens.
+fn route_runs_key(shell: &mut ShellState, key: KeyEvent) -> bool {
+    let busy = shell.runs.input_mode != orc_tui::InputMode::None || shell.runs.help;
+    if !busy {
+        if key.code == KeyCode::Char('q') {
+            return true;
+        }
+        if matches!(
+            key.code,
+            KeyCode::Char('V') | KeyCode::Char('h') | KeyCode::Esc
+        ) && shell.runs.view == orc_tui::View::Dashboard
+        {
+            shell.view = ShellView::Home;
+            return false;
+        }
     }
-    if bytes == b"\x1b[B" {
-        return vec![KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)];
+    if shell.runs.handle_key(key) {
+        // The embedded App asked to quit; leave only the shell view.
+        shell.view = ShellView::Home;
+    }
+    false
+}
+
+fn raw_home_keys(bytes: &[u8]) -> Vec<KeyEvent> {
+    match bytes {
+        b"\x1b[A" => return vec![KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)],
+        b"\x1b[B" => return vec![KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)],
+        b"\x1b[Z" => return vec![KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)],
+        b"\x1b[5~" => return vec![KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)],
+        b"\x1b[6~" => return vec![KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)],
+        _ => {}
     }
     let mut keys = Vec::new();
     if let Ok(text) = std::str::from_utf8(bytes) {
         for character in text.chars() {
             let code = match character {
                 '\r' | '\n' => KeyCode::Enter,
+                '\t' => KeyCode::Tab,
                 '\u{1b}' => KeyCode::Esc,
                 '\u{7f}' | '\u{8}' => KeyCode::Backspace,
                 character => KeyCode::Char(character),
@@ -2383,9 +2430,190 @@ mod tests {
 
     use super::{
         AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HomeData, HomeState, LeaderAction, LeaderKey,
-        RawRouter, ScoreState, StageState, Theme, ThemeName, baton_profile, render_help,
-        render_home, render_score, render_stage, route_raw_mouse, score_mouse,
+        RawRouter, ScoreState, ShellState, ShellView, StageState, Theme, ThemeName, baton_profile,
+        render_help, render_home, render_score, render_shell, render_stage, route_raw_mouse,
+        route_runs_key, score_mouse,
     };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn ledger_run(id: &str, status: &str, session: Option<&str>) -> orc_core::model::RunMeta {
+        orc_core::model::RunMeta {
+            id: id.to_owned(),
+            task: "Audit the registry and report evidence".to_owned(),
+            brain: "codex".to_owned(),
+            cwd: "/tmp".to_owned(),
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M3".to_owned(),
+            pid: None,
+            status: status.to_owned(),
+            started_at: "2026-07-12T12:00:00+00:00".to_owned(),
+            created_ts: 1.0,
+            ended_at: None,
+            exit_code: None,
+            tokens: orc_core::model::Tokens {
+                estimated_total: 42_000,
+                ..orc_core::model::Tokens::default()
+            },
+            session: session.map(str::to_owned),
+            name: None,
+            mode: Some("rpc".to_owned()),
+            retry_of: None,
+            handoff_from: None,
+            attention: None,
+            failure_kind: None,
+            brain_model: None,
+            extra: std::collections::BTreeMap::new(),
+            run_dir: None,
+        }
+    }
+
+    fn runs_shell(theme_name: ThemeName) -> ShellState {
+        let theme = if theme_name == ThemeName::Phosphor {
+            orc_tui::PHOSPHOR
+        } else {
+            orc_tui::EMBER
+        };
+        ShellState {
+            view: ShellView::Runs,
+            home: HomeState {
+                data: HomeData {
+                    sessions: Vec::new(),
+                    harnesses: Vec::new(),
+                    default_workers: Vec::new(),
+                    max_parallel_workers: 3,
+                    theme: "ember".to_owned(),
+                    reduced_motion: false,
+                    leader_key: "ctrl-g".to_owned(),
+                },
+                selected: 0,
+                flow: None,
+                message: String::new(),
+            },
+            stage: None,
+            score: None,
+            theme: theme_name.into(),
+            runs: orc_tui::App::with_runs(
+                vec![
+                    ledger_run("worker-live", "running", Some("bench-session")),
+                    ledger_run("worker-done", "done", Some("bench-session")),
+                    ledger_run("worker-solo", "done", None),
+                ],
+                theme,
+            ),
+            help: false,
+            reduced_motion: false,
+            epoch: std::time::Instant::now(),
+            leader: LeaderKey::parse("ctrl-g"),
+            watch_session: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn embedded_runs_view_renders_the_control_plane_with_an_honest_legend() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme_name in [ThemeName::Ember, ThemeName::Phosphor] {
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).expect("test RUNS terminal");
+                let mut shell = runs_shell(theme_name);
+                terminal
+                    .draw(|frame| render_shell(frame, &mut shell))
+                    .expect("render embedded RUNS");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("CONTROL PLANE"), "{width}x{height}");
+                assert!(text.contains("bench-session"), "{width}x{height}");
+                // The legend advertises only interactions that route.
+                assert!(text.contains("j/k select"), "{width}x{height}");
+                assert!(text.contains("V/h HOME"), "{width}x{height}");
+                assert!(text.contains("q quit"), "{width}x{height}");
+                assert!(!text.contains("read-only"), "{width}x{height}");
+            }
+        }
+    }
+
+    #[test]
+    fn embedded_runs_keys_route_into_the_app_and_documented_exits_stay_reserved() {
+        let mut shell = runs_shell(ThemeName::Ember);
+        assert!(shell.runs.rows.len() > 1, "fixture must have rows");
+
+        // j/k selection routes into the App.
+        let before = shell.runs.selected_row;
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j'))));
+        assert_ne!(shell.runs.selected_row, before, "j must move selection");
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('k'))));
+        assert_eq!(shell.runs.selected_row, before, "k must move back");
+
+        // enter expands the selected session group.
+        assert!(shell.runs.expanded.is_empty());
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
+        assert!(!shell.runs.expanded.is_empty(), "enter must expand");
+
+        // `/` begins search; literal V and Esc belong to the input.
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('/'))));
+        assert_eq!(shell.runs.input_mode, orc_tui::InputMode::Search);
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('V'))));
+        assert_eq!(shell.runs.input, "V", "V must type into the input");
+        assert_eq!(shell.view, ShellView::Runs);
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert_eq!(shell.runs.input_mode, orc_tui::InputMode::None);
+        assert_eq!(shell.view, ShellView::Runs, "Esc must only cancel input");
+
+        // Esc and h at the dashboard are documented exits to HOME.
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert_eq!(shell.view, ShellView::Home);
+        shell.view = ShellView::Runs;
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('h'))));
+        assert_eq!(shell.view, ShellView::Home);
+
+        // q quits the client from the embed.
+        shell.view = ShellView::Runs;
+        assert!(route_runs_key(&mut shell, key(KeyCode::Char('q'))));
+    }
+
+    #[test]
+    fn embedded_runs_session_view_keeps_esc_for_the_app_and_updates_the_legend() {
+        let mut shell = runs_shell(ThemeName::Ember);
+        // Expand the session group, select a child run, open it.
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
+        assert_eq!(shell.runs.view, orc_tui::View::Session);
+
+        // The legend now describes the session workspace, not the dashboard.
+        let backend = TestBackend::new(150, 44);
+        let mut terminal = Terminal::new(backend).expect("session legend terminal");
+        terminal
+            .draw(|frame| render_shell(frame, &mut shell))
+            .expect("render session embed");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Esc back"));
+        assert!(text.contains("tab tabs"));
+
+        // tab cycles detail tabs inside the App.
+        let tab_before = shell.runs.detail_tab;
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Tab)));
+        assert_ne!(shell.runs.detail_tab, tab_before);
+
+        // Esc returns to the App dashboard, not to HOME.
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert_eq!(shell.runs.view, orc_tui::View::Dashboard);
+        assert_eq!(shell.view, ShellView::Runs);
+    }
 
     fn panes() -> Vec<PaneSnapshot> {
         ["claude", "hermes"]
