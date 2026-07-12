@@ -73,6 +73,14 @@ install_skill() {
     if [ "$(readlink "$destination")" = "$source" ]; then
       return 0
     fi
+    if [ ! -e "$destination" ]; then
+      # A dangling link (for example an old checkout that moved) teaches
+      # nothing; replacing it restores the skill without touching content.
+      rm "$destination"
+      ln -s "$source" "$destination"
+      echo "    replaced dead symlink $destination"
+      return 0
+    fi
     echo "    kept user symlink $destination" >&2
     return 0
   fi
