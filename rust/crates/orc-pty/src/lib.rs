@@ -123,6 +123,13 @@ impl HostedPane {
         for (key, value) in environment {
             command.env(key, value);
         }
+        // The daemon inherits the launching terminal's environment, but
+        // inside a daemon-owned PTY multiplexer and terminal-identity
+        // variables are stale and mislead hosted TUIs (pi printed tmux
+        // extended-keys warnings). Scrubbed last so nothing re-adds them.
+        for stale in ["TMUX", "TMUX_PANE", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"] {
+            command.env_remove(stale);
+        }
         let child = pair
             .slave
             .spawn_command(command)
@@ -367,6 +374,63 @@ mod tests {
                 .cells
                 .iter()
                 .any(|cell| cell.foreground != Default::default())
+        );
+    }
+
+    #[test]
+    fn pane_environment_scrubs_multiplexer_and_terminal_identity_variables() {
+        // The daemon process inherits these from the launching terminal;
+        // inside a daemon-owned PTY they are stale and mislead hosted TUIs.
+        let args = vec![
+            "-c".to_owned(),
+            "printf 'TMUX=[%s] PANE=[%s] PROG=[%s] VER=[%s] KEEP=[%s]' \
+             \"$TMUX\" \"$TMUX_PANE\" \"$TERM_PROGRAM\" \"$TERM_PROGRAM_VERSION\" \"$ORC_KEEP\""
+                .to_owned(),
+        ];
+        let environment = vec![
+            ("TMUX".to_owned(), "/tmp/tmux-1000/default,42,0".to_owned()),
+            ("TMUX_PANE".to_owned(), "%7".to_owned()),
+            ("TERM_PROGRAM".to_owned(), "tmux".to_owned()),
+            ("TERM_PROGRAM_VERSION".to_owned(), "3.5".to_owned()),
+            ("ORC_KEEP".to_owned(), "explicit".to_owned()),
+        ];
+        // Even variables passed explicitly by the launcher simulate the
+        // daemon's inherited environment here, because portable-pty forwards
+        // the daemon's own env; the scrub must win over inheritance while
+        // preserving unrelated explicit variables.
+        let mut pane = HostedPane::spawn_with_signal_and_env(
+            "env-scrub",
+            "fixture",
+            "sh",
+            &args,
+            Path::new("/tmp"),
+            8,
+            120,
+            super::update_signal(),
+            &environment,
+        )
+        .expect("spawn env fixture");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pane.has_exited().expect("poll env fixture") && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let text = pane
+            .snapshot()
+            .expect("snapshot env fixture")
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<String>();
+        assert!(text.contains("TMUX=[]"), "TMUX leaked: {text}");
+        assert!(text.contains("PANE=[]"), "TMUX_PANE leaked: {text}");
+        assert!(text.contains("PROG=[]"), "TERM_PROGRAM leaked: {text}");
+        assert!(
+            text.contains("VER=[]"),
+            "TERM_PROGRAM_VERSION leaked: {text}"
+        );
+        assert!(
+            text.contains("KEEP=[explicit]"),
+            "explicit env lost: {text}"
         );
     }
 

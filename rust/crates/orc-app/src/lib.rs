@@ -2461,14 +2461,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         super::spawn_runs_watch_path(root.join("runs"), sender);
-        std::thread::sleep(std::time::Duration::from_millis(100));
         let runs = root.join("runs").join("event-run");
-        std::fs::create_dir_all(&runs).expect("create watched run");
-        std::fs::write(runs.join("meta.json"), b"{}\n").expect("write watched meta");
-        assert!(matches!(
-            receiver.recv_timeout(std::time::Duration::from_secs(2)),
-            Ok(super::UiEvent::RunsChanged)
-        ));
+        // Watcher registration is asynchronous, so under parallel test load
+        // a single early write can land before the watch exists. Rewriting
+        // until the event arrives removes the timing assumption; production
+        // behavior is unchanged (any registry write wakes the watcher).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let woke = loop {
+            std::fs::create_dir_all(&runs).expect("create watched run");
+            std::fs::write(runs.join("meta.json"), b"{}\n").expect("write watched meta");
+            match receiver.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(super::UiEvent::RunsChanged) => break true,
+                Ok(other) => panic!(
+                    "unexpected watcher event: {:?}",
+                    std::mem::discriminant(&other)
+                ),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if std::time::Instant::now() >= deadline {
+                        break false;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("watcher thread stopped")
+                }
+            }
+        };
+        assert!(woke, "runs watcher never delivered RunsChanged within 10s");
         let _ = std::fs::remove_dir_all(root);
     }
 
