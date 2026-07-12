@@ -231,3 +231,21 @@
   pushed as f443ca1. Session pushed three commits to main:
   1bd0de8, 22f7dda, f443ca1. Demo daemons and tmux sessions torn down;
   stale phase-4/5 temp daemons killed.
+
+## Session 9 — 2026-07-12 (input routing + live media)
+- Root-caused the "Shift+V freeze": bare ?/V were intercepted as raw bytes
+  before any view logic, so typing /Volumes/... in the launch flow jumped
+  into the RUNS embed, which only answered literal V/q and had no legend.
+  Fixed: view-aware ?/V (never in STAGE or during the flow), RUNS parses
+  keys (V/h/Esc HOME, q quit) and shows a legend, SCORE gained leader
+  handling (h HOME, v RUNS, ? help, q quit).
+- Leader chord now configurable end-to-end: registry app.leader_key →
+  daemon Home response (serde default ctrl-g) → client validation with a
+  reserved-byte blocklist → RawRouter + dynamic legends/help. New leader
+  actions: v (views) and ? (help). Gates green; pushed 911b9b8.
+- Verified live in tmux: "/Volumes/Test?Vol" typed literally into the cwd
+  field; RUNS legend renders; h exits RUNS to the animated HOME.
+- Re-ran a real session (claude + hermes + pi-m3), dispatched a bounded
+  hermes brief (DEMO_OK, confirmed), recorded docs/stage-live-dispatch.gif
+  (typing + focus hops + baton pulses) and docs/stage-live.png showing
+  HERMES · TASK CONFIRMED. Replaced stage-workers.png in the README.

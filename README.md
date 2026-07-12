@@ -50,9 +50,17 @@ Remote use needs no web server: SSH or mosh in and run `pi-orchestra attach`.
 ## A real session
 
 STAGE with a live Claude Code brain and both MiniMax workers (Hermes and
-pi/MiniMax-M3), each in its own daemon-owned pane:
+pi/MiniMax-M3), each in its own daemon-owned pane. The animated baton
+filaments between the conductor card and the bench pulse whenever a pane
+produces output; focus hops with `ctrl-g n`:
 
-![STAGE with three live panes](docs/stage-workers.png)
+![Live STAGE with baton connections](docs/stage-live-dispatch.gif)
+
+After a confirmed dispatch the worker's card is labeled `TASK CONFIRMED` —
+here Hermes has durably received its brief while the conductor drafts the
+next one:
+
+![STAGE after a confirmed dispatch](docs/stage-live.png)
 
 The launch flow — brain, worker pool, working directory:
 
@@ -203,16 +211,20 @@ lines verbatim. Worker output is untrusted until the brain verifies it.
 
 ## Keys
 
-`ctrl-g` is the only leader; press it twice to send a literal control-G.
-Focused-pane input is forwarded raw — kitty extended keys, bracketed paste,
-and mouse coordinates included.
+**In STAGE, everything you type goes to the focused pane** — kitty extended
+keys, bracketed paste, and mouse coordinates are forwarded raw. Commands
+always take the leader first: press `ctrl-g`, release, then one key.
+Press the leader twice to send the literal chord to the pane. The leader is
+configurable via `app.leader_key` in `~/.orchestra/harnesses.json`
+(`ctrl-` plus a letter; keys that collide with enter/tab/escape/flow control
+are refused and fall back to `ctrl-g`).
 
 | Keys | Action |
 |---|---|
 | `n` (HOME) | new session flow |
 | `enter` (HOME) | attach selected session |
-| `V` | cycle HOME / SCORE / RUNS |
-| `?` | help |
+| `V` (outside STAGE) | cycle HOME / SCORE / RUNS |
+| `?` (outside STAGE) | help |
 | `ctrl-g n` / `ctrl-g p` | focus next / previous pane |
 | `ctrl-g z` | zoom focused pane / restore ensemble |
 | `ctrl-g s` | swap focused pane with the next |
@@ -220,9 +232,12 @@ and mouse coordinates included.
 | drag a card header | reposition and persist layout |
 | `ctrl-g b` | SCORE board |
 | `ctrl-g h` | return HOME |
+| `ctrl-g v` | leave STAGE to the views |
+| `ctrl-g ?` | help from STAGE |
 | `ctrl-g q` | detach (panes keep running) |
 | `j/k`, `h/l`, drag (SCORE) | select task, request lifecycle move |
 | `g` (SCORE) | focus the linked STAGE pane |
+| `V`/`h`/`q` (RUNS) | leave the read-only ledger / quit |
 | `R` (dead conductor) | resume when the harness supports it |
 
 When a brain exits, workers stay alive and the pane shows `CONDUCTOR DOWN`
@@ -251,7 +266,7 @@ unknown fields survive round trips. Fresh defaults:
 
 Two themes are supported: `ember` (warm charcoal and brass) and `phosphor`
 (CRT green). `reduced_motion: true` disables all animation, including the
-HOME avatar.
+HOME avatar. `leader_key` sets the command chord (default `ctrl-g`).
 
 ## Measured performance
 
