@@ -31,6 +31,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn default_leader_key() -> String {
+    "ctrl-g".to_owned()
+}
+
 /// One styled terminal cell in row-major order.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TerminalCell {
@@ -420,6 +424,9 @@ pub enum ServerResponse {
         theme: String,
         /// Reduced-motion preference.
         reduced_motion: bool,
+        /// Configured leader chord label, e.g. `ctrl-g`.
+        #[serde(default = "default_leader_key")]
+        leader_key: String,
     },
     /// Newly created session identifier.
     SessionCreated {

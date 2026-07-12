@@ -145,6 +145,46 @@ pub struct HomeData {
     pub theme: String,
     /// Reduced-motion preference.
     pub reduced_motion: bool,
+    /// Configured leader chord label, e.g. `ctrl-g`.
+    pub leader_key: String,
+}
+
+/// The verified leader chord: the raw control byte plus its display label.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LeaderKey {
+    byte: u8,
+    label: String,
+}
+
+impl LeaderKey {
+    /// Parse a `ctrl-<letter>` label, refusing bytes that collide with
+    /// enter, tab, escape, backspace, or flow control; anything unusable
+    /// falls back to the default `ctrl-g`.
+    fn parse(label: &str) -> Self {
+        let fallback = Self {
+            byte: 0x07,
+            label: "ctrl-g".to_owned(),
+        };
+        let Some(letter) = label
+            .strip_prefix("ctrl-")
+            .and_then(|rest| {
+                let mut chars = rest.chars();
+                chars.next().filter(|_| chars.next().is_none())
+            })
+            .filter(char::is_ascii_lowercase)
+        else {
+            return fallback;
+        };
+        // ctrl-i tab, ctrl-j newline, ctrl-m enter, ctrl-h backspace,
+        // ctrl-q/ctrl-s XON/XOFF, ctrl-c/ctrl-d conventional interrupts.
+        if matches!(letter, 'i' | 'j' | 'm' | 'h' | 'q' | 's' | 'c' | 'd') {
+            return fallback;
+        }
+        Self {
+            byte: (letter as u8) & 0x1f,
+            label: format!("ctrl-{letter}"),
+        }
+    }
 }
 
 /// Session replay returned on attach.
@@ -260,6 +300,7 @@ impl BenchClient {
                 max_parallel_workers,
                 theme,
                 reduced_motion,
+                leader_key,
             } => Ok(HomeData {
                 sessions,
                 harnesses,
@@ -267,6 +308,7 @@ impl BenchClient {
                 max_parallel_workers,
                 theme,
                 reduced_motion,
+                leader_key,
             }),
             ServerResponse::Error { message } => Err(AppError::Daemon(message)),
             response => Err(AppError::Daemon(format!(
@@ -467,6 +509,7 @@ struct StageState {
     raw_router: RawRouter,
     confirmed_panes: std::collections::HashSet<String>,
     baton_kind: BatonKind,
+    leader_label: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -502,6 +545,7 @@ impl StageState {
             raw_router: RawRouter::default(),
             confirmed_panes: std::collections::HashSet::new(),
             baton_kind: BatonKind::Settle,
+            leader_label: "ctrl-g".to_owned(),
         }
     }
 
@@ -564,13 +608,26 @@ enum LeaderAction {
     Shrink,
     Home,
     Score,
+    Views,
+    Help,
 }
 
-#[derive(Default)]
 struct RawRouter {
     leader: bool,
     paste: bool,
     recent: VecDeque<u8>,
+    leader_byte: u8,
+}
+
+impl Default for RawRouter {
+    fn default() -> Self {
+        Self {
+            leader: false,
+            paste: false,
+            recent: VecDeque::new(),
+            leader_byte: 0x07,
+        }
+    }
 }
 
 impl RawRouter {
@@ -581,7 +638,7 @@ impl RawRouter {
             if self.leader && !self.paste {
                 self.leader = false;
                 let action = match byte {
-                    0x07 => {
+                    byte if byte == self.leader_byte => {
                         forwarded.push(byte);
                         None
                     }
@@ -594,6 +651,8 @@ impl RawRouter {
                     b'-' => Some(LeaderAction::Shrink),
                     b'h' => Some(LeaderAction::Home),
                     b'b' => Some(LeaderAction::Score),
+                    b'v' => Some(LeaderAction::Views),
+                    b'?' => Some(LeaderAction::Help),
                     _ => {
                         forwarded.push(byte);
                         None
@@ -602,7 +661,7 @@ impl RawRouter {
                 if let Some(action) = action {
                     actions.push(action);
                 }
-            } else if byte == 0x07 && !self.paste {
+            } else if byte == self.leader_byte && !self.paste {
                 self.leader = true;
             } else {
                 forwarded.push(byte);
@@ -637,6 +696,8 @@ struct ScoreState {
     message: String,
     dragging: Option<String>,
     width: u16,
+    /// A leader press is pending its follow-up key.
+    leader: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -703,9 +764,11 @@ struct ShellState {
     reduced_motion: bool,
     /// Wall-clock origin for the ambient HOME animation.
     epoch: Instant,
+    /// Parsed leader chord shared by STAGE and SCORE.
+    leader: LeaderKey,
 }
 
-fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
+fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, leader_label: &str) {
     let area = frame.area();
     score.width = area.width.max(1);
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
@@ -768,8 +831,9 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
     }
     frame.render_widget(
         Paragraph::new(format!(
-            " SCORE / {} · j/k select · h/l move · drag column · g stage · ctrl-g b board",
-            score.session_id
+            " SCORE / {} · j/k select · h/l move · drag column · g stage · V RUNS · {leader} h HOME",
+            score.session_id,
+            leader = leader_label
         ))
         .style(Style::default().fg(theme.dim)),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
@@ -991,13 +1055,13 @@ fn render_legend(frame: &mut Frame<'_>, area: Rect, text: &str, theme: Theme) {
     );
 }
 
-fn render_help(frame: &mut Frame<'_>, theme: Theme) {
+fn render_help(frame: &mut Frame<'_>, theme: Theme, leader: &str) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
     frame.render_widget(
-        Paragraph::new(
-            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  ctrl-g is the STAGE leader. ctrl-g twice sends a literal ctrl-g.\n  ctrl-g h HOME · ctrl-g b SCORE · ctrl-g q detach\n  V cycles HOME, SCORE, RUNS. Focused pane input remains raw.\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
-        )
+        Paragraph::new(format!(
+            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n  Change the leader in ~/.orchestra/harnesses.json (app.leader_key).\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
+        ))
         .style(Style::default().fg(theme.text).bg(theme.stage)),
         area,
     );
@@ -1006,7 +1070,7 @@ fn render_help(frame: &mut Frame<'_>, theme: Theme) {
 
 fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
     if shell.help {
-        render_help(frame, shell.theme);
+        render_help(frame, shell.theme, &shell.leader.label);
         return;
     }
     match shell.view {
@@ -1022,10 +1086,18 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         }
         ShellView::Score => {
             if let Some(score) = shell.score.as_mut() {
-                render_score(frame, score, shell.theme);
+                render_score(frame, score, shell.theme, &shell.leader.label);
             }
         }
-        ShellView::Runs => orc_tui::draw(frame, &mut shell.runs),
+        ShellView::Runs => {
+            orc_tui::draw(frame, &mut shell.runs);
+            render_legend(
+                frame,
+                frame.area(),
+                "RUNS ledger (read-only) · V or h HOME · ? help · q quit",
+                shell.theme,
+            );
+        }
     }
 }
 
@@ -1045,6 +1117,7 @@ pub fn run_initial(
     let home = commands.home()?;
     let selected_theme = ThemeName::named(&home.theme);
     let reduced_motion = home.reduced_motion;
+    let leader = LeaderKey::parse(&home.leader_key);
     let mut shell = ShellState {
         view: if runs {
             ShellView::Runs
@@ -1065,6 +1138,7 @@ pub fn run_initial(
         help: false,
         reduced_motion,
         epoch: Instant::now(),
+        leader,
     };
     if let Some(session_id) = initial_session {
         attach_stage(&mut commands, &mut shell, session_id, theme)?;
@@ -1109,6 +1183,8 @@ fn attach_stage(
     let tasks = commands.task_board(session_id.clone())?;
     let mut stage =
         StageState::for_session(session_id.clone(), session.panes, session.layout, theme);
+    stage.raw_router.leader_byte = shell.leader.byte;
+    stage.leader_label = shell.leader.label.clone();
     stage.confirmed_panes = tasks
         .iter()
         .filter_map(|task| {
@@ -1133,6 +1209,7 @@ fn attach_stage(
         message: String::new(),
         dragging: None,
         width: 1,
+        leader: false,
     });
     shell.view = ShellView::Stage;
     Ok(())
@@ -1389,26 +1466,44 @@ fn handle_raw_event(
         }
         return Ok(false);
     }
-    if bytes == b"?" {
-        shell.help = true;
-        return Ok(false);
-    }
-    if bytes == b"V" {
-        shell.view = match shell.view {
-            ShellView::Home => {
-                if shell.score.is_some() {
-                    ShellView::Score
-                } else {
-                    ShellView::Runs
+    // Bare `?` and `V` are view keys only where no raw input is expected:
+    // STAGE forwards every unprefixed byte to the focused pane, and the
+    // launch flow needs literal `V` and `?` for paths and titles.
+    let raw_input_view = shell.view == ShellView::Stage
+        || (shell.view == ShellView::Home && shell.home.flow.is_some());
+    if !raw_input_view {
+        if bytes == b"?" {
+            shell.help = true;
+            return Ok(false);
+        }
+        if bytes == b"V" {
+            shell.view = match shell.view {
+                ShellView::Home => {
+                    if shell.score.is_some() {
+                        ShellView::Score
+                    } else {
+                        ShellView::Runs
+                    }
                 }
-            }
-            ShellView::Score => ShellView::Runs,
-            ShellView::Runs | ShellView::Stage => ShellView::Home,
-        };
-        return Ok(false);
+                ShellView::Score => ShellView::Runs,
+                ShellView::Runs | ShellView::Stage => ShellView::Home,
+            };
+            return Ok(false);
+        }
     }
     match shell.view {
-        ShellView::Runs => Ok(bytes == b"q"),
+        ShellView::Runs => {
+            for key in raw_home_keys(bytes) {
+                match key.code {
+                    KeyCode::Char('q') => return Ok(true),
+                    KeyCode::Char('h') | KeyCode::Esc => {
+                        shell.view = ShellView::Home;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(false)
+        }
         ShellView::Home => {
             for key in raw_home_keys(bytes) {
                 if handle_home_key(key, commands, shell, theme)? {
@@ -1421,6 +1516,22 @@ fn handle_raw_event(
             let Some(score) = shell.score.as_mut() else {
                 return Ok(false);
             };
+            if score.leader {
+                score.leader = false;
+                match bytes {
+                    b"h" => shell.view = ShellView::Home,
+                    b"v" => shell.view = ShellView::Runs,
+                    b"b" => {}
+                    b"?" => shell.help = true,
+                    b"q" => return Ok(true),
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            if bytes == [shell.leader.byte] {
+                score.leader = true;
+                return Ok(false);
+            }
             if bytes == b"g" {
                 if let (Some(stage), Some(task)) =
                     (shell.stage.as_mut(), score.tasks.get(score.selected))
@@ -1569,6 +1680,8 @@ fn handle_raw_event(
                             shell.view = ShellView::Score;
                         }
                     }
+                    LeaderAction::Views => shell.view = ShellView::Home,
+                    LeaderAction::Help => shell.help = true,
                 }
             }
             if !forwarded.is_empty() {
@@ -1877,12 +1990,11 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
             );
         }
     }
-    render_legend(
-        frame,
-        area,
-        "ctrl-g n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
-        state.theme,
+    let legend = format!(
+        "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
+        leader = state.leader_label
     );
+    render_legend(frame, area, &legend, state.theme);
 }
 
 fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
@@ -2137,9 +2249,9 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::{
-        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HomeData, HomeState, RawRouter, ScoreState,
-        StageState, Theme, ThemeName, baton_profile, render_help, render_home, render_score,
-        render_stage, route_raw_mouse, score_mouse,
+        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HomeData, HomeState, LeaderAction, LeaderKey,
+        RawRouter, ScoreState, StageState, Theme, ThemeName, baton_profile, render_help,
+        render_home, render_score, render_stage, route_raw_mouse, score_mouse,
     };
 
     fn panes() -> Vec<PaneSnapshot> {
@@ -2257,6 +2369,7 @@ mod tests {
                         max_parallel_workers: 3,
                         theme: "ember".to_owned(),
                         reduced_motion: false,
+                        leader_key: "ctrl-g".to_owned(),
                     },
                     selected: 0,
                     flow: None,
@@ -2320,7 +2433,7 @@ mod tests {
                 let backend = TestBackend::new(width, height);
                 let mut terminal = Terminal::new(backend).expect("test help terminal");
                 terminal
-                    .draw(|frame| render_help(frame, Theme::from(theme_name)))
+                    .draw(|frame| render_help(frame, Theme::from(theme_name), "ctrl-g"))
                     .expect("render help");
                 let text = terminal
                     .backend()
@@ -2399,9 +2512,12 @@ mod tests {
                     message: "dependency still open".to_owned(),
                     dragging: None,
                     width: 1,
+                    leader: false,
                 };
                 terminal
-                    .draw(|frame| render_score(frame, &mut state, Theme::from(theme_name)))
+                    .draw(|frame| {
+                        render_score(frame, &mut state, Theme::from(theme_name), "ctrl-g")
+                    })
                     .expect("render SCORE");
                 let text = terminal
                     .backend()
@@ -2419,5 +2535,42 @@ mod tests {
         assert_eq!(score_mouse(b"\x1b[<0;12;4M"), Some((0, 12, 4, 'M')));
         assert_eq!(score_mouse(b"\x1b[<0;70;9m"), Some((0, 70, 9, 'm')));
         assert_eq!(score_mouse(b"not-mouse"), None);
+    }
+
+    #[test]
+    fn leader_key_parses_safe_letters_and_falls_back_otherwise() {
+        assert_eq!(LeaderKey::parse("ctrl-g").byte, 0x07);
+        let custom = LeaderKey::parse("ctrl-b");
+        assert_eq!(custom.byte, 0x02);
+        assert_eq!(custom.label, "ctrl-b");
+        // Reserved or malformed labels fall back to ctrl-g.
+        for label in [
+            "ctrl-m", "ctrl-i", "ctrl-c", "ctrl-q", "alt-g", "", "ctrl-gg",
+        ] {
+            let parsed = LeaderKey::parse(label);
+            assert_eq!(parsed.byte, 0x07, "label {label} must fall back");
+            assert_eq!(parsed.label, "ctrl-g");
+        }
+    }
+
+    #[test]
+    fn raw_router_honors_a_configured_leader_byte() {
+        let mut router = RawRouter {
+            leader_byte: 0x02,
+            ..RawRouter::default()
+        };
+        // ctrl-g is no longer the leader and passes through raw.
+        assert_eq!(router.route(b"\x07").0, vec![0x07]);
+        // ctrl-b arms the leader; z zooms and v cycles views.
+        let (forwarded, actions) = router.route(b"\x02z");
+        assert!(forwarded.is_empty());
+        assert_eq!(actions, vec![LeaderAction::Zoom]);
+        let (forwarded, actions) = router.route(b"\x02v");
+        assert!(forwarded.is_empty());
+        assert_eq!(actions, vec![LeaderAction::Views]);
+        // Double ctrl-b forwards the literal chord byte.
+        let (forwarded, actions) = router.route(b"\x02\x02");
+        assert_eq!(forwarded, vec![0x02]);
+        assert!(actions.is_empty());
     }
 }

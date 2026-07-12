@@ -393,6 +393,7 @@ impl Daemon {
             max_parallel_workers: registry.max_parallel_workers,
             theme: registry.app.theme,
             reduced_motion: registry.app.reduced_motion,
+            leader_key: registry.app.leader_key,
         })
     }
 
