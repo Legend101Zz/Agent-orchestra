@@ -31,6 +31,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::{Marker, border};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Points};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use tachyonfx::{EffectTimer, Interpolation};
@@ -700,6 +701,8 @@ struct ShellState {
     runs: orc_tui::App,
     help: bool,
     reduced_motion: bool,
+    /// Wall-clock origin for the ambient HOME animation.
+    epoch: Instant,
 }
 
 fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
@@ -773,97 +776,205 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme) {
     );
 }
 
-fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme) {
+/// Sparkle frames for the ambient HOME avatar; the middle frame doubles as
+/// the static reduced-motion glyph.
+const AVATAR_FRAMES: [&str; 8] = ["·", "✢", "✳", "✻", "✽", "✻", "✳", "✢"];
+const AVATAR_STATIC: &str = "✻";
+const HOME_TITLE: &str = "PI ORCHESTRA";
+const HOME_TAGLINE: &str = "one conductor · a bench of workers · sessions survive detach";
+
+/// Render the animated masthead card and return the row below it.
+fn render_home_masthead(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: Theme,
+    motion: Option<usize>,
+) -> u16 {
+    let card_width = area.width.saturating_sub(4).clamp(24, 68);
+    let card = Rect::new(
+        area.x + 2,
+        area.y + 1,
+        card_width,
+        4.min(area.height.saturating_sub(1)),
+    );
+    let (avatar, avatar_color) = match motion {
+        Some(tick) => (
+            AVATAR_FRAMES[tick % AVATAR_FRAMES.len()],
+            if tick % 2 == 0 {
+                theme.pulse
+            } else {
+                theme.focus
+            },
+        ),
+        None => (AVATAR_STATIC, theme.focus),
+    };
+    let sweep = motion.map(|tick| tick % (HOME_TITLE.len() + 8));
+    let mut title = vec![Span::styled(
+        format!(" {avatar}  "),
+        Style::default()
+            .fg(avatar_color)
+            .add_modifier(Modifier::BOLD),
+    )];
+    for (index, glyph) in HOME_TITLE.chars().enumerate() {
+        let lit = sweep == Some(index);
+        title.push(Span::styled(
+            glyph.to_string(),
+            Style::default()
+                .fg(if lit { theme.pulse } else { theme.focus })
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let masthead = Paragraph::new(vec![
+        Line::from(title),
+        Line::from(Span::styled(
+            format!("     {HOME_TAGLINE}"),
+            Style::default().fg(theme.dim),
+        )),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(border::ROUNDED)
+            .border_style(Style::default().fg(theme.dim))
+            .style(Style::default().bg(theme.stage)),
+    );
+    frame.render_widget(masthead, card);
+    card.bottom().saturating_add(1)
+}
+
+fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: Option<usize>) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
-    let mut lines = vec![
-        "  █▀█ █ █▀▀   █▀█ █▀█ █▀▀ █ █ █▀▀ █▀▀ ▀█▀ █▀█ █▀█".to_owned(),
-        "  █▀▀ █ └─█   █▄█ █▀▄ █   █▀█ █▀  └─█  █  █▀▄ █▀█".to_owned(),
-        "  ▀   ▀ ▀▀▀   ▀ ▀ ▀ ▀ ▀▀▀ ▀ ▀ ▀▀▀ ▀▀▀  ▀  ▀ ▀ ▀ ▀".to_owned(),
-        "  HOME · durable sessions remain alive when this client detaches".to_owned(),
-        String::new(),
-    ];
+    let body_top = render_home_masthead(frame, area, theme, motion);
+    let text = Style::default().fg(theme.text);
+    let dim = Style::default().fg(theme.dim);
+    let focus = Style::default()
+        .fg(theme.focus)
+        .add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line<'_>> = Vec::new();
     if let Some(flow) = &state.flow {
-        lines.push("  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd".to_owned());
-        lines.push(String::new());
+        lines.push(Line::styled(
+            "  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd",
+            dim,
+        ));
+        lines.push(Line::default());
         match flow.step {
             FlowStep::Brain => {
-                lines.push("  STEP 1 / 3   CHOOSE BRAIN".to_owned());
+                lines.push(Line::styled("  STEP 1 / 3   CHOOSE BRAIN", text));
                 for (index, brain) in flow.brain_choices.iter().enumerate() {
-                    lines.push(format!(
-                        "  {}  {brain}",
-                        if index == flow.brain_index {
-                            "BRASS"
-                        } else {
-                            "     "
-                        }
+                    let chosen = index == flow.brain_index;
+                    lines.push(Line::styled(
+                        format!("  {}  {brain}", if chosen { "BRASS" } else { "     " }),
+                        if chosen { focus } else { text },
                     ));
                 }
-                lines.push("  ↑/↓ choose · enter continue · esc cancel".to_owned());
+                lines.push(Line::styled(
+                    "  ↑/↓ choose · enter continue · esc cancel",
+                    dim,
+                ));
             }
             FlowStep::Workers => {
-                lines.push("  STEP 2 / 3   CHOOSE WORKER POOL".to_owned());
+                lines.push(Line::styled("  STEP 2 / 3   CHOOSE WORKER POOL", text));
                 for (index, worker) in flow.worker_choices.iter().enumerate() {
                     let selected = flow.selected_workers.contains(worker);
-                    lines.push(format!(
-                        "  {}  [{}] {worker}",
-                        if index == flow.worker_index {
-                            "BRASS"
-                        } else {
-                            "     "
-                        },
-                        if selected { "PRESELECTED" } else { "EDITABLE" }
+                    let chosen = index == flow.worker_index;
+                    lines.push(Line::styled(
+                        format!(
+                            "  {}  [{}] {worker}",
+                            if chosen { "BRASS" } else { "     " },
+                            if selected { "PRESELECTED" } else { "EDITABLE" }
+                        ),
+                        if chosen { focus } else { text },
                     ));
                 }
-                lines.push("  space edits selection · enter continue".to_owned());
+                lines.push(Line::styled(
+                    "  space edits selection · enter continue",
+                    dim,
+                ));
             }
             FlowStep::Cwd => {
-                lines.push("  STEP 3 / 3   CHOOSE CWD".to_owned());
-                lines.push(format!("  > {}", flow.cwd));
-                lines.push("  type path · enter launches · esc back".to_owned());
+                lines.push(Line::styled("  STEP 3 / 3   CHOOSE CWD", text));
+                lines.push(Line::styled(format!("  > {}", flow.cwd), focus));
+                lines.push(Line::styled("  type path · enter launches · esc back", dim));
             }
         }
     } else if state.data.sessions.is_empty() {
         lines.extend([
-            "  WELCOME TO THE BENCH".to_owned(),
-            "  Press n to create a session.".to_owned(),
-            "  The brain plans and delegates. Workers execute focused briefs.".to_owned(),
-            "  Hermes + pi-m3 are editable offers; unavailable tools are never selected."
-                .to_owned(),
+            Line::styled(
+                "  WELCOME TO THE BENCH",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Line::default(),
+            Line::from(vec![
+                Span::styled("  Press ", text),
+                Span::styled("n", focus),
+                Span::styled(" to create a session.", text),
+            ]),
+            Line::styled(
+                "  1 choose a brain · 2 review the worker pool · 3 choose a cwd",
+                dim,
+            ),
+            Line::default(),
+            Line::styled(
+                "  The brain plans and delegates. Workers execute focused briefs.",
+                text,
+            ),
+            Line::styled(
+                "  Hermes + pi-m3 are editable offers; unavailable tools are never selected.",
+                dim,
+            ),
         ]);
     } else {
-        lines.push("  SESSION SHELF".to_owned());
+        lines.push(Line::styled(
+            "  SESSION SHELF",
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ));
         for (index, session) in state.data.sessions.iter().enumerate() {
-            let marker = if index == state.selected {
-                "BRASS"
-            } else {
-                "     "
-            };
+            let chosen = index == state.selected;
+            let marker = if chosen { "BRASS" } else { "     " };
             let attention = if session.attention > 0 {
                 format!(" · ATTENTION {}", session.attention)
             } else {
                 " · READY".to_owned()
             };
-            lines.push(format!(
-                "  {marker}  ╭ {} · {} workers{attention}",
-                session.id,
-                session.workers.len()
+            lines.push(Line::styled(
+                format!(
+                    "  {marker}  ╭ {} · {} workers{attention}",
+                    session.id,
+                    session.workers.len()
+                ),
+                if chosen { focus } else { text },
             ));
-            lines.push(format!(
-                "         ╰ {}  ·  {}  ·  {}",
-                session.brain, session.cwd, session.updated_at
+            lines.push(Line::styled(
+                format!(
+                    "         ╰ {}  ·  {}  ·  {}",
+                    session.brain, session.cwd, session.updated_at
+                ),
+                if chosen {
+                    Style::default().fg(theme.focus)
+                } else {
+                    dim
+                },
             ));
         }
-        lines.push(String::new());
-        lines.push("  enter attach · n new session · V RUNS".to_owned());
+        lines.push(Line::default());
+        lines.push(Line::styled("  enter attach · n new session · V RUNS", dim));
     }
     if !state.message.is_empty() {
-        lines.push(String::new());
-        lines.push(format!("  {}", state.message));
+        lines.push(Line::default());
+        lines.push(Line::styled(format!("  {}", state.message), text));
     }
+    let body = Rect::new(
+        area.x,
+        body_top.min(area.bottom().saturating_sub(1)),
+        area.width,
+        area.bottom()
+            .saturating_sub(1)
+            .saturating_sub(body_top.min(area.bottom().saturating_sub(1))),
+    );
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.text).bg(theme.stage)),
-        area,
+        Paragraph::new(lines).style(Style::default().fg(theme.text).bg(theme.stage)),
+        body,
     );
     render_legend(
         frame,
@@ -899,7 +1010,11 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         return;
     }
     match shell.view {
-        ShellView::Home => render_home(frame, &shell.home, shell.theme),
+        ShellView::Home => {
+            let motion =
+                (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
+            render_home(frame, &shell.home, shell.theme, motion);
+        }
         ShellView::Stage => {
             if let Some(stage) = shell.stage.as_mut() {
                 render_stage(frame, stage);
@@ -949,6 +1064,7 @@ pub fn run_initial(
             .map_err(|error| AppError::Daemon(format!("RUNS ledger unavailable: {error}")))?,
         help: false,
         reduced_motion,
+        epoch: Instant::now(),
     };
     if let Some(session_id) = initial_session {
         attach_stage(&mut commands, &mut shell, session_id, theme)?;
@@ -1040,7 +1156,8 @@ fn run_shell_loop(
         let animating = shell.stage.as_ref().is_some_and(|stage| {
             !shell.reduced_motion && shell.view == ShellView::Stage && !stage.pulse.done()
         });
-        if redraw || animating {
+        let home_ambient = !shell.reduced_motion && !shell.help && shell.view == ShellView::Home;
+        if redraw || animating || home_ambient {
             let mut stdout = io::stdout();
             stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
             if shell.view == ShellView::Stage
@@ -1053,6 +1170,8 @@ fn run_shell_loop(
         }
         let wait = if animating {
             Duration::from_millis(16)
+        } else if home_ambient {
+            Duration::from_millis(120)
         } else {
             Duration::from_secs(30)
         };
@@ -2018,9 +2137,9 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::{
-        BatonKind, HomeData, HomeState, RawRouter, ScoreState, StageState, Theme, ThemeName,
-        baton_profile, render_help, render_home, render_score, render_stage, route_raw_mouse,
-        score_mouse,
+        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HomeData, HomeState, RawRouter, ScoreState,
+        StageState, Theme, ThemeName, baton_profile, render_help, render_home, render_score,
+        render_stage, route_raw_mouse, score_mouse,
     };
 
     fn panes() -> Vec<PaneSnapshot> {
@@ -2144,7 +2263,7 @@ mod tests {
                     message: String::new(),
                 };
                 terminal
-                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name)))
+                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), Some(5)))
                     .expect("render empty HOME");
                 let text = terminal
                     .backend()
@@ -2153,9 +2272,24 @@ mod tests {
                     .iter()
                     .map(|cell| cell.symbol())
                     .collect::<String>();
+                assert!(text.contains("PI ORCHESTRA"));
+                assert!(text.contains(AVATAR_FRAMES[5]));
                 assert!(text.contains("WELCOME TO THE BENCH"));
-                assert!(text.contains("Press n to create a session"));
+                assert!(text.contains("Press "));
+                assert!(text.contains("to create a session"));
                 assert!(text.contains("editable offers"));
+                terminal
+                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), None))
+                    .expect("render reduced-motion HOME");
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains(AVATAR_STATIC));
+                assert!(text.contains("PI ORCHESTRA"));
                 state.data.sessions.push(SessionSummary {
                     id: "session-one".to_owned(),
                     brain: "codex".to_owned(),
@@ -2165,7 +2299,7 @@ mod tests {
                     attention: 0,
                 });
                 terminal
-                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name)))
+                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), Some(0)))
                     .expect("render HOME shelf");
                 let text = terminal
                     .backend()
