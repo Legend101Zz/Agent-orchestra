@@ -249,3 +249,20 @@
   hermes brief (DEMO_OK, confirmed), recorded docs/stage-live-dispatch.gif
   (typing + focus hops + baton pulses) and docs/stage-live.png showing
   HERMES · TASK CONFIRMED. Replaced stage-workers.png in the README.
+
+## Session 9b — 2026-07-12 (triage + Phase 6 handoff)
+- User reported: client exit with "daemon rejected request: invalid or
+  oversized response" (with ^[[I noise), dead/frozen RUNS embed, and a
+  ctrl-g system conflict. Diagnosis: the live ~/.orchestra orcd had been
+  running 19.5 h on yesterday's binary (installs never restart it); the
+  client error string also covers plain EOF; ^[[I is a FocusIn report;
+  the RUNS embed never routes keys into orc_tui and never redraws between
+  events. All three of the user's sessions were created with cwd=$HOME
+  (bug B4) and had conductor_down brains.
+- Actions now: set user registry app.leader_key to ctrl-b (verified live —
+  STAGE legend shows ctrl-b and ctrl-b h returns HOME); stopped the stale
+  daemon; fresh daemon on today's build verified healthy; wrote
+  docs/prompts/2026-07-12-v4-phase6-ux-bugfix-next-session.md covering
+  daemon build handshake + orc daemon status/restart, honest client errors,
+  RUNS interactivity/redraw, first-run HOME redesign, cwd-step fix, SCORE
+  clipping, env scrubbing, and gates.
