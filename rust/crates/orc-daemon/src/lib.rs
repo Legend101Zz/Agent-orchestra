@@ -23,9 +23,9 @@ use orc_core::bench::{
 use orc_core::dispatch::{self as orc_dispatch, DispatchActor, DispatchRequest};
 use orc_core::tasks::{TaskActor, TaskStatus, diff_task, list_tasks, move_task};
 use orc_proto::{
-    ClientRequest, DaemonMetrics, DispatchCommand, DispatchSummary, HarnessSummary, LayoutRect,
-    PROTOCOL_VERSION, PaneSequence, PaneSnapshot, ServerResponse, SessionSummary,
-    TaskHistorySummary, TaskSummary,
+    BUILD_IDENTIFIER, ClientRequest, DaemonMetrics, DaemonPaneStatus, DispatchCommand,
+    DispatchSummary, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence, PaneSnapshot,
+    ServerResponse, SessionSummary, TaskHistorySummary, TaskSummary,
 };
 use orc_pty::{HostedPane, UpdateSignal};
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,7 @@ pub struct Daemon {
     next_client_id: AtomicU64,
     requested_sizes: Mutex<ClientSizes>,
     control_sequence: AtomicU64,
+    socket: RwLock<Option<PathBuf>>,
 }
 
 impl Daemon {
@@ -135,6 +136,7 @@ impl Daemon {
             next_client_id: AtomicU64::new(1),
             requested_sizes: Mutex::new(HashMap::new()),
             control_sequence: AtomicU64::new(0),
+            socket: RwLock::new(None),
         }
     }
 
@@ -284,10 +286,6 @@ impl Daemon {
                 .wait_timeout(guard, remaining)
                 .map_err(|_| DaemonError::Poisoned)?;
         }
-    }
-
-    fn snapshots(&self) -> Result<Vec<PaneSnapshot>> {
-        self.snapshots_for(None)
     }
 
     fn snapshots_for(&self, session_id: Option<&str>) -> Result<Vec<PaneSnapshot>> {
@@ -652,18 +650,51 @@ impl Daemon {
         })
     }
 
+    /// Report daemon identity, build, and hosted-pane liveness.
+    pub fn daemon_status(&self) -> Result<ServerResponse> {
+        let entries = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        let mut panes = Vec::with_capacity(entries.len());
+        for entry in entries.iter() {
+            let metadata = entry.metadata.lock().map_err(|_| DaemonError::Poisoned)?;
+            let mut pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
+            panes.push(DaemonPaneStatus {
+                id: pane.id().to_owned(),
+                session_id: metadata.session_id.clone(),
+                harness: metadata.harness.clone(),
+                role: metadata.role.clone(),
+                live: !pane.has_exited()?,
+            });
+        }
+        let socket = self
+            .socket
+            .read()
+            .map_err(|_| DaemonError::Poisoned)?
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        Ok(ServerResponse::DaemonStatus {
+            pid: std::process::id(),
+            build: BUILD_IDENTIFIER.to_owned(),
+            protocol: PROTOCOL_VERSION,
+            socket,
+            panes,
+            attached_clients: self.clients.load(Ordering::Acquire),
+        })
+    }
+
     fn respond(&self, request: ClientRequest) -> Result<ServerResponse> {
         match request {
             ClientRequest::Hello { version } if version == PROTOCOL_VERSION => {
                 Ok(ServerResponse::Welcome {
                     version: PROTOCOL_VERSION,
+                    build: BUILD_IDENTIFIER.to_owned(),
                 })
             }
             ClientRequest::Hello { version } => Ok(ServerResponse::Error {
                 message: format!("protocol mismatch: client {version}, daemon {PROTOCOL_VERSION}"),
             }),
-            ClientRequest::Snapshot => Ok(ServerResponse::Snapshot {
-                panes: self.snapshots()?,
+            ClientRequest::Snapshot { session_id } => Ok(ServerResponse::Snapshot {
+                panes: self.snapshots_for(session_id.as_deref())?,
             }),
             ClientRequest::Wait {
                 sequences,
@@ -747,6 +778,7 @@ impl Daemon {
             }
             ClientRequest::Dispatch { command } => self.dispatch_command(&command),
             ClientRequest::DispatchBoard { session_id } => self.dispatch_board(&session_id),
+            ClientRequest::DaemonStatus => self.daemon_status(),
         }
     }
 
@@ -974,7 +1006,10 @@ fn bind_socket(socket_path: &Path) -> Result<UnixListener> {
 /// Serve clients until the process is terminated.
 pub fn serve(socket_path: &Path, daemon: Arc<Daemon>) -> Result<()> {
     let listener = bind_socket(socket_path)?;
-    info!(socket = %socket_path.display(), "orcd listening");
+    if let Ok(mut socket) = daemon.socket.write() {
+        *socket = Some(socket_path.to_owned());
+    }
+    info!(socket = %socket_path.display(), build = BUILD_IDENTIFIER, "orcd listening");
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
@@ -1074,8 +1109,29 @@ fn handle_client(mut stream: UnixStream, daemon: &Daemon) -> Result<()> {
     result.and(cleanup)
 }
 
+/// Wire cap shared with the client's `MAX_RESPONSE_BYTES`.
+const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+
 fn write_response(stream: &mut UnixStream, response: &ServerResponse) -> Result<()> {
-    serde_json::to_writer(&mut *stream, response)?;
+    let bytes = serde_json::to_vec(response)?;
+    // Never emit a response the client is required to reject: replace it
+    // with an explicit, bounded error naming the size and the remedy.
+    // Measured 2026-07-12: three fully-styled truecolor panes at the 200x400
+    // protocol maximum already serialize to ~20.7 MB, so unfiltered
+    // multi-session snapshots can plausibly exceed this cap.
+    let bytes = if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+        let replacement = ServerResponse::Error {
+            message: format!(
+                "response would be {} bytes, over the {} MiB wire cap — shrink or close panes, or attach with a session filter",
+                bytes.len(),
+                MAX_RESPONSE_BYTES / (1024 * 1024)
+            ),
+        };
+        serde_json::to_vec(&replacement)?
+    } else {
+        bytes
+    };
+    stream.write_all(&bytes)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())
@@ -1141,7 +1197,7 @@ mod tests {
                 )
                 .expect("write hello");
                 client.write_all(b"\n").expect("finish hello");
-                serde_json::to_writer(&mut client, &ClientRequest::Snapshot)
+                serde_json::to_writer(&mut client, &ClientRequest::Snapshot { session_id: None })
                     .expect("write snapshot");
                 client.write_all(b"\n").expect("finish snapshot");
                 let mut reader = BufReader::new(client.try_clone().expect("clone client"));
@@ -1353,14 +1409,124 @@ mod tests {
         .expect("spawn flood pane");
         let daemon = Daemon::new(vec![pane], signal);
         thread::sleep(Duration::from_millis(150));
-        let first = daemon.snapshots().expect("first flood snapshot");
+        let first = daemon.snapshots_for(None).expect("first flood snapshot");
         assert_eq!(first[0].cells.len(), 20 * 80);
         thread::sleep(Duration::from_millis(150));
-        let _ = daemon.snapshots().expect("second flood snapshot");
+        let _ = daemon.snapshots_for(None).expect("second flood snapshot");
         let metrics = daemon.metrics().expect("flood metrics");
         assert!(metrics.panes[0].bytes_read > 0);
         assert!(metrics.panes[0].output_chunks > 1);
         assert!(metrics.panes[0].coalesced_updates > 0);
+    }
+
+    #[test]
+    fn oversized_responses_are_replaced_with_an_explicit_bounded_error() {
+        use orc_proto::{PaneSnapshot, TerminalCell};
+
+        let giant = ServerResponse::Snapshot {
+            panes: vec![PaneSnapshot {
+                id: "giant".to_owned(),
+                title: "giant".to_owned(),
+                rows: 1,
+                cols: 1,
+                cursor: (0, 0),
+                sequence: 1,
+                cells: vec![TerminalCell {
+                    text: "x".repeat((super::MAX_RESPONSE_BYTES + 1024) as usize),
+                    ..TerminalCell::default()
+                }],
+                session_id: None,
+                harness: None,
+                role: None,
+                state: None,
+                down_at: None,
+            }],
+        };
+        let (mut client, mut server) = UnixStream::pair().expect("bounded response pair");
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                super::write_response(&mut server, &giant).expect("write bounded response");
+            });
+            let mut line = String::new();
+            BufReader::new(client.try_clone().expect("clone bounded client"))
+                .read_line(&mut line)
+                .expect("read bounded response");
+            assert!(
+                (line.len() as u64) < super::MAX_RESPONSE_BYTES,
+                "replacement must stay under the cap"
+            );
+            assert!(line.contains("wire cap"), "got: {line}");
+            assert!(line.contains("bytes"), "got: {line}");
+            client.write_all(b"").expect("keep client alive");
+        });
+    }
+
+    #[test]
+    fn welcome_reports_build_identity_and_status_reports_pane_liveness() {
+        let signal = update_signal();
+        let live = HostedPane::spawn_with_signal(
+            "live-pane",
+            "fixture",
+            "cat",
+            &[],
+            Path::new("/tmp"),
+            8,
+            40,
+            signal.clone(),
+        )
+        .expect("spawn live pane");
+        let dead = HostedPane::spawn_with_signal(
+            "dead-pane",
+            "fixture",
+            "true",
+            &[],
+            Path::new("/tmp"),
+            8,
+            40,
+            signal.clone(),
+        )
+        .expect("spawn exiting pane");
+        let daemon = Daemon::new(vec![live, dead], signal);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let welcome = daemon
+                .respond(ClientRequest::Hello {
+                    version: PROTOCOL_VERSION,
+                })
+                .expect("hello response");
+            let ServerResponse::Welcome { version, build } = welcome else {
+                panic!("expected welcome");
+            };
+            assert_eq!(version, PROTOCOL_VERSION);
+            assert_eq!(build, orc_proto::BUILD_IDENTIFIER);
+            let status = daemon.daemon_status().expect("status response");
+            let ServerResponse::DaemonStatus {
+                pid, build, panes, ..
+            } = status
+            else {
+                panic!("expected daemon status");
+            };
+            assert_eq!(pid, std::process::id());
+            assert_eq!(build, orc_proto::BUILD_IDENTIFIER);
+            assert_eq!(panes.len(), 2);
+            let live_pane = panes
+                .iter()
+                .find(|pane| pane.id == "live-pane")
+                .expect("live pane status");
+            assert!(live_pane.live);
+            let dead_pane = panes
+                .iter()
+                .find(|pane| pane.id == "dead-pane")
+                .expect("dead pane status");
+            if !dead_pane.live {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "exiting pane never reported dead"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
@@ -1399,10 +1565,10 @@ mod tests {
         daemon
             .resize_for_client(2, "brain", 40, 120)
             .expect("resize second client");
-        let largest = daemon.snapshots().expect("largest snapshot");
+        let largest = daemon.snapshots_for(None).expect("largest snapshot");
         assert_eq!((largest[0].rows, largest[0].cols), (40, 120));
         daemon.forget_client_sizes(2).expect("detach large client");
-        let remaining = daemon.snapshots().expect("remaining snapshot");
+        let remaining = daemon.snapshots_for(None).expect("remaining snapshot");
         assert_eq!((remaining[0].rows, remaining[0].cols), (20, 80));
     }
 

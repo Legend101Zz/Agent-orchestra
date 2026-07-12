@@ -43,6 +43,22 @@ install_link orc
 install_link orcd
 install_link pi-orchestra
 
+echo "==> running daemon check"
+# orcd persists across installs; a daemon on an older build makes clients
+# fail their build handshake until it is restarted.
+DAEMON_RC=0
+"$DEST_DIR/orc" daemon status >/dev/null 2>&1 || DAEMON_RC=$?
+case "$DAEMON_RC" in
+  0) echo "    orcd is running the installed build" ;;
+  3) echo "    orcd is not running (it starts on demand)" ;;
+  5)
+    echo "    WARNING: the running orcd predates this install."
+    echo "    Detach clients, then run: orc daemon restart"
+    echo "    (live panes die with the daemon; the command lists them first)"
+    ;;
+  *) echo "    could not probe orcd (orc daemon status exit $DAEMON_RC)" ;;
+esac
+
 echo "==> private orchestra data directory"
 mkdir -p "$HOME/.orchestra/runs" "$HOME/.orchestra/sessions"
 chmod 700 "$HOME/.orchestra"

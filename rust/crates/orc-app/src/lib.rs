@@ -10,6 +10,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,12 @@ pub enum AppError {
     /// The daemon rejected a request.
     #[error("daemon rejected request: {0}")]
     Daemon(String),
+    /// The daemon connection closed or desynchronized mid-request.
+    #[error("{0}")]
+    Connection(String),
+    /// The daemon and client are running different builds.
+    #[error("{0}")]
+    BuildMismatch(String),
     /// A background event source stopped unexpectedly.
     #[error("client event source disconnected")]
     EventSource,
@@ -197,7 +204,11 @@ pub struct SessionData {
 }
 
 impl BenchClient {
-    /// Connect to a daemon and verify its protocol version.
+    /// Connect to a daemon, verifying its protocol version and build identity.
+    ///
+    /// A daemon running a different build than this client — including a
+    /// daemon that predates the build handshake — is refused with one
+    /// actionable message instead of failing obscurely on a later request.
     pub fn connect(socket: &Path) -> Result<Self> {
         let stream = UnixStream::connect(socket)?;
         let reader = BufReader::new(stream.try_clone()?);
@@ -205,7 +216,21 @@ impl BenchClient {
         match client.request(&ClientRequest::Hello {
             version: PROTOCOL_VERSION,
         })? {
-            ServerResponse::Welcome { version } if version == PROTOCOL_VERSION => Ok(client),
+            ServerResponse::Welcome { version, build } if version == PROTOCOL_VERSION => {
+                if build == orc_proto::BUILD_IDENTIFIER {
+                    Ok(client)
+                } else if build.is_empty() {
+                    Err(AppError::BuildMismatch(format!(
+                        "the running daemon predates this client (client build {}) — detach other clients, then run `orc daemon restart`",
+                        orc_proto::BUILD_IDENTIFIER
+                    )))
+                } else {
+                    Err(AppError::BuildMismatch(format!(
+                        "daemon build {build} does not match client build {} — detach other clients, then run `orc daemon restart`",
+                        orc_proto::BUILD_IDENTIFIER
+                    )))
+                }
+            }
             ServerResponse::Error { message } => Err(AppError::Daemon(message)),
             response => Err(AppError::Daemon(format!(
                 "unexpected hello response: {response:?}"
@@ -213,9 +238,12 @@ impl BenchClient {
         }
     }
 
-    /// Fetch complete replayable screens.
-    pub fn snapshot(&mut self) -> Result<Vec<PaneSnapshot>> {
-        match self.request(&ClientRequest::Snapshot)? {
+    /// Fetch complete replayable screens, optionally for one session only.
+    ///
+    /// Session-bound callers must pass the session so unrelated sessions
+    /// cannot inflate the response toward the wire cap.
+    pub fn snapshot(&mut self, session_id: Option<String>) -> Result<Vec<PaneSnapshot>> {
+        match self.request(&ClientRequest::Snapshot { session_id })? {
             ServerResponse::Snapshot { panes } => Ok(panes),
             ServerResponse::Error { message } => Err(AppError::Daemon(message)),
             response => Err(AppError::Daemon(format!(
@@ -411,8 +439,21 @@ impl BenchClient {
             .by_ref()
             .take(MAX_RESPONSE_BYTES + 1)
             .read_until(b'\n', &mut bytes)?;
-        if read == 0 || read as u64 > MAX_RESPONSE_BYTES || !bytes.ends_with(b"\n") {
-            return Err(AppError::Daemon("invalid or oversized response".to_owned()));
+        if read == 0 {
+            return Err(AppError::Connection(
+                "the daemon closed the connection — it may have exited or restarted; run `orc daemon status`, then reattach".to_owned(),
+            ));
+        }
+        if read as u64 > MAX_RESPONSE_BYTES {
+            return Err(AppError::Connection(format!(
+                "daemon response exceeded the {} MiB cap (stopped after {read} bytes)",
+                MAX_RESPONSE_BYTES / (1024 * 1024)
+            )));
+        }
+        if !bytes.ends_with(b"\n") {
+            return Err(AppError::Connection(format!(
+                "malformed daemon response: {read} bytes arrived without a trailing newline"
+            )));
         }
         Ok(serde_json::from_slice(&bytes)?)
     }
@@ -461,7 +502,7 @@ pub fn visible_input_benchmark(
 ) -> Result<LatencySummary> {
     let mut client = BenchClient::connect(socket)?;
     let mut sequences = client
-        .snapshot()?
+        .snapshot(None)?
         .into_iter()
         .map(|pane| PaneSequence {
             id: pane.id,
@@ -473,7 +514,7 @@ pub fn visible_input_benchmark(
         let started = Instant::now();
         client.input(pane_id.to_owned(), vec![b'a' + (index % 26) as u8])?;
         let next = client.wait(sequences, Duration::from_secs(1))?;
-        let panes = client.snapshot()?;
+        let panes = client.snapshot(None)?;
         if !panes.iter().any(|pane| pane.id == pane_id) {
             return Err(AppError::Daemon(format!(
                 "unknown benchmark pane: {pane_id}"
@@ -510,6 +551,9 @@ struct StageState {
     confirmed_panes: std::collections::HashSet<String>,
     baton_kind: BatonKind,
     leader_label: String,
+    /// Recoverable command failure shown on the legend line instead of
+    /// exiting the client.
+    message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -546,6 +590,7 @@ impl StageState {
             confirmed_panes: std::collections::HashSet::new(),
             baton_kind: BatonKind::Settle,
             leader_label: "ctrl-g".to_owned(),
+            message: String::new(),
         }
     }
 
@@ -593,7 +638,7 @@ enum UiEvent {
     Raw(Vec<u8>),
     Resize,
     Snapshot(Vec<PaneSnapshot>),
-    WatchFailed,
+    WatchFailed(String),
     RunsChanged,
 }
 
@@ -766,6 +811,9 @@ struct ShellState {
     epoch: Instant,
     /// Parsed leader chord shared by STAGE and SCORE.
     leader: LeaderKey,
+    /// Session filter shared with the screen-watch thread so snapshots stay
+    /// bounded to the attached session.
+    watch_session: Arc<Mutex<Option<String>>>,
 }
 
 fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, leader_label: &str) {
@@ -1139,12 +1187,13 @@ pub fn run_initial(
         reduced_motion,
         epoch: Instant::now(),
         leader,
+        watch_session: Arc::new(Mutex::new(None)),
     };
     if let Some(session_id) = initial_session {
         attach_stage(&mut commands, &mut shell, session_id, theme)?;
     }
     let (events_tx, events_rx) = mpsc::sync_channel(64);
-    spawn_screen_watch(socket, events_tx.clone());
+    spawn_screen_watch(socket, Arc::clone(&shell.watch_session), events_tx.clone());
     spawn_runs_watch(events_tx.clone());
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
@@ -1181,6 +1230,9 @@ fn attach_stage(
 ) -> Result<()> {
     let session = commands.attach_session(session_id.clone())?;
     let tasks = commands.task_board(session_id.clone())?;
+    if let Ok(mut watched) = shell.watch_session.lock() {
+        *watched = Some(session_id.clone());
+    }
     let mut stage =
         StageState::for_session(session_id.clone(), session.panes, session.layout, theme);
     stage.raw_router.leader_byte = shell.leader.byte;
@@ -1312,7 +1364,7 @@ fn run_shell_loop(
                 requested_sizes.clear();
                 redraw = true;
             }
-            Some(UiEvent::WatchFailed) => return Err(AppError::EventSource),
+            Some(UiEvent::WatchFailed(message)) => return Err(AppError::Connection(message)),
             Some(UiEvent::RunsChanged) => {
                 let _ = shell.runs.refresh_now();
                 redraw = true;
@@ -1399,7 +1451,11 @@ fn spawn_resize_events(sender: SyncSender<UiEvent>) {
     });
 }
 
-fn spawn_screen_watch(socket: PathBuf, sender: SyncSender<UiEvent>) {
+fn spawn_screen_watch(
+    socket: PathBuf,
+    watch_session: Arc<Mutex<Option<String>>>,
+    sender: SyncSender<UiEvent>,
+) {
     thread::spawn(move || {
         let result = (|| -> Result<()> {
             let mut client = BenchClient::connect(&socket)?;
@@ -1408,15 +1464,21 @@ fn spawn_screen_watch(socket: PathBuf, sender: SyncSender<UiEvent>) {
                 let next = client.wait(sequences.clone(), Duration::from_secs(30))?;
                 if next != sequences {
                     sequences = next;
-                    let panes = client.snapshot()?;
+                    let session = watch_session
+                        .lock()
+                        .ok()
+                        .and_then(|watched| watched.clone());
+                    let panes = client.snapshot(session)?;
                     if sender.send(UiEvent::Snapshot(panes)).is_err() {
                         return Ok(());
                     }
                 }
             }
         })();
-        if result.is_err() {
-            let _ = sender.send(UiEvent::WatchFailed);
+        if let Err(error) = result {
+            let _ = sender.send(UiEvent::WatchFailed(format!(
+                "screen watch failed: {error}"
+            )));
         }
     });
 }
@@ -1428,7 +1490,9 @@ fn spawn_runs_watch(sender: SyncSender<UiEvent>) {
 fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
     thread::spawn(move || {
         if std::fs::create_dir_all(&path).is_err() {
-            let _ = sender.send(UiEvent::WatchFailed);
+            let _ = sender.send(UiEvent::WatchFailed(
+                "runs watcher could not create the runs directory".to_owned(),
+            ));
             return;
         }
         let (events, changes) = mpsc::sync_channel(16);
@@ -1439,11 +1503,15 @@ fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
                 }
             })
         else {
-            let _ = sender.send(UiEvent::WatchFailed);
+            let _ = sender.send(UiEvent::WatchFailed(
+                "runs watcher could not start".to_owned(),
+            ));
             return;
         };
         if watcher.watch(&path, RecursiveMode::Recursive).is_err() {
-            let _ = sender.send(UiEvent::WatchFailed);
+            let _ = sender.send(UiEvent::WatchFailed(
+                "runs watcher could not watch the runs directory".to_owned(),
+            ));
             return;
         }
         while changes.recv().is_ok() {
@@ -1454,12 +1522,46 @@ fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
     });
 }
 
+/// Remove terminal FocusIn/FocusOut reports (`ESC [ I`, `ESC [ O`).
+///
+/// The client enables `EnableFocusChange`, so terminals emit these reports on
+/// focus moves. Outside STAGE they would otherwise be decoded as junk keys
+/// (`Esc`, `[`, `I`) and typed into flow fields.
+fn strip_focus_reports(bytes: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == 0x1b
+            && bytes.get(index + 1) == Some(&b'[')
+            && matches!(bytes.get(index + 2), Some(b'I' | b'O'))
+        {
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    output
+}
+
 fn handle_raw_event(
     bytes: &[u8],
     commands: &mut BenchClient,
     shell: &mut ShellState,
     theme: ThemeName,
 ) -> Result<bool> {
+    // STAGE forwards raw bytes verbatim to the focused pane; every other view
+    // consumes focus reports so they can never masquerade as typed keys.
+    let stripped;
+    let bytes = if shell.view == ShellView::Stage {
+        bytes
+    } else {
+        stripped = strip_focus_reports(bytes);
+        if stripped.is_empty() {
+            return Ok(false);
+        }
+        &stripped
+    };
     if shell.help {
         if matches!(bytes, b"?" | b"\x1b") {
             shell.help = false;
@@ -1624,7 +1726,13 @@ fn handle_raw_event(
                 && let Some(pane) = stage.panes.get(stage.focus)
                 && pane.state.as_deref() == Some("conductor_down")
             {
-                commands.respawn_conductor(pane.id.clone())?;
+                match commands.respawn_conductor(pane.id.clone()) {
+                    Ok(()) => stage.message.clear(),
+                    // A refused recovery (for example RESUME NOT SUPPORTED)
+                    // is shown in place instead of exiting the client.
+                    Err(AppError::Daemon(message)) => stage.message = message,
+                    Err(error) => return Err(error),
+                }
                 return Ok(false);
             }
             if let Some(mouse) = route_raw_mouse(bytes, stage) {
@@ -1831,7 +1939,15 @@ fn handle_home_key(
                     .get(home.selected)
                     .map(|session| session.id.clone())
                 {
-                    attach_stage(commands, shell, session_id, theme)?;
+                    match attach_stage(commands, shell, session_id, theme) {
+                        Ok(()) => shell.home.message.clear(),
+                        // A refused attach stays on HOME with the reason in
+                        // place instead of exiting the client.
+                        Err(AppError::Daemon(message)) => {
+                            shell.home.message = format!("attach failed: {message}");
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
             _ => {}
@@ -1908,7 +2024,13 @@ fn handle_home_key(
                 ) {
                     Ok(session_id) => {
                         home.flow = None;
-                        attach_stage(commands, shell, session_id, theme)?;
+                        match attach_stage(commands, shell, session_id, theme) {
+                            Ok(()) => {}
+                            Err(AppError::Daemon(message)) => {
+                                shell.home.message = format!("attach failed: {message}");
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                     Err(error) => home.message = error.to_string(),
                 }
@@ -1990,11 +2112,22 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
             );
         }
     }
-    let legend = format!(
-        "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
-        leader = state.leader_label
-    );
-    render_legend(frame, area, &legend, state.theme);
+    if state.message.is_empty() {
+        let legend = format!(
+            "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
+            leader = state.leader_label
+        );
+        render_legend(frame, area, &legend, state.theme);
+    } else {
+        frame.render_widget(
+            Paragraph::new(format!(" {}", state.message)).style(
+                Style::default()
+                    .fg(state.theme.attention)
+                    .bg(state.theme.stage),
+            ),
+            Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+        );
+    }
 }
 
 fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
@@ -2535,6 +2668,149 @@ mod tests {
         assert_eq!(score_mouse(b"\x1b[<0;12;4M"), Some((0, 12, 4, 'M')));
         assert_eq!(score_mouse(b"\x1b[<0;70;9m"), Some((0, 70, 9, 'm')));
         assert_eq!(score_mouse(b"not-mouse"), None);
+    }
+
+    /// Bind a scripted one-connection daemon and return its socket path.
+    fn scripted_daemon<F>(name: &str, script: F) -> std::path::PathBuf
+    where
+        F: FnOnce(std::os::unix::net::UnixStream) + Send + 'static,
+    {
+        let dir = std::env::temp_dir().join(format!("orc-app-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scripted daemon dir");
+        let socket = dir.join("orcd.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("bind scripted daemon");
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                script(stream);
+            }
+        });
+        socket
+    }
+
+    fn read_request_line(stream: &std::os::unix::net::UnixStream) -> String {
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read request");
+        line
+    }
+
+    #[test]
+    fn connect_refuses_a_daemon_predating_the_build_handshake_with_guidance() {
+        let socket = scripted_daemon("legacy-welcome", |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            stream
+                .write_all(b"{\"type\":\"welcome\",\"version\":1}\n")
+                .expect("write legacy welcome");
+        });
+        let Err(error) = super::BenchClient::connect(&socket) else {
+            panic!("legacy daemon must refuse");
+        };
+        let message = error.to_string();
+        assert!(message.contains("predates this client"), "got: {message}");
+        assert!(message.contains("orc daemon restart"), "got: {message}");
+    }
+
+    #[test]
+    fn connect_refuses_a_daemon_on_a_different_build_with_both_builds_named() {
+        let socket = scripted_daemon("mismatched-welcome", |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            stream
+                .write_all(b"{\"type\":\"welcome\",\"version\":1,\"build\":\"0.0.1+deadbeef\"}\n")
+                .expect("write mismatched welcome");
+        });
+        let Err(error) = super::BenchClient::connect(&socket) else {
+            panic!("mismatch must refuse");
+        };
+        let message = error.to_string();
+        assert!(message.contains("0.0.1+deadbeef"), "got: {message}");
+        assert!(
+            message.contains(orc_proto::BUILD_IDENTIFIER),
+            "got: {message}"
+        );
+        assert!(message.contains("orc daemon restart"), "got: {message}");
+    }
+
+    #[test]
+    fn connect_accepts_a_daemon_on_the_same_build() {
+        let socket = scripted_daemon("matching-welcome", |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            let welcome = format!(
+                "{{\"type\":\"welcome\",\"version\":1,\"build\":\"{}\"}}\n",
+                orc_proto::BUILD_IDENTIFIER
+            );
+            stream
+                .write_all(welcome.as_bytes())
+                .expect("write matching welcome");
+        });
+        assert!(super::BenchClient::connect(&socket).is_ok());
+    }
+
+    #[test]
+    fn closed_connection_and_malformed_and_oversized_responses_get_distinct_messages() {
+        let socket = scripted_daemon("closed", |stream| {
+            let _ = read_request_line(&stream);
+            drop(stream);
+        });
+        let Err(closed) = super::BenchClient::connect(&socket) else {
+            panic!("closed connection must fail");
+        };
+        let closed = closed.to_string();
+        assert!(closed.contains("closed the connection"), "got: {closed}");
+        assert!(closed.contains("orc daemon status"), "got: {closed}");
+
+        let socket = scripted_daemon("no-newline", |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            stream
+                .write_all(b"{\"type\":\"welcome\",\"version\":1}")
+                .expect("write truncated welcome");
+            drop(stream);
+        });
+        let Err(malformed) = super::BenchClient::connect(&socket) else {
+            panic!("truncated response must fail");
+        };
+        let malformed = malformed.to_string();
+        assert!(
+            malformed.contains("without a trailing newline"),
+            "got: {malformed}"
+        );
+
+        let socket = scripted_daemon("oversized", |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            let body = vec![b'x'; (super::MAX_RESPONSE_BYTES + 1) as usize];
+            stream.write_all(&body).expect("write oversized body");
+            stream.write_all(b"\n").expect("finish oversized body");
+        });
+        let Err(oversized) = super::BenchClient::connect(&socket) else {
+            panic!("oversized response must fail");
+        };
+        let oversized = oversized.to_string();
+        assert!(oversized.contains("32 MiB cap"), "got: {oversized}");
+        assert!(oversized.contains("bytes"), "got: {oversized}");
+    }
+
+    #[test]
+    fn focus_reports_are_consumed_and_other_bytes_survive() {
+        assert_eq!(
+            super::strip_focus_reports(b"\x1b[Ipath\x1b[O"),
+            b"path".to_vec()
+        );
+        assert_eq!(
+            super::strip_focus_reports(b"\x1b[I\x1b[O"),
+            Vec::<u8>::new()
+        );
+        // Arrow keys and plain escapes pass through untouched.
+        assert_eq!(
+            super::strip_focus_reports(b"\x1b[A\x1b[B\x1b"),
+            b"\x1b[A\x1b[B\x1b".to_vec()
+        );
     }
 
     #[test]

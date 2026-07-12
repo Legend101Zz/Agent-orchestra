@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 /// Protocol version implemented by this build.
 pub const PROTOCOL_VERSION: u16 = 1;
 
+/// Build identity of this binary: crate version plus compile-time git commit.
+///
+/// `PROTOCOL_VERSION` alone cannot distinguish a same-version daemon running
+/// older code, so the daemon reports this string in [`ServerResponse::Welcome`]
+/// and clients compare it against their own value.
+pub const BUILD_IDENTIFIER: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "+", env!("ORC_BUILD_COMMIT"));
+
 /// A color captured from a hosted terminal cell.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TerminalColor {
@@ -33,6 +41,24 @@ fn is_false(value: &bool) -> bool {
 
 fn default_leader_key() -> String {
     "ctrl-g".to_owned()
+}
+
+/// Runtime state of one daemon-hosted pane reported by `daemon status`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonPaneStatus {
+    /// Stable pane identifier.
+    pub id: String,
+    /// Owning session when launched from STAGE.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Harness registry key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// `brain` or `worker`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Whether the hosted child process is still running.
+    pub live: bool,
 }
 
 /// One styled terminal cell in row-major order.
@@ -293,8 +319,14 @@ pub enum ClientRequest {
         /// Client protocol version.
         version: u16,
     },
-    /// Request the latest screens for every pane.
-    Snapshot,
+    /// Request the latest screens for every pane, or one session's panes.
+    Snapshot {
+        /// Restrict the reply to one session's panes when set. Session-bound
+        /// clients must set this so unrelated sessions cannot inflate the
+        /// response toward the wire cap.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
     /// Block until pane output changes or a bounded timeout expires.
     Wait {
         /// Last sequences observed by this client.
@@ -377,6 +409,8 @@ pub enum ClientRequest {
         /// Owning session identifier.
         session_id: String,
     },
+    /// Read daemon identity, build, and hosted-pane liveness.
+    DaemonStatus,
 }
 
 /// A response sent from the daemon to one client.
@@ -387,6 +421,9 @@ pub enum ServerResponse {
     Welcome {
         /// Daemon protocol version.
         version: u16,
+        /// Daemon build identity; empty when the daemon predates the field.
+        #[serde(default)]
+        build: String,
     },
     /// Current pane screens.
     Snapshot {
@@ -459,6 +496,22 @@ pub enum ServerResponse {
         /// Durable dispatch summaries, newest first.
         records: Vec<DispatchSummary>,
     },
+    /// Daemon identity, build, and hosted-pane liveness.
+    DaemonStatus {
+        /// Daemon process identifier.
+        pid: u32,
+        /// Daemon build identity.
+        build: String,
+        /// Daemon protocol version.
+        protocol: u16,
+        /// Bound socket path when known.
+        #[serde(default)]
+        socket: String,
+        /// Hosted panes with liveness.
+        panes: Vec<DaemonPaneStatus>,
+        /// Currently attached clients.
+        attached_clients: usize,
+    },
     /// A recoverable protocol or command failure.
     Error {
         /// Plain-language failure message.
@@ -468,7 +521,41 @@ pub enum ServerResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientRequest, PROTOCOL_VERSION, PaneSnapshot, ServerResponse, TerminalCell};
+    use super::{
+        BUILD_IDENTIFIER, ClientRequest, PROTOCOL_VERSION, PaneSnapshot, ServerResponse,
+        TerminalCell,
+    };
+
+    #[test]
+    fn build_identifier_carries_version_and_commit() {
+        assert!(BUILD_IDENTIFIER.starts_with(env!("CARGO_PKG_VERSION")));
+        let commit = BUILD_IDENTIFIER
+            .split_once('+')
+            .map(|(_, commit)| commit)
+            .unwrap_or_default();
+        assert!(!commit.is_empty(), "commit segment must never be empty");
+    }
+
+    #[test]
+    fn welcome_without_build_field_decodes_for_wire_compatibility() {
+        // A daemon predating the build handshake sends only the version.
+        let legacy: ServerResponse =
+            serde_json::from_str(r#"{"type":"welcome","version":1}"#).expect("decode old welcome");
+        assert_eq!(
+            legacy,
+            ServerResponse::Welcome {
+                version: 1,
+                build: String::new(),
+            }
+        );
+        let current = ServerResponse::Welcome {
+            version: PROTOCOL_VERSION,
+            build: BUILD_IDENTIFIER.to_owned(),
+        };
+        let encoded = serde_json::to_vec(&current).expect("encode welcome");
+        let decoded: ServerResponse = serde_json::from_slice(&encoded).expect("decode welcome");
+        assert_eq!(decoded, current);
+    }
 
     #[test]
     fn messages_round_trip_as_additive_json() {

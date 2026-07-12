@@ -11,7 +11,10 @@ use clap::{Parser, Subcommand};
 use orc_app::{BenchClient, ThemeName, benchmark, visible_input_benchmark};
 
 #[derive(Debug, Parser)]
-#[command(about = "Open or attach to the pi-orchestra Bench")]
+#[command(
+    about = "Open or attach to the pi-orchestra Bench",
+    version = orc_proto::BUILD_IDENTIFIER
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<AppCommand>,
@@ -121,7 +124,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.snapshot_once {
-        let panes = BenchClient::connect(&socket)?.snapshot()?;
+        let panes = BenchClient::connect(&socket)?.snapshot(None)?;
         let sequences = panes
             .iter()
             .map(|pane| (&pane.id, pane.sequence))

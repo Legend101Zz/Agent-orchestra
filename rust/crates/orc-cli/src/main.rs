@@ -1,3 +1,5 @@
+mod daemon;
+
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -192,6 +194,30 @@ enum Commands {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    /// Inspect or restart the per-user orcd daemon.
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonCommand {
+    /// Report daemon liveness, pid, build, socket, and live pane count.
+    ///
+    /// Exit codes: 0 running on this build, 3 not running, 5 build mismatch.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop and relaunch orcd on the installed build.
+    ///
+    /// Refuses while live panes exist unless --force, because daemon-owned
+    /// PTYs die with the daemon.
+    Restart {
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -627,7 +653,7 @@ fn dispatch_adapter(command: AdapterCommand) -> Result<i32> {
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
-            println!("orc 0.4.0");
+            println!("orc {}", orc_proto::BUILD_IDENTIFIER);
             Ok(0)
         }
         Commands::Run {
@@ -892,6 +918,10 @@ fn dispatch(command: Commands) -> Result<i32> {
         Commands::Dispatch { command } => dispatch_dispatch(command),
         Commands::Adapter { command } => dispatch_adapter(command),
         Commands::Task { command } => dispatch_task(command),
+        Commands::Daemon { command } => match command {
+            DaemonCommand::Status { json } => daemon::status(json),
+            DaemonCommand::Restart { force } => daemon::restart(force),
+        },
     }
 }
 

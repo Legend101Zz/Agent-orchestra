@@ -1317,6 +1317,7 @@ dependencies = [
  "anyhow",
  "clap",
  "orc-core",
+ "orc-proto",
  "serde_json",
 ]
 
