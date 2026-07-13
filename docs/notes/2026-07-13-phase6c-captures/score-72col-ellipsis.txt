@@ -1,0 +1,30 @@
+ BACKLOG       ASSIGNED      RUNNING       REVIEW        DONE
+  T0002 seco…   no tasks      no tasks      no tasks    › T0001 a much…
+  unassigned…                                             fix-worker ·…
+                                                          human moved
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ SCORE / tmp-1783883796-0000 · j/k select · h/l move · drag column · g s

@@ -37,6 +37,8 @@ const MAX_CLIENTS: usize = 16;
 static WRITE_NONCE: AtomicU64 = AtomicU64::new(0);
 type PaneSize = (u16, u16);
 type ClientSizes = HashMap<u64, HashMap<String, PaneSize>>;
+/// (owning session, role, live) for one hosted pane.
+type PaneHealth = (Option<String>, Option<String>, bool);
 
 fn epoch_seconds() -> u64 {
     SystemTime::now()
@@ -358,30 +360,92 @@ impl Daemon {
         Ok(())
     }
 
+    /// Health of every pane this daemon currently hosts, by pane id.
+    fn hosted_pane_health(&self) -> Result<HashMap<String, PaneHealth>> {
+        let entries = self.panes.read().map_err(|_| DaemonError::Poisoned)?;
+        let mut health = HashMap::new();
+        for entry in entries.iter() {
+            let metadata = entry.metadata.lock().map_err(|_| DaemonError::Poisoned)?;
+            let mut pane = entry.pane.lock().map_err(|_| DaemonError::Poisoned)?;
+            health.insert(
+                pane.id().to_owned(),
+                (
+                    metadata.session_id.clone(),
+                    metadata.role.clone(),
+                    !pane.has_exited()?,
+                ),
+            );
+        }
+        Ok(health)
+    }
+
     fn home_response(&self) -> Result<ServerResponse> {
         let registry = load_harness_registry()?;
+        let hosted = self.hosted_pane_health()?;
         let sessions = list_sessions()?
             .into_iter()
-            .map(|session| SessionSummary {
-                attention: session
+            .map(|session| {
+                // Pane health is judged against what this daemon actually
+                // hosts: a session record can claim `running` panes that
+                // died with a previous daemon.
+                let hosted_for = |pane_id: &str, role: &str| {
+                    hosted.get(pane_id).and_then(|(owner, pane_role, live)| {
+                        (owner.as_deref() == Some(&session.id)
+                            && pane_role.as_deref() == Some(role))
+                        .then_some(*live)
+                    })
+                };
+                let workers_total = session
                     .panes
                     .iter()
-                    .filter(|pane| pane.state == "conductor_down")
-                    .count(),
-                id: session.id,
-                brain: session.brain,
-                workers: session.workers,
-                cwd: session.cwd,
-                updated_at: session.updated_at,
+                    .filter(|pane| pane.role == "worker")
+                    .count();
+                let workers_live = session
+                    .panes
+                    .iter()
+                    .filter(|pane| {
+                        pane.role == "worker" && hosted_for(&pane.id, "worker") == Some(true)
+                    })
+                    .count();
+                let conductor = session
+                    .panes
+                    .iter()
+                    .find(|pane| pane.role == "brain")
+                    .map_or("dead", |pane| match hosted_for(&pane.id, "brain") {
+                        Some(true) => "live",
+                        Some(false) => "down",
+                        None => "dead",
+                    })
+                    .to_owned();
+                SessionSummary {
+                    attention: session
+                        .panes
+                        .iter()
+                        .filter(|pane| pane.state == "conductor_down")
+                        .count(),
+                    id: session.id,
+                    brain: session.brain,
+                    workers: session.workers,
+                    cwd: session.cwd,
+                    updated_at: session.updated_at,
+                    workers_live,
+                    workers_total,
+                    conductor,
+                }
             })
             .collect();
         let harnesses = registry
             .harnesses
             .iter()
-            .map(|(id, harness)| HarnessSummary {
-                id: id.clone(),
-                roles: harness.roles.clone(),
-                resumable: !harness.resume_args.is_empty(),
+            .map(|(id, harness)| {
+                let adapter = orc_core::adapter::summarize_harness(id, harness);
+                HarnessSummary {
+                    id: id.clone(),
+                    roles: harness.roles.clone(),
+                    resumable: !harness.resume_args.is_empty(),
+                    available: adapter.executable.is_some(),
+                    dispatch_verified: adapter.headless_delivery,
+                }
             })
             .collect();
         Ok(ServerResponse::Home {
@@ -1321,7 +1385,9 @@ mod tests {
             client
                 .write_all(&vec![b'x'; 1024 * 1024 + 1])
                 .expect("write oversized body");
-            client.write_all(b"\n").expect("finish oversized body");
+            // The daemon errors and closes as soon as the cap is exceeded,
+            // so this trailing write legitimately races a broken pipe.
+            let _ = client.write_all(b"\n");
             let mut line = String::new();
             BufReader::new(client.try_clone().expect("clone oversized client"))
                 .read_line(&mut line)
@@ -1709,6 +1775,33 @@ mod tests {
         assert!(launches.contains(&format!("{session_id}|{session_id}-worker-1|worker")));
         assert!(launches.contains("--resume"));
 
+        // A live daemon reports honest pane health: the conductor exited
+        // (hosted → "down") while the worker keeps running.
+        let ServerResponse::Home {
+            sessions: live_sessions,
+            harnesses: live_harnesses,
+            ..
+        } = daemon.home_response().expect("live HOME")
+        else {
+            panic!("expected live HOME response");
+        };
+        let live = live_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("launched session on the live shelf");
+        assert_eq!(live.conductor, "down");
+        assert_eq!(live.workers_live, 1);
+        assert_eq!(live.workers_total, 1);
+        // Availability comes from the adapter summary without provider
+        // contact: /bin/sh resolves, but the fixture adapter has no
+        // verified dispatch.
+        let fixture = live_harnesses
+            .iter()
+            .find(|harness| harness.id == "brain-fixture")
+            .expect("fixture harness summary");
+        assert!(fixture.available);
+        assert!(!fixture.dispatch_verified);
+
         let restarted = Daemon::production(root.clone(), update_signal());
         let ServerResponse::Home { sessions, .. } =
             restarted.home_response().expect("restart HOME")
@@ -1716,6 +1809,15 @@ mod tests {
             panic!("expected HOME response");
         };
         assert_eq!(sessions[0].attention, 1);
+        // A fresh daemon hosts none of the recorded panes: everything is
+        // honestly dead, whatever the session record still claims.
+        let stale = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session on the restarted shelf");
+        assert_eq!(stale.conductor, "dead");
+        assert_eq!(stale.workers_live, 0);
+        assert_eq!(stale.workers_total, 1);
 
         registry
             .harnesses

@@ -147,9 +147,20 @@ pub struct SessionSummary {
     pub updated_at: String,
     /// Number of panes needing attention.
     pub attention: usize,
+    /// Worker panes hosted by the daemon and still running.
+    #[serde(default)]
+    pub workers_live: usize,
+    /// Worker panes recorded for this session.
+    #[serde(default)]
+    pub workers_total: usize,
+    /// Conductor pane health: `live`, `down` (hosted but exited, `R`
+    /// recovery applies), or `dead` (not hosted, e.g. after a daemon
+    /// restart). Empty when reported by a daemon predating this field.
+    #[serde(default)]
+    pub conductor: String,
 }
 
-/// HOME harness choice and recovery capability.
+/// HOME harness choice, availability, and recovery capability.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarnessSummary {
     /// Stable harness key.
@@ -158,6 +169,12 @@ pub struct HarnessSummary {
     pub roles: Vec<String>,
     /// Whether conductor resume arguments are configured.
     pub resumable: bool,
+    /// Whether the configured executable resolves on PATH.
+    #[serde(default)]
+    pub available: bool,
+    /// Whether bounded non-interactive dispatch is locally verified.
+    #[serde(default)]
+    pub dispatch_verified: bool,
 }
 
 /// Lightweight durable task card rendered by SCORE.

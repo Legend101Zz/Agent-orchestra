@@ -119,13 +119,23 @@ orc version
 pi-orchestra home
 ```
 
-In HOME press `n`:
+HOME opens with a short teaching screen — what a brain and a worker are,
+that sessions survive detach — and a **BENCH AVAILABILITY** strip showing
+which configured harnesses actually resolve on PATH and which have a
+locally verified dispatch capability. Press `n`:
 
 1. **Choose a brain** — the conductor pane (Claude Code is a natural fit).
 2. **Review the worker pool** — Hermes + pi-m3 are preselected offers;
    `space` edits the selection. Unavailable tools are never auto-selected.
-3. **Choose a working directory** — the session launches, STAGE opens, and
-   every pane starts in that directory.
+3. **Choose a working directory** — prefilled with the directory you
+   launched from; `tab` completes path segments, `ctrl-u` clears the line,
+   and a path that is not a directory is refused before launch. The
+   confirmation line shows the chosen brain and workers. On enter the
+   session launches, STAGE opens, and every pane starts there.
+
+Back on HOME, each shelf card reports pane health — live worker count,
+`CONDUCTOR DOWN` with the `R` recovery hint, or `ALL PANES DEAD` after a
+daemon restart — so a dead session is never a surprise on attach.
 
 Close the client any time with `ctrl-g q`; panes keep running in `orcd`.
 Reattach with:
@@ -201,6 +211,8 @@ visibly unavailable.
 | Bound a stalled worker | `orc run "task" --idle-timeout 120` |
 | Task board | `orc task add/assign/start/review/move/diff/merge` |
 | Confirmed dispatch | `orc dispatch send …` |
+| Daemon health | `orc daemon status` (exit 0 ok / 3 not running / 5 build mismatch) |
+| Daemon restart | `orc daemon restart` (refuses while panes are live; `--force` lists and kills them) |
 
 Shell helpers installed by the marked block: `deleg8 "task" /path/to/cwd`
 and `pi-rpc "task"`.
@@ -237,6 +249,7 @@ are refused and fall back to `ctrl-g`).
 | `ctrl-g q` | detach (panes keep running) |
 | `j/k`, `h/l`, drag (SCORE) | select task, request lifecycle move |
 | `g` (SCORE) | focus the linked STAGE pane |
+| `tab` / `ctrl-u` (cwd step) | complete a path segment / clear the line |
 | `j/k`, `enter`, `/`, `t` (RUNS) | select, open, search, theme in the embedded ledger |
 | `V`/`h`/`Esc`, `q` (RUNS) | back HOME from the ledger dashboard / quit |
 | `R` (dead conductor) | resume when the harness supports it |
@@ -293,6 +306,11 @@ Release build on an M-series Mac (see `docs/notes/` for raw evidence):
 - **Quota warnings** — `orc quota` exits 2 (warn) or 3 (block) with an
   `ORC WARNING`/`ORC BLOCKED` line. Blocks honor `--force`, but the message
   must be relayed, not swallowed.
+- **"daemon build X does not match client"** — `orcd` persists across
+  installs, so after an update the running daemon may still be the old
+  build. `orc daemon status` shows both builds; detach clients, then
+  `orc daemon restart` (it refuses while live panes exist unless `--force`,
+  and lists exactly what would be lost).
 - **Stuck or stale session** — `pi-orchestra attach` replays daemon state;
   `orc task list --session <id>` and `orc list` show the durable record.
   Killing the client never kills panes; killing `orcd` does.

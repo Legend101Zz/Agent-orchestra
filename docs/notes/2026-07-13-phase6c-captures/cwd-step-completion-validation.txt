@@ -1,0 +1,34 @@
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ✢  PI ORCHESTRA                                                  │
+  │     one conductor · a bench of workers · sessions survive detach │
+  ╰──────────────────────────────────────────────────────────────────╯
+
+  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd
+
+  STEP 3 / 3   CHOOSE WORKING DIRECTORY
+  launching brain claude · workers hermes, pi-m3
+  > /nope/nothing
+  NOT A DIRECTORY — fix the path before launch
+  type · tab complete · ctrl-u clear · enter launch · esc back
+
+  not a directory: /nope/nothing
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ n new · enter attach · V views · ? help · q quit

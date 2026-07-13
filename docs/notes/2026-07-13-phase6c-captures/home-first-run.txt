@@ -1,0 +1,34 @@
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ·  PI ORCHESTRA                                                  │
+  │     one conductor · a bench of workers · sessions survive detach │
+  ╰──────────────────────────────────────────────────────────────────╯
+
+  WELCOME TO THE BENCH
+
+  One expensive BRAIN plans and delegates; a bench of cheap
+  WORKERS executes bounded briefs. Panes live in the orcd
+  daemon, so sessions survive detach — close this client any
+  time and reattach later.
+
+  FIRST KEYS
+  n      new session — brain, worker pool, directory
+  enter  attach a session · ctrl-b q detaches, panes keep running
+  ?      help — every key, delegation, recovery
+
+  BENCH AVAILABILITY
+  claude  on PATH · interactive pane only
+  ghost   NOT ON PATH · unavailable
+  hermes  on PATH · dispatch verified
+  pi-m3   on PATH · dispatch verified
+
+
+
+
+
+
+
+
+
+
+ n new · enter attach · V views · ? help · q quit

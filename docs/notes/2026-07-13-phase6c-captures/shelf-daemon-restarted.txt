@@ -1,0 +1,34 @@
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ✽  PI ORCHESTRA                                                  │
+  │     one conductor · a bench of workers · sessions survive detach │
+  ╰──────────────────────────────────────────────────────────────────╯
+
+  SESSION SHELF
+  BRASS  ╭ tmp-1783883796-0000 · ALL PANES DEAD · daemon restarted
+         ╰ fix-brain  ·  /tmp  ·  2026-07-12T19:16:37+00:00
+
+  enter attach · n new session · V RUNS
+
+  BENCH AVAILABILITY
+  fix-brain   on PATH · interactive pane only
+  fix-worker  on PATH · interactive pane only
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ n new · enter attach · V views · ? help · q quit

@@ -119,6 +119,67 @@ captures under `docs/notes/2026-07-13-phase6b-captures/`.
   dashboard; `h` then exited HOME, `V` re-entered RUNS, `q` quit cleanly
   (exit 0, prompt restored).
 
+## 6C — first-run HOME, launch flow, shelf health, SCORE polish
+
+Wire (all serde-defaulted for compatibility): `HarnessSummary` gains
+`available` (executable resolves on PATH) and `dispatch_verified` (bounded
+non-interactive dispatch locally verified); `SessionSummary` gains
+`workers_live`, `workers_total`, and `conductor` (`live`/`down`/`dead`).
+The daemon computes availability from the existing adapter summary (no
+provider contact) and pane health from what it actually hosts, so a session
+record claiming `running` panes that died with a previous daemon is
+reported honestly as dead.
+
+HOME: the empty state teaches brain/worker/detach in plain language, lists
+the three first keys (`n`, `enter`, `?`), shows the configured leader chord
+from `HomeData.leader_key` (tests assert no hardcoded ctrl-g), and renders
+a BENCH AVAILABILITY strip. The shelf shows per-card pane health with the
+`R` hint only where recovery genuinely applies (`down`, i.e. hosted but
+exited); `dead` sessions read `ALL PANES DEAD · daemon restarted`.
+
+Launch flow (bug B4): the cwd step keeps its client-cwd default, gains
+`tab` directory completion (single match completes with a slash, several
+extend to the longest common prefix, files never complete), `ctrl-u`
+clear-line, a live validity line, a launch-refusing validation with the
+reason in place, and a confirmation line naming the chosen brain and
+workers. `~` expands via `$HOME`.
+
+SCORE (bug B2): every column now truncates its lines to the column width
+with an ellipsis and keeps a one-cell right gutter; a TestBackend test
+proves the rightmost column of a 72-column board keeps its gutter clear and
+shows the ellipsis.
+
+Tests: HOME empty/shelf snapshots at both themes, 150x44 and 72x30, with
+teaching/leader/availability/health assertions; cwd-step render test at
+both sizes; pure unit tests for tilde expansion, directory completion on a
+real temp tree, and ellipsis clipping; daemon tests assert `down` + 1/1
+live workers on the live daemon and `dead` + 0 live after a restart, plus
+adapter-derived availability.
+
+Live tmux smokes (captures in `docs/notes/2026-07-13-phase6c-captures/`):
+- `home-first-run.txt` — teaching HOME with ctrl-b leader (mirrors the
+  user's registry) and an honest availability strip including a
+  deliberately missing executable (`NOT ON PATH · unavailable`);
+- `cwd-step-completion-validation.txt` — default `/private/tmp` (client
+  cwd), `tab` completing `de` → `deep-subdir/`, `ctrl-u`, and
+  `/nope/nothing` flagged NOT A DIRECTORY with enter refused in place;
+- `shelf-conductor-down.txt` — real fixture session: `2/2 workers ·
+  CONDUCTOR DOWN · R recovers`;
+- `shelf-daemon-restarted.txt` — after killing and restarting orcd the
+  same card reads `ALL PANES DEAD · daemon restarted`;
+- `score-72col-ellipsis.txt` — long titles in BACKLOG and DONE ellipsized
+  at 72 columns with the right gutter intact.
+
+README media re-captured with VHS (`tools/v4-phase6-home.tape`) against a
+real daemon and a real claude + hermes + pi-m3 session on this machine:
+`docs/home-welcome.{gif,png}` (teaching HOME + availability),
+`docs/home-flow.png` (new cwd step), `docs/home-shelf.png` (shelf card
+showing `2/2 workers live · READY` for the real session).
+`docs/score-board.png` is unchanged from Session 8: the SCORE change only
+affects titles that overflow their column, which that capture does not.
+README text updated (first session, cwd keys, shelf health, daemon
+lifecycle rows, build-mismatch troubleshooting).
+
 ## Gates
 
 (recorded per commit below)

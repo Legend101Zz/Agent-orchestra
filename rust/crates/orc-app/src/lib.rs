@@ -872,8 +872,15 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
         if lines.len() == 1 {
             lines.push("  no tasks".to_owned());
         }
+        // Truncate with an ellipsis inside a one-cell right gutter so the
+        // last column no longer clips mid-word at the screen edge (bug B2).
+        let usable = usize::from(column.width.saturating_sub(1));
+        let clipped = lines
+            .iter()
+            .map(|line| clip_ellipsis(line, usable))
+            .collect::<Vec<_>>();
         frame.render_widget(
-            Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.text)),
+            Paragraph::new(clipped.join("\n")).style(Style::default().fg(theme.text)),
             column,
         );
     }
@@ -886,6 +893,22 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
         .style(Style::default().fg(theme.dim)),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
     );
+}
+
+/// Truncate to `width` characters, marking the cut with an ellipsis.
+fn clip_ellipsis(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let mut clipped = text
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>();
+    clipped.push('…');
+    clipped
 }
 
 /// Sparkle frames for the ambient HOME avatar; the middle frame doubles as
@@ -954,7 +977,146 @@ fn render_home_masthead(
     card.bottom().saturating_add(1)
 }
 
-fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: Option<usize>) {
+/// One line per configured harness: PATH resolution and verified dispatch.
+///
+/// The daemon computed these from the adapter summary; nothing here contacts
+/// a provider.
+fn availability_lines(harnesses: &[HarnessSummary], theme: Theme) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled(
+        "  BENCH AVAILABILITY",
+        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+    )];
+    let id_width = harnesses
+        .iter()
+        .map(|harness| harness.id.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    for harness in harnesses {
+        let (status, style) = if !harness.available {
+            (
+                "NOT ON PATH · unavailable",
+                Style::default().fg(theme.attention),
+            )
+        } else if harness.dispatch_verified {
+            (
+                "on PATH · dispatch verified",
+                Style::default().fg(theme.focus),
+            )
+        } else {
+            (
+                "on PATH · interactive pane only",
+                Style::default().fg(theme.dim),
+            )
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<id_width$}  ", harness.id),
+                Style::default().fg(theme.text),
+            ),
+            Span::styled(status.to_owned(), style),
+        ]));
+    }
+    lines
+}
+
+/// Plain-language pane health for one shelf card.
+fn session_health(session: &SessionSummary) -> String {
+    match session.conductor.as_str() {
+        "live" => format!(
+            "{}/{} workers live · READY",
+            session.workers_live, session.workers_total
+        ),
+        "down" => format!(
+            "{}/{} workers · CONDUCTOR DOWN · R recovers",
+            session.workers_live, session.workers_total
+        ),
+        "dead" if session.workers_live == 0 => "ALL PANES DEAD · daemon restarted".to_owned(),
+        "dead" => format!(
+            "{}/{} workers · CONDUCTOR DEAD",
+            session.workers_live, session.workers_total
+        ),
+        // A daemon predating pane-health reporting.
+        _ if session.attention > 0 => format!("ATTENTION {}", session.attention),
+        _ => format!("{} workers", session.workers.len()),
+    }
+}
+
+/// Expand a leading `~` or `~/` using `$HOME`.
+fn expand_tilde(path: &str) -> String {
+    if (path == "~" || path.starts_with("~/"))
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let home = home.to_string_lossy();
+        return if path == "~" {
+            home.into_owned()
+        } else {
+            format!("{home}{}", &path[1..])
+        };
+    }
+    path.to_owned()
+}
+
+/// Complete the last segment of a directory path against the filesystem.
+///
+/// A single match completes fully with a trailing slash; several matches
+/// extend to their longest common prefix. Only directories are offered,
+/// because a session cwd must be a directory. Hidden directories are offered
+/// only when the partial segment already starts with a dot.
+fn complete_cwd(input: &str) -> Option<String> {
+    let expanded = expand_tilde(input);
+    let (parent, partial) = match expanded.rfind('/') {
+        Some(index) => (
+            expanded[..=index].to_owned(),
+            expanded[index + 1..].to_owned(),
+        ),
+        None => (String::new(), expanded.clone()),
+    };
+    let read_root = if parent.is_empty() {
+        "."
+    } else {
+        parent.as_str()
+    };
+    let mut matches = std::fs::read_dir(read_root)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.starts_with(partial.as_str())
+                && (!name.starts_with('.') || partial.starts_with('.'))
+        })
+        .collect::<Vec<_>>();
+    matches.sort();
+    match matches.as_slice() {
+        [] => None,
+        [only] => Some(format!("{parent}{only}/")),
+        multiple => {
+            let mut prefix = multiple[0].clone();
+            for name in &multiple[1..] {
+                let common = prefix
+                    .chars()
+                    .zip(name.chars())
+                    .take_while(|(left, right)| left == right)
+                    .count();
+                let end = prefix
+                    .char_indices()
+                    .nth(common)
+                    .map_or(prefix.len(), |(index, _)| index);
+                prefix.truncate(end);
+            }
+            (prefix.chars().count() > partial.chars().count()).then(|| format!("{parent}{prefix}"))
+        }
+    }
+}
+
+fn render_home(
+    frame: &mut Frame<'_>,
+    state: &HomeState,
+    theme: Theme,
+    motion: Option<usize>,
+    leader: &str,
+) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
     let body_top = render_home_masthead(frame, area, theme, motion);
@@ -1005,9 +1167,39 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: O
                 ));
             }
             FlowStep::Cwd => {
-                lines.push(Line::styled("  STEP 3 / 3   CHOOSE CWD", text));
+                lines.push(Line::styled(
+                    "  STEP 3 / 3   CHOOSE WORKING DIRECTORY",
+                    text,
+                ));
+                let brain = flow
+                    .brain_choices
+                    .get(flow.brain_index)
+                    .map_or("none", String::as_str);
+                let workers = if flow.selected_workers.is_empty() {
+                    "none".to_owned()
+                } else {
+                    flow.selected_workers.join(", ")
+                };
+                lines.push(Line::styled(
+                    format!("  launching brain {brain} · workers {workers}"),
+                    dim,
+                ));
                 lines.push(Line::styled(format!("  > {}", flow.cwd), focus));
-                lines.push(Line::styled("  type path · enter launches · esc back", dim));
+                if Path::new(&expand_tilde(&flow.cwd)).is_dir() {
+                    lines.push(Line::styled(
+                        "  directory exists — every pane starts here",
+                        dim,
+                    ));
+                } else {
+                    lines.push(Line::styled(
+                        "  NOT A DIRECTORY — fix the path before launch",
+                        Style::default().fg(theme.attention),
+                    ));
+                }
+                lines.push(Line::styled(
+                    "  type · tab complete · ctrl-u clear · enter launch · esc back",
+                    dim,
+                ));
             }
         }
     } else if state.data.sessions.is_empty() {
@@ -1017,25 +1209,42 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: O
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Line::default(),
-            Line::from(vec![
-                Span::styled("  Press ", text),
-                Span::styled("n", focus),
-                Span::styled(" to create a session.", text),
-            ]),
             Line::styled(
-                "  1 choose a brain · 2 review the worker pool · 3 choose a cwd",
-                dim,
-            ),
-            Line::default(),
-            Line::styled(
-                "  The brain plans and delegates. Workers execute focused briefs.",
+                "  One expensive BRAIN plans and delegates; a bench of cheap",
                 text,
             ),
             Line::styled(
-                "  Hermes + pi-m3 are editable offers; unavailable tools are never selected.",
-                dim,
+                "  WORKERS executes bounded briefs. Panes live in the orcd",
+                text,
             ),
+            Line::styled(
+                "  daemon, so sessions survive detach — close this client any",
+                text,
+            ),
+            Line::styled("  time and reattach later.", text),
+            Line::default(),
+            Line::styled(
+                "  FIRST KEYS",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Line::from(vec![
+                Span::styled("  n      ", focus),
+                Span::styled("new session — brain, worker pool, directory", text),
+            ]),
+            Line::from(vec![
+                Span::styled("  enter  ", focus),
+                Span::styled(
+                    format!("attach a session · {leader} q detaches, panes keep running"),
+                    text,
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  ?      ", focus),
+                Span::styled("help — every key, delegation, recovery", text),
+            ]),
+            Line::default(),
         ]);
+        lines.extend(availability_lines(&state.data.harnesses, theme));
     } else {
         lines.push(Line::styled(
             "  SESSION SHELF",
@@ -1044,18 +1253,17 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: O
         for (index, session) in state.data.sessions.iter().enumerate() {
             let chosen = index == state.selected;
             let marker = if chosen { "BRASS" } else { "     " };
-            let attention = if session.attention > 0 {
-                format!(" · ATTENTION {}", session.attention)
-            } else {
-                " · READY".to_owned()
-            };
+            let health = session_health(session);
+            let alarmed = session.conductor == "down" || session.conductor == "dead";
             lines.push(Line::styled(
-                format!(
-                    "  {marker}  ╭ {} · {} workers{attention}",
-                    session.id,
-                    session.workers.len()
-                ),
-                if chosen { focus } else { text },
+                format!("  {marker}  ╭ {} · {health}", session.id),
+                if chosen {
+                    focus
+                } else if alarmed {
+                    Style::default().fg(theme.attention)
+                } else {
+                    text
+                },
             ));
             lines.push(Line::styled(
                 format!(
@@ -1071,6 +1279,8 @@ fn render_home(frame: &mut Frame<'_>, state: &HomeState, theme: Theme, motion: O
         }
         lines.push(Line::default());
         lines.push(Line::styled("  enter attach · n new session · V RUNS", dim));
+        lines.push(Line::default());
+        lines.extend(availability_lines(&state.data.harnesses, theme));
     }
     if !state.message.is_empty() {
         lines.push(Line::default());
@@ -1125,7 +1335,7 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         ShellView::Home => {
             let motion =
                 (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
-            render_home(frame, &shell.home, shell.theme, motion);
+            render_home(frame, &shell.home, shell.theme, motion, &shell.leader.label);
         }
         ShellView::Stage => {
             if let Some(stage) = shell.stage.as_mut() {
@@ -2052,10 +2262,18 @@ fn handle_home_key(
             KeyCode::Backspace => {
                 flow.cwd.pop();
             }
+            KeyCode::Tab => {
+                if let Some(completed) = complete_cwd(&flow.cwd) {
+                    flow.cwd = completed;
+                }
+            }
+            // ctrl-u arrives as a raw NAK byte through the raw stdin path.
+            KeyCode::Char('\u{15}') => flow.cwd.clear(),
             KeyCode::Char(character)
                 if !key
                     .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && !character.is_control() =>
             {
                 flow.cwd.push(character);
             }
@@ -2064,13 +2282,17 @@ fn handle_home_key(
                     home.message = "No brain harness is configured.".to_owned();
                     return Ok(false);
                 };
-                match commands.create_session(
-                    brain,
-                    flow.selected_workers.clone(),
-                    flow.cwd.clone(),
-                ) {
+                // Validate before launch so a typo cannot strand a session
+                // in the wrong directory (bug B4).
+                let cwd = expand_tilde(flow.cwd.trim());
+                if !Path::new(&cwd).is_dir() {
+                    home.message = format!("not a directory: {cwd}");
+                    return Ok(false);
+                }
+                match commands.create_session(brain, flow.selected_workers.clone(), cwd) {
                     Ok(session_id) => {
                         home.flow = None;
+                        home.message.clear();
                         match attach_stage(commands, shell, session_id, theme) {
                             Ok(()) => {}
                             Err(AppError::Daemon(message)) => {
@@ -2732,30 +2954,38 @@ mod tests {
                                 id: "codex".to_owned(),
                                 roles: vec!["brain".to_owned()],
                                 resumable: true,
+                                available: true,
+                                dispatch_verified: false,
                             },
                             HarnessSummary {
                                 id: "hermes".to_owned(),
                                 roles: vec!["worker".to_owned()],
                                 resumable: false,
+                                available: true,
+                                dispatch_verified: true,
                             },
                             HarnessSummary {
                                 id: "pi-m3".to_owned(),
                                 roles: vec!["worker".to_owned()],
                                 resumable: false,
+                                available: false,
+                                dispatch_verified: false,
                             },
                         ],
                         default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
                         max_parallel_workers: 3,
                         theme: "ember".to_owned(),
                         reduced_motion: false,
-                        leader_key: "ctrl-g".to_owned(),
+                        leader_key: "ctrl-b".to_owned(),
                     },
                     selected: 0,
                     flow: None,
                     message: String::new(),
                 };
                 terminal
-                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), Some(5)))
+                    .draw(|frame| {
+                        render_home(frame, &state, Theme::from(theme_name), Some(5), "ctrl-b")
+                    })
                     .expect("render empty HOME");
                 let text = terminal
                     .backend()
@@ -2767,11 +2997,22 @@ mod tests {
                 assert!(text.contains("PI ORCHESTRA"));
                 assert!(text.contains(AVATAR_FRAMES[5]));
                 assert!(text.contains("WELCOME TO THE BENCH"));
-                assert!(text.contains("Press "));
-                assert!(text.contains("to create a session"));
-                assert!(text.contains("editable offers"));
+                // Teaching: brain, workers, durability, and the first keys.
+                assert!(text.contains("BRAIN plans and delegates"));
+                assert!(text.contains("FIRST KEYS"));
+                assert!(text.contains("new session"));
+                // The configured leader chord, never a hardcoded ctrl-g.
+                assert!(text.contains("ctrl-b q detaches"));
+                assert!(!text.contains("ctrl-g"));
+                // The availability strip states PATH and verified dispatch.
+                assert!(text.contains("BENCH AVAILABILITY"));
+                assert!(text.contains("dispatch verified"));
+                assert!(text.contains("interactive pane only"));
+                assert!(text.contains("NOT ON PATH"));
                 terminal
-                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), None))
+                    .draw(|frame| {
+                        render_home(frame, &state, Theme::from(theme_name), None, "ctrl-b")
+                    })
                     .expect("render reduced-motion HOME");
                 let text = terminal
                     .backend()
@@ -2788,10 +3029,26 @@ mod tests {
                     workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
                     cwd: "/tmp".to_owned(),
                     updated_at: "2026-07-11T00:00:00Z".to_owned(),
+                    attention: 1,
+                    workers_live: 1,
+                    workers_total: 2,
+                    conductor: "down".to_owned(),
+                });
+                state.data.sessions.push(SessionSummary {
+                    id: "session-two".to_owned(),
+                    brain: "codex".to_owned(),
+                    workers: vec!["hermes".to_owned()],
+                    cwd: "/tmp".to_owned(),
+                    updated_at: "2026-07-11T00:00:00Z".to_owned(),
                     attention: 0,
+                    workers_live: 0,
+                    workers_total: 1,
+                    conductor: "dead".to_owned(),
                 });
                 terminal
-                    .draw(|frame| render_home(frame, &state, Theme::from(theme_name), Some(0)))
+                    .draw(|frame| {
+                        render_home(frame, &state, Theme::from(theme_name), Some(0), "ctrl-b")
+                    })
                     .expect("render HOME shelf");
                 let text = terminal
                     .backend()
@@ -2801,8 +3058,175 @@ mod tests {
                     .map(|cell| cell.symbol())
                     .collect::<String>();
                 assert!(text.contains("session-one"));
+                // Pane health on the shelf: a dead session is no surprise.
+                assert!(text.contains("1/2 workers"));
+                assert!(text.contains("CONDUCTOR DOWN"));
+                assert!(text.contains("R recovers"));
+                assert!(text.contains("ALL PANES DEAD"));
             }
         }
+    }
+
+    #[test]
+    fn cwd_step_shows_choices_and_validates_the_path_before_launch() {
+        let data = HomeData {
+            sessions: Vec::new(),
+            harnesses: vec![
+                HarnessSummary {
+                    id: "claude".to_owned(),
+                    roles: vec!["brain".to_owned()],
+                    resumable: true,
+                    available: true,
+                    dispatch_verified: false,
+                },
+                HarnessSummary {
+                    id: "hermes".to_owned(),
+                    roles: vec!["worker".to_owned()],
+                    resumable: false,
+                    available: true,
+                    dispatch_verified: true,
+                },
+            ],
+            default_workers: vec!["hermes".to_owned()],
+            max_parallel_workers: 3,
+            theme: "ember".to_owned(),
+            reduced_motion: false,
+            leader_key: "ctrl-g".to_owned(),
+        };
+        let mut flow = super::NewSessionFlow::new(&data);
+        flow.step = super::FlowStep::Cwd;
+        flow.cwd = "/definitely/not/a/directory".to_owned();
+        let state = HomeState {
+            data,
+            selected: 0,
+            flow: Some(flow),
+            message: String::new(),
+        };
+        for (width, height) in [(150, 44), (72, 30)] {
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).expect("cwd step terminal");
+            terminal
+                .draw(|frame| {
+                    render_home(frame, &state, Theme::from(ThemeName::Ember), None, "ctrl-g")
+                })
+                .expect("render cwd step");
+            let text = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                text.contains("CHOOSE WORKING DIRECTORY"),
+                "{width}x{height}"
+            );
+            // The confirmation line names the chosen brain and workers.
+            assert!(text.contains("brain claude"), "{width}x{height}");
+            assert!(text.contains("workers hermes"), "{width}x{height}");
+            // The bad path is flagged before launch.
+            assert!(text.contains("NOT A DIRECTORY"), "{width}x{height}");
+            assert!(text.contains("tab complete"), "{width}x{height}");
+            assert!(text.contains("ctrl-u clear"), "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn cwd_flow_defaults_to_the_client_directory_not_home() {
+        let data = HomeData {
+            sessions: Vec::new(),
+            harnesses: Vec::new(),
+            default_workers: Vec::new(),
+            max_parallel_workers: 3,
+            theme: "ember".to_owned(),
+            reduced_motion: false,
+            leader_key: "ctrl-g".to_owned(),
+        };
+        let flow = super::NewSessionFlow::new(&data);
+        let current = std::env::current_dir()
+            .expect("test cwd")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(flow.cwd, current);
+    }
+
+    #[test]
+    fn tilde_expansion_and_directory_completion_work_on_real_paths() {
+        let home = std::env::var("HOME").expect("HOME for tilde test");
+        assert_eq!(super::expand_tilde("~"), home);
+        assert_eq!(super::expand_tilde("~/x"), format!("{home}/x"));
+        assert_eq!(super::expand_tilde("/plain"), "/plain");
+
+        let root = std::env::temp_dir().join(format!("orc-app-complete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("projects")).expect("create projects");
+        std::fs::create_dir_all(root.join("prototypes")).expect("create prototypes");
+        std::fs::create_dir_all(root.join("unique")).expect("create unique");
+        std::fs::write(root.join("profile.txt"), b"file").expect("create decoy file");
+        let base = root.to_string_lossy();
+
+        // A unique prefix completes fully with a trailing slash.
+        assert_eq!(
+            super::complete_cwd(&format!("{base}/u")),
+            Some(format!("{base}/unique/"))
+        );
+        // An ambiguous prefix extends to the longest common prefix, and a
+        // plain file never completes even though it shares the prefix.
+        assert_eq!(
+            super::complete_cwd(&format!("{base}/p")),
+            Some(format!("{base}/pro"))
+        );
+        // No match completes nothing.
+        assert_eq!(super::complete_cwd(&format!("{base}/zzz")), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn score_columns_keep_a_right_gutter_and_ellipsize_long_titles() {
+        assert_eq!(super::clip_ellipsis("short", 10), "short");
+        assert_eq!(super::clip_ellipsis("exactly-ten", 11), "exactly-ten");
+        assert_eq!(super::clip_ellipsis("a very long title", 8), "a very …");
+        assert_eq!(super::clip_ellipsis("anything", 0), "");
+
+        let backend = TestBackend::new(72, 30);
+        let mut terminal = Terminal::new(backend).expect("score gutter terminal");
+        let mut state = ScoreState {
+            session_id: "gutter-session".to_owned(),
+            tasks: vec![TaskSummary {
+                id: "T0001".to_owned(),
+                title: "a title long enough to reach past its narrow column".to_owned(),
+                status: "done".to_owned(),
+                assignee: Some("hermes".to_owned()),
+                assignee_run: None,
+                isolated: false,
+                isolation: None,
+                blocked: false,
+                tokens: None,
+                diff: None,
+                history: Vec::new(),
+            }],
+            selected: 0,
+            message: String::new(),
+            dragging: None,
+            width: 1,
+            leader: false,
+        };
+        terminal
+            .draw(|frame| render_score(frame, &mut state, Theme::from(ThemeName::Ember), "ctrl-g"))
+            .expect("render score gutter");
+        let buffer = terminal.backend().buffer();
+        // The DONE column occupies the right fifth; its rows must end in a
+        // blank gutter cell, with the ellipsis marking the truncation.
+        let mut saw_ellipsis = false;
+        for row in 0..29 {
+            let last = buffer.cell((71, row)).expect("last cell").symbol();
+            assert_eq!(last, " ", "row {row} must keep the right gutter clear");
+            let line = (0..72)
+                .map(|col| buffer.cell((col, row)).expect("cell").symbol())
+                .collect::<String>();
+            saw_ellipsis |= line.contains('…');
+        }
+        assert!(saw_ellipsis, "long titles must show an ellipsis");
     }
 
     #[test]

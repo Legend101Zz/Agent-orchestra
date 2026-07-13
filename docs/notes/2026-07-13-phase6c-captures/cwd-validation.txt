@@ -1,0 +1,5 @@
+
+  STEP 3 / 3   CHOOSE WORKING DIRECTORY
+  launching brain claude · workers hermes, pi-m3
+  > /nope/nothing
+  NOT A DIRECTORY — fix the path before launch
