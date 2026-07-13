@@ -1,0 +1,15 @@
+$ orc version
+orc 0.4.0+e6bf1cd57f33
+
+$ pi-orchestra --version
+orc-app 0.4.0+e6bf1cd57f33
+
+$ orc daemon status
+orcd: running
+  pid: 33306
+  build: 0.4.0+e6bf1cd57f33
+  client build: 0.4.0+e6bf1cd57f33
+  socket: /Users/comreton/.orchestra/orcd.sock
+  live panes: 0 (of 0 hosted)
+  attached clients: 1
+exit=0

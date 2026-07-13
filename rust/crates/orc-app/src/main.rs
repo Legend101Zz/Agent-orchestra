@@ -12,6 +12,7 @@ use orc_app::{BenchClient, ThemeName, benchmark, visible_input_benchmark};
 
 #[derive(Debug, Parser)]
 #[command(
+    name = "pi-orchestra",
     about = "Open or attach to the pi-orchestra Bench",
     version = orc_proto::BUILD_IDENTIFIER
 )]

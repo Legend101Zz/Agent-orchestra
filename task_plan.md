@@ -26,6 +26,12 @@ Phase 6, a web UI, or a provider proxy.
       measured performance
 - [x] Phase 5: verified Hermes/pi capability handling, documentation, and
       Bench dogfood with recorded friction
+- [x] Phase 6: daemon build handshake + lifecycle (status/restart), honest
+      client errors, RUNS embed interactivity/redraw, first-run HOME with
+      availability strip and shelf pane health, cwd-step UX (B4), SCORE
+      gutter (B2), env scrub (B5), watcher deflake (B1); evidence in
+      docs/notes/2026-07-12-phase6-evidence.md; commits 385dcbb, dacd6e4,
+      c6afe21, e6bf1cd on main
 
 ## Session 8 — 2026-07-12 polish + real-use pass (user request)
 Goal: make the first-run experience beautiful, prove the tool on a real

@@ -250,6 +250,49 @@
   (typing + focus hops + baton pulses) and docs/stage-live.png showing
   HERMES · TASK CONFIRMED. Replaced stage-workers.png in the README.
 
+## Session 10 — 2026-07-12/13 (Phase 6: stability + first-run UX)
+- 6A (385dcbb): Welcome carries a serde-defaulted build identifier (crate
+  version + compile-time git commit); a mismatched or pre-handshake daemon is
+  refused with one actionable line. The old catch-all "invalid or oversized
+  response" split into three honest messages; recoverable attach/resume
+  failures land on the HOME/STAGE message line instead of exiting. New
+  `orc daemon status` (exit 0/3/5) and `orc daemon restart` (refuses while
+  live panes exist unless --force, lists what dies; pid discovery matches the
+  daemon's --socket). install.sh probes the running daemon and prints restart
+  guidance. Measured 3 fully-styled truecolor panes at 200x400 = 20.7 MB
+  (62% of the 32 MiB cap): snapshots gained a session filter (the shell
+  watch always uses it) and orcd replaces any over-cap response with an
+  explicit bounded error. Focus reports (^[[I/^[[O) consumed outside STAGE.
+  Reproduce-then-fix evidence against the actual pre-fix installed orcd.
+- Small scope (dacd6e4): B5 pane env scrub (TMUX/TMUX_PANE/TERM_PROGRAM/
+  TERM_PROGRAM_VERSION, regression-tested), B1 watcher-test deflake
+  (rewrite-until-event, 10 s bound).
+- 6B (c6afe21): RUNS embed keys now route into orc_tui::App (selection,
+  expansion, session workspace, tabs, search, theme); documented exits
+  reserved at the App dashboard only; view-aware honest legend fits 72
+  cols; 500 ms ambient data-refresh tick fixes the frozen-screen symptom.
+  TestBackend + live tmux smokes (captures in docs/notes/).
+- 6C (e6bf1cd): wire gains harness available/dispatch_verified and session
+  workers_live/workers_total/conductor (judged against hosted panes). HOME
+  teaches brain/worker/detach with the configured leader chord and a BENCH
+  AVAILABILITY strip; shelf cards show pane health with the R hint only
+  where recovery applies. Cwd step (B4): tab completion, ctrl-u, tilde,
+  live validation, refusal in place, brain/workers confirmation. SCORE (B2):
+  ellipsis truncation inside a right gutter. README media re-captured via
+  VHS from a real claude+hermes+pi-m3 session; README text updated.
+- Session interrupted once by an external-SSD I/O failure (device stopped
+  answering reads; fsck couldn't read the container superblock). All work
+  up to 6A was already pushed; the user replugged the drive, git fsck clean,
+  no data lost.
+- Install refreshed via ./install.sh; the install-time check flagged the
+  running old daemon; verified no live panes via ps (the old daemon predates
+  pane reporting), then `orc daemon restart --force` brought the user's
+  daemon onto the installed build (status exit 0, builds match).
+- Observed, not caused by this session: ~/.codex/config.toml changed
+  externally (mtime 2026-07-13 16:38; sha f0a989ad… → fdbc233c…). Recorded
+  honestly per house rules; not restored. ~/.claude/settings.json and
+  ~/.pi/agent/settings.json checksums unchanged.
+
 ## Session 9b — 2026-07-12 (triage + Phase 6 handoff)
 - User reported: client exit with "daemon rejected request: invalid or
   oversized response" (with ^[[I noise), dead/frozen RUNS embed, and a

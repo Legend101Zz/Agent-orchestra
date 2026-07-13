@@ -180,6 +180,43 @@ affects titles that overflow their column, which that capture does not.
 README text updated (first session, cwd keys, shelf health, daemon
 lifecycle rows, build-mismatch troubleshooting).
 
-## Gates
+## Gates and shipping (final, 2026-07-13)
 
-(recorded per commit below)
+Every commit was gated before push with, in the isolated
+`CARGO_TARGET_DIR=/tmp/pi-orchestra-phase6`:
+`cargo fmt --check` (clean); `cargo clippy --all-targets -- -D warnings`
+(0 errors); full test suite (final count 86 passed / 0 failed, including
+the new TestBackend renders at both themes, wide and exactly 72x30);
+`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` (clean);
+`cargo build --locked --release` (clean); `git diff --check` (clean).
+
+Real tmux smokes of every user-visible fix, captures under `docs/notes/`:
+- stale-daemon actionable message + status exit 5:
+  `2026-07-13-phase6-final-captures/stale-daemon-actionable-message.txt`;
+- RUNS interaction and no-keypress redraw: `2026-07-13-phase6b-captures/`;
+- new HOME, cwd step, shelf health, SCORE gutter:
+  `2026-07-13-phase6c-captures/`.
+
+Install refresh: `./install.sh` rebuilt and relinked; its new daemon probe
+flagged the user's running pre-Phase-6 orcd. That daemon predates pane
+reporting, so liveness was verified externally (`pgrep -P` showed no
+children) before `orc daemon restart --force`; afterwards
+`orc daemon status` exits 0 with daemon and client both on
+`0.4.0+e6bf1cd57f33`
+(`2026-07-13-phase6-final-captures/install-refresh-daemon-status.txt`).
+
+Protected paths: `~/.claude/settings.json` and every file under
+`~/.pi/agent/` reproduce their pre-work checksums exactly.
+`~/.codex/config.toml` changed externally during the session
+(`f0a989ad…` → `fdbc233c…`, mtime 2026-07-13 16:38); nothing in this
+repository touches that file (the installer's owned block is in
+`~/.codex/AGENTS.md`), so the discrepancy is recorded, not "fixed".
+
+Session interruption: the external SSD hosting the repo stopped answering
+reads mid-session (fsck could not read the container superblock). All
+completed work had already been pushed; after a replug, `git fsck` was
+clean and `main` matched `origin/main`.
+
+Commits on `main`: `385dcbb` (6A), `dacd6e4` (B5+B1), `c6afe21` (6B),
+`e6bf1cd` (6C), plus the final docs/evidence commit. Phase 7 was not
+started.

@@ -1,0 +1,18 @@
+ORC_HOME=/tmp/orc-stale-smoke /tmp/pi-orchestra-phase6/release/pi-orchestra --socket /tmp/orc-stale-smoke/orcd
+.sock home
+ comreton@Comreton-Macbook-Air  ~  ORC_HOME=/tmp/orc-stale-smoke /tmp/pi-orchestra-phase6/release/pi-orchest
+ra --socket /tmp/orc-stale-smoke/orcd.sock home
+ORC_HOME=/tmp/orc-stale-smoke /tmp/pi-orchestra-phase6/release/orc daemon status; echo exit=$?
+Error: the running daemon predates this client (client build 0.4.0+c6afe21f6925) — detach other clients, then
+run `orc daemon restart`
+ comreton@Comreton-Macbook-Air  ~  ORC_HOME=/tmp/orc-stale-smoke /tmp/pi-orchestra-phase6/release/orc daemon
+ status; echo exit=$?
+orcd: running
+  pid: unknown (daemon predates the status protocol)
+  build: unknown (older than client 0.4.0+c6afe21f6925)
+  client build: 0.4.0+c6afe21f6925
+  socket: /tmp/orc-stale-smoke/orcd.sock
+  live panes: unknown (daemon predates the status protocol)
+  BUILD MISMATCH — detach clients, then run `orc daemon restart` (live panes die with the daemon)
+exit=5
+ comreton@Comreton-Macbook-Air  ~                                                     ✔  10008  16:45:57
