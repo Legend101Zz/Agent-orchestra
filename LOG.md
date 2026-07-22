@@ -1,8 +1,13 @@
 # 🎼 pi-orchestra V1 — Mrigesh's log
 
 *The one file the human reads. Status board + the exact prompt to run next +
-plain-English ship log. Agents: update this file as instructed in AGENTS.md —
-status column and ship-log entries are part of finishing an issue.*
+plain-English ship log. Your responsibilities: [docs/ANTI-SLOP.md](docs/ANTI-SLOP.md).
+Agents: update this file as instructed in AGENTS.md — status column and
+ship-log entries are part of finishing an issue.*
+
+**The loop:** pick issue → puppy builds (prompt 1) → Claude reviews (prompt 2)
+→ puppy fixes (prompt 3) → Claude re-reviews (prompt 4) → you test + merge
+(prompt 5). One issue at a time.
 
 **Legend:** ⬜ not started · 🔨 being built · 👀 pushed, needs review · 🧪 reviewed, needs your local test · ✅ merged
 
@@ -40,16 +45,46 @@ then inside code-puppy:
 ```
 (If `/work-issue` isn't picked up, paste: *"Read AGENTS.md and .agents/commands/work-issue.md, then execute that command for issue #<N>."*)
 
-### 2. Review a pushed branch (Claude Code, one session per issue)
+### 2. First review of a pushed branch (Claude Code, one session per issue)
 
 ```
-Review branch issue-<N>-* of ~/Agent-orchestra against the task contract in
-GitHub issue #<N>, per docs/WORKFLOW.md. Be adversarial: run the gates and
-try to make each acceptance check fail. Comment findings on the issue and
-update LOG.md (status + ship log note if verdict changes).
+You are the adversarial reviewer for pi-orchestra (~/Agent-orchestra), per
+docs/WORKFLOW.md. Review branch issue-<N>-* against the task contract in
+GitHub issue #<N>:
+1. git fetch, check out the branch, run all five gates from AGENTS.md.
+2. For EVERY acceptance check, run it yourself and try to make it fail —
+   do not trust the implementer's pasted output.
+3. Check the diff (git diff main --stat): flag anything outside the issue's
+   allowed paths, unrequested features, new dependencies, dead code.
+4. Verdict: ACCEPT or FIX with a numbered fix list. Comment it on issue #<N>,
+   append a one-line verdict under the ship-log entry in LOG.md, and set the
+   status to 🧪 (accept) or back to 🔨 (fix). Push that LOG.md change to the
+   same branch.
+Be brutal. A wrong ACCEPT costs more than a wrong FIX.
 ```
 
-### 3. After YOUR local test passes → merge
+### 3. Fix round (code-puppy, SAME clone/session as the build if possible)
+
+```
+Reviewer feedback is on GitHub issue #<N> (the numbered FIX list). Address
+every numbered item on the existing issue-<N> branch — no new features, no
+scope changes. Re-run all gates from AGENTS.md, push, and comment on the
+issue with per-item evidence of the fix. Update your LOG.md ship-log entry
+if what-shipped changed.
+```
+
+### 4. Re-review (Claude Code — reuse the SAME review session if it's still open)
+
+```
+Re-review branch issue-<N>-* of ~/Agent-orchestra: verify ONLY the numbered
+fix list from your previous review comment on issue #<N>, re-run the gates,
+and confirm nothing new broke or crept in (git diff against the previously
+reviewed commit). Verdict ACCEPT or FIX on the issue; update LOG.md status.
+If this is already the second fix round and it still fails: STOP and
+recommend re-scoping the issue instead (docs/ANTI-SLOP.md rule 4).
+```
+
+### 5. After YOUR local test passes → merge
 
 ```bash
 cd ~/Agent-orchestra && git fetch origin
