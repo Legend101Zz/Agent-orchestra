@@ -24,6 +24,15 @@ resolved (v4 Phases 0–6) and preserved in git history and
   `.agents/commands/*.md`, JSON agents in `~/.code_puppy/agents/`, models in
   `~/.code_puppy/extra_models.json`; MCP via `/mcp`; default agent prefers
   files ≤600 lines.
+- **CLI naming (2026-07-22):** user-facing command is `pio` (daemon `piod`),
+  chosen over `pioh` (awkward to type) and keeping `orc` (weak brand tie).
+  Scope of rename is user-facing only — crate names, `ORC_*` env vars,
+  `~/.orchestra` stay (issue #17).
+- **Research-first (2026-07-22):** crate/prior-art choices for V1's new
+  surface (MCP SDK, headless harness invocation, worktrees, backoff, schema)
+  are decided once in issue #16 by a Claude session with web access, recorded
+  as a decision doc, and bind the implementation issues — instead of each
+  puppy session picking dependencies ad hoc.
 - **Visual identity source:** `docs/design/visual-identity/` (interactive
   HTML + screenshots), distilled to `docs/design/visual-identity.md`.
   Three themes (nocturne flagship / ember / phosphor mono), 17 semantic

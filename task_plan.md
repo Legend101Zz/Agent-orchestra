@@ -21,8 +21,10 @@ record. (Issue numbers are filled in as issues are created.)
 | Issue | Work item | Depends on |
 |---|---|---|
 | [#15](https://github.com/Legend101Zz/Agent-orchestra/issues/15) | EPIC: V1 Universal Delegation launch | — |
+| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | V1-0 Foundations research: crates + prior art (Claude session, no code) | — |
+| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | V1-0b Rename user-facing CLI `orc` → `pio` (`orcd` → `piod`) | — (merge FIRST) |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | V1-1 Harness auto-discovery → `~/.orchestra/harnesses.json` | — |
-| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | V1-2 Capability probe suite + `orc doctor` honest report | #3 |
+| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | V1-2 Capability probe suite + `pio doctor` honest report | #3 |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | V1-3 Task contract v2 (acceptance-driven schema + enforcement) | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | V1-4 Universal worker adapter (any probed harness as worker) | #4 |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | V1-5 Rate-limit-aware spawning (quota guard v2, concurrency caps) | #4 |
@@ -34,7 +36,12 @@ record. (Issue numbers are filled in as issues are created.)
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 
-**Parallel-safe starting set (no deps, disjoint paths): #3, #5, #9, #13.**
+**Order: run #16 (Claude research session) and #17 (rename) first — #17 must
+merge before parallel work or every branch conflicts with it. Then the
+parallel-safe set: #3, #5, #9, #13.**
+
+Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
+names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).
 
 ## Phase status
 

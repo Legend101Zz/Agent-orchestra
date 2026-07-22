@@ -13,7 +13,7 @@ that keeps everyone — including future sessions of each agent — oriented.
 | **Mrigesh** (human) | — | Product owner. Approves scope, tests locally, merges to `main`. |
 | **Implementer** | code-puppy · Opus 4.8 long (max/high thinking as needed) | Picks ONE GitHub issue, implements it on a branch, pushes. |
 | **Architect/Reviewer** | Claude Code (Fable) | Writes specs and issues, reviews pushed branches, maintains planning docs. Multiple sessions; continuity via this workflow. |
-| **Cheap labor** | pi / MiniMax-M3 via `orc` | Bulk reads, summaries, mechanical transforms — delegated by either agent. |
+| **Cheap labor** | pi / MiniMax-M3 via `pio` (pre-rename: `orc`) | Bulk reads, summaries, mechanical transforms — delegated by either agent. |
 
 ## The loop (one issue at a time)
 

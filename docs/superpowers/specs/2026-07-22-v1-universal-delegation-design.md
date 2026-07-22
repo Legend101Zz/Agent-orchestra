@@ -1,7 +1,7 @@
 # pi-orchestra V1 "Universal Delegation" — product & architecture spec
 
-Date: 2026-07-22 · Status: approved direction (Mrigesh) · Supersedes the
-v4-Bench scope as the product frame; v4 code (daemon, TUI, orc CLI, quota,
+Date: 2026-07-22 · Status: approved direction (Mrigesh) · Naming: user-facing CLI is **`pio`** (daemon `piod`), decided 2026-07-22; `orc`/`orcd` are the pre-rename names (issue #17) · Supersedes the
+v4-Bench scope as the product frame; v4 code (daemon, TUI, pio CLI, quota,
 tasks, dispatch) is the foundation, not a rewrite target.
 
 ## Positioning
@@ -103,8 +103,8 @@ orch_review  orch_cancel  orch_finish
 Implementation layering (skills teach intent; CLI/MCP performs the
 dependable operation — skills alone leave invocation inconsistent):
 
-- local daemon (`orcd`) — exists;
-- headless CLI (`orc`) for universal compatibility — exists, verbs to be
+- local daemon (`piod`, today `orcd`) — exists;
+- headless CLI (`pio`) for universal compatibility — exists, verbs to be
   normalized to the surface above;
 - an MCP server where supported (new);
 - thin harness-specific skills/plugins explaining when to invoke it.
@@ -139,7 +139,7 @@ unavailable. Running a sequential plan with self-review.
 - **Hosted panes:** pi-orchestra owns the renderer — detect the trigger
   grammar in PTY output and highlight it (ultrathink-style).
 - **Standalone harnesses:** skills/plugins for Claude Code, Codex, OpenCode,
-  Hermes, pi detect the trigger word and call `orc` even outside
+  Hermes, pi detect the trigger word and call `pio` even outside
   pi-orchestra. Closed UIs (Claude Code, Codex) cannot be re-colored; use a
   hook/status acknowledgment instead. pi (extensible) can highlight.
 
@@ -162,7 +162,7 @@ each artifact.
 
 **V1 — Universal delegation (launch scope)**
 1. Harness auto-discovery → `~/.orchestra/harnesses.json`.
-2. Capability probes with honest degradation (`orc doctor`).
+2. Capability probes with honest degradation (`pio doctor`).
 3. `delegate:` / `orchestrate:` / `deliberate:` trigger grammar; PTY
    detection + highlight in hosted panes.
 4. CLI + MCP `orch_*` tool surface.

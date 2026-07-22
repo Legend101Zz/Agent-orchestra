@@ -15,11 +15,13 @@ ship-log entries are part of finishing an issue.*
 
 | Issue | In plain words | Status | Branch |
 |---|---|---|---|
+| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ⬜ | — |
+| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ⬜ *merge FIRST* | — |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`orc doctor`), never assume | ⬜ *needs #3* | — |
+| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ⬜ *needs #3* | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *needs #4* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *needs #4* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *needs #5* | — |
@@ -28,9 +30,25 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *needs #4, #6* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**Start now, in parallel (no conflicts): #3, #5, #9, #13.**
+**Start now: #16 (Claude session, prompt 0) and #17 (puppy, prompt 1). Merge
+#17 before anything else — it renames files everywhere and parallel branches
+would all conflict. THEN the parallel set: #3, #5, #9, #13.**
 
 ## Prompts you run
+
+### 0. Foundations research (Claude Code session, once, no code)
+
+```
+Work GitHub issue #16 of Legend101Zz/Agent-orchestra (clone or use
+~/Agent-orchestra, branch issue-16-research). Read the issue and the V1 spec
+it links, then research each listed area with web search + GitHub: pick the
+best Rust crate/pattern per area, with version, license, maintenance signal,
+and 2+ rejected alternatives each. Mine prior art (claude-squad, opencode,
+vibe-kanban, hermes-agent, togethercomputer/moa) for how they drive coding
+CLIs headlessly. Write the decision record the issue names, comment the
+binding decisions on issues #3-#8 and #11, update LOG.md (ship-log entry +
+status), push the branch, and stop — no code.
+```
 
 ### 1. Build an issue (code-puppy, one terminal per issue)
 

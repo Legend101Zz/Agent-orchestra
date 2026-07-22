@@ -5,6 +5,10 @@ cheap workers, all in one terminal. Rust workspace under `rust/`, three
 binaries: `orcd` (daemon), `pi-orchestra` (ratatui TUI), `orc` (headless CLI).
 State lives in plain additive JSON under `~/.orchestra`.
 
+Naming: the user-facing CLI is being renamed `orc` → **`pio`** (`orcd` →
+`piod`) in issue #17. New user-facing text always says `pio`; internal crate
+names (`orc-core` etc.), `ORC_*` env vars, and `~/.orchestra` stay.
+
 ## Read first, in this order
 
 1. `docs/WORKFLOW.md` — the issue → branch → review → merge loop. Follow it.
