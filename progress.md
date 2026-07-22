@@ -321,3 +321,20 @@
 - Rewrote task_plan.md (issue map) and findings.md (durable decisions).
 - Next: create epic + 12 scoped issues on GitHub, fill issue numbers into
   task_plan.md.
+
+## Session — 2026-07-22 (Claude Code): issue #16 foundations research
+- Branch issue-16-research. Wrote the binding decision record
+  docs/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md:
+  rmcp v2.2.0 (isolated tokio in new orc-mcp) for #8; probe-driven headless
+  invocation templates (flags verified against local claude 2.1.217,
+  codex 0.145.0, opencode 1.18.4, hermes 0.18.2, pi 0.80.7) for #4/#6;
+  git-CLI worktree shell-out for #11; backon 1.6.0 for #7; schemars 1.2.1
+  for #3/#5; insta 1.48.0 (dev-dep) for UI snapshots. Prior art mined:
+  vibe-kanban executors (stream-json control protocol, codex app-server,
+  opencode serve), claude-squad, hermes #344/#38952, togethercomputer/moa,
+  OpenRouter Fusion (steal its consensus/blind-spot report format for V2).
+- Six open questions listed in the doc (rate-limit signal strings, hermes
+  one-shot resume, opencode serve-vs-run cost, etc.) — deliberately not
+  researched further; timebox honored.
+- Commented binding decisions on #3-#8 and #11; LOG.md status 👀 + ship-log
+  entry. No code, no dependency changes.
