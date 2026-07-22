@@ -1,66 +1,48 @@
-# Task Plan: v4 "Bench" implementation (2026-07-11)
+# Task Plan: V1 "Universal Delegation" program (2026-07-22)
 
-The v3 review and v4 design are approved. PR #1 merged `v3-rust` before the
-fix-first findings landed, so implementation now proceeds entirely on
-`v4-bench`, starting with those fixes.
+v4 "Bench" is complete (Phases 0–6 evidenced, `main` @ 018d5a1; see git
+history and `docs/notes/`). The product frame is now the V1 spec:
+`docs/superpowers/specs/2026-07-22-v1-universal-delegation-design.md`.
+Process: `docs/WORKFLOW.md` (issue → branch → review → merge; one issue at a
+time). Implementer: code-puppy (Opus 4.8 long). Reviewer: Claude Code.
 
 ## Goal
-Ship pi-orchestra v4 Bench according to the approved rev-3 design, with every
-phase gated, committed, pushed, and evidenced.
 
-**Current handoff:** Phase 5 is complete on `v4-phase5` pending final gates,
-evidence, intentional commit, merge, and remote-main proof. Do not start
-Phase 6, a web UI, or a provider proxy.
+Ship pi-orchestra V1: any installed harness can be conductor or worker,
+capabilities are probed not assumed, delegation is contract-driven and
+reviewed, triggers work inside hosted panes and standalone harnesses, and
+the TUI wears the new visual identity.
 
-## Phases
-- [x] Read the approved design, v3 review/spec, friction log, README, skills,
-      AGENTS block, and Phase-0 Rust surfaces
-- [x] Create `v4-bench` from the current `main`
-- [x] Phase 0: quota/subprocess timeouts, steering turn accounting, async TUI
-      quota refresh; full Python/Rust/live-smoke gates; commit and push
-- [x] Phase 1: PTY/vt-parser/daemon/client spike, measurements, explicit verdict
-- [x] Phase 2: daemon, protocol, client shell, HOME/STAGE, recovery, fixtures,
-      Python deletion, Rust-only install
-- [x] Phase 3: tasks, worktrees, SCORE, skills
-- [x] Phase 4: confirmed dispatch, baton event motion, RUNS port, polish,
-      measured performance
-- [x] Phase 5: verified Hermes/pi capability handling, documentation, and
-      Bench dogfood with recorded friction
-- [x] Phase 6: daemon build handshake + lifecycle (status/restart), honest
-      client errors, RUNS embed interactivity/redraw, first-run HOME with
-      availability strip and shelf pane health, cwd-step UX (B4), SCORE
-      gutter (B2), env scrub (B5), watcher deflake (B1); evidence in
-      docs/notes/2026-07-12-phase6-evidence.md; commits 385dcbb, dacd6e4,
-      c6afe21, e6bf1cd on main
+## Issue map
 
-## Session 8 — 2026-07-12 polish + real-use pass (user request)
-Goal: make the first-run experience beautiful, prove the tool on a real
-project with both MiniMax workers, capture real screenshots, ship a
-professional README, verify/clean the installed build, and push each step
-directly to main.
+The epic issue on GitHub tracks live status; this table is the plan of
+record. (Issue numbers are filled in as issues are created.)
 
-- [x] 6. Audit installed build vs main; identify stale artifacts
-      (result: install is current with f8c00ec; stale
-      `~/.local/bin/orc.pi-orchestra.bak` → deleted Desktop path)
-- [x] 7. HOME start page redesign: animated avatar (Claude-style pulse) via
-      the existing tick loop, banner + framed launch flow, honors
-      reduced_motion; TestBackend snapshots both themes, wide + 72x30;
-      full gates (fmt, clippy -D warnings, tests, doc -D warnings,
-      locked release build)
-- [x] 8. Reinstall via ./install.sh, remove stale .bak link, verify
-      `orc version` and links
-- [x] 9. Real dogfood: temp project backend task, session with hermes +
-      pi-m3 workers, confirmed dispatch to both, screenshots captured;
-      bugs logged in findings.md Session-8 section
-- [x] 10. README rewrite: purpose, architecture, features, install, first
-      use, guide, real screenshots, troubleshooting; remove stale
-      phase-log prose and dead references
-- [x] 11. Commit+push to main incrementally (uncommitted prompt/tool
-      fixes first) — 1bd0de8, 22f7dda, f443ca1 all on origin/main
+| # | Work item | Depends on |
+|---|---|---|
+| E | EPIC: V1 Universal Delegation launch | — |
+| 1 | Harness auto-discovery → `~/.orchestra/harnesses.json` | — |
+| 2 | Capability probe suite + `orc doctor` honest report | 1 |
+| 3 | Task contract v2 (acceptance-driven schema + enforcement) | — |
+| 4 | Universal worker adapter (any probed harness as worker) | 2 |
+| 5 | Rate-limit-aware spawning (quota guard v2, per-harness concurrency) | 2 |
+| 6 | `orch_*` control surface: normalized CLI verbs + MCP server | 3 |
+| 7 | Trigger grammar in hosted panes (PTY detect + renderer highlight) | — |
+| 8 | Standalone integrations v2: Claude Code skill/hook + Codex block | 6 |
+| 9 | Worktree isolation hardening + independent review + final report | 3 |
+| 10 | Single-harness mode (honest degradation + sequential self-review) | 2, 4 |
+| 11 | Visual identity v1: three themes + glyph register + baton spec | — |
+| 12 | README + positioning revamp for V1 launch | most of 1–11 |
 
-## Errors Encountered (Session 8)
-| Error | Attempt | Resolution |
-|-------|---------|------------|
-| runs_watcher test failed once under full parallel cargo test | 1 | passes isolated and on both full reruns; logged as flaky (findings B1) |
-| VHS tape: ctrl-g h from SCORE did not navigate HOME | 1 | retook shelf shot via STAGE; logged as UX bug B3 |
-| Write to README blocked (not yet read) | 1 | read file head first, then overwrote |
+## Phase status
+
+- [x] V1 spec written and approved direction (2026-07-22)
+- [x] Workflow, AGENTS.md, templates, design docs committed
+- [ ] Issues created on GitHub (epic + 12)
+- [ ] Issues 1–11 implemented, reviewed, merged (tracked on the epic)
+- [ ] V1 launch: README revamp, screenshots/gifs re-recorded in new identity
+
+## Later (not V1 — do not start)
+
+V1.5 DAG workflow engine · V2 deliberation/panel · V2.5 MBR memory ·
+V3 federated collaboration. See the spec's roadmap section.

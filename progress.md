@@ -309,3 +309,15 @@
   daemon build handshake + orc daemon status/restart, honest client errors,
   RUNS interactivity/redraw, first-run HOME redesign, cwd-step fix, SCORE
   clipping, env scrubbing, and gates.
+
+## Session — 2026-07-22 (Claude Code / Fable): V1 program setup
+- Pivoted plan of record from v4-Bench (complete) to V1 "Universal
+  Delegation": spec at docs/superpowers/specs/2026-07-22-v1-universal-delegation-design.md.
+- Imported visual identity spec (nocturne/ember/phosphor) into
+  docs/design/visual-identity/ + distilled docs/design/visual-identity.md.
+- Established multi-agent workflow (docs/WORKFLOW.md): code-puppy implements
+  issues on branches, Claude reviews, Mrigesh tests + merges. Added root
+  AGENTS.md, .agents/commands/work-issue.md, GitHub issue/PR templates.
+- Rewrote task_plan.md (issue map) and findings.md (durable decisions).
+- Next: create epic + 12 scoped issues on GitHub, fill issue numbers into
+  task_plan.md.

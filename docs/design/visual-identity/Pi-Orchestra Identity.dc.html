@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{font-family:'JetBrains Mono',ui-monospace,monospace}
+  a{color:var(--brain);text-decoration:none;border-bottom:1px solid color-mix(in oklab,var(--brain) 40%,transparent)}
+  a:hover{color:var(--confirmed);border-bottom-color:var(--confirmed)}
+  ::selection{background:var(--brain);color:var(--bg)}
+  /* ---- THEME PALETTES (attribute-scoped: cannot be inline) ---- */
+  [data-theme="nocturne"]{
+    --bg:#0a0c11; --surface:#10131b; --overlay:#171b26; --border:#262c3a;
+    --border-hi:#39425a; --fg:#c4cad6; --muted:#727b8f; --faint:#454c60;
+    --brain:#5ad1c8; --worker:#8ea2ff; --confirmed:#e6b450; --pending:#8a93a6;
+    --failed:#e07a80; --avail:#6fd08c; --unavail:#565e70; --sel:#1c2740; --glow:#5ad1c8;
+  }
+  [data-theme="ember"]{
+    --bg:#15110c; --surface:#1d1710; --overlay:#282016; --border:#3d3122; --border-hi:#5a4630;
+    --fg:#e9ddc7; --muted:#9a8a6c; --faint:#5f5238;
+    --brain:#d7a355; --worker:#cf8148; --confirmed:#a9bd63; --pending:#8f7d5c;
+    --failed:#d1704a; --avail:#b3c56a; --unavail:#6a5c42; --sel:#33270f; --glow:#d7a355;
+  }
+  [data-theme="phosphor"]{
+    --bg:#050c07; --surface:#08130c; --overlay:#0c1c12; --border:#164a29; --border-hi:#1f6b3a;
+    --fg:#48f57a; --muted:#279c4b; --faint:#155f2e;
+    --brain:#a9ffc3; --worker:#48f57a; --confirmed:#d6ffe2; --pending:#279c4b;
+    --failed:#b6ff54; --avail:#7dff9e; --unavail:#155f2e; --sel:#0f3d22; --glow:#48f57a;
+  }
+  /* ---- ANIMATION (motion-gated: cannot be inline) ---- */
+  @keyframes cursorBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @keyframes batonSweep{0%{background-position:120% 0}100%{background-position:-120% 0}}
+  @keyframes stampIn{0%{transform:scale(1.9);opacity:0;letter-spacing:.5em}55%{transform:scale(.94);opacity:1;letter-spacing:.02em}100%{transform:scale(1);opacity:1;letter-spacing:.08em}}
+  @keyframes brailleSpin{to{transform:none}}
+  @keyframes pulseDot{0%,100%{opacity:.25}50%{opacity:1}}
+  @keyframes downBreath{0%,100%{opacity:.5}50%{opacity:.85}}
+  .cursor{animation:cursorBlink 1.1s steps(1) infinite}
+  .baton-live{background:linear-gradient(90deg,var(--faint) 0%,var(--faint) 38%,var(--brain) 47%,var(--confirmed) 53%,var(--faint) 62%,var(--faint) 100%);background-size:240% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:batonSweep 1.4s linear infinite}
+  .pulse-dot{animation:pulseDot 1.3s ease-in-out infinite}
+  .stamp{animation:stampIn .5s cubic-bezier(.2,.8,.2,1) both}
+  .down-breath{animation:downBreath 3.4s ease-in-out infinite}
+  .spin{display:inline-block}
+  [data-motion="reduced"] .cursor{animation:none;opacity:1}
+  [data-motion="reduced"] .baton-live{animation:none;background-position:50% 0}
+  [data-motion="reduced"] .pulse-dot{animation:none;opacity:1}
+  [data-motion="reduced"] .stamp{animation:none}
+  [data-motion="reduced"] .down-breath{animation:none;opacity:.7}
+  /* ---- UI STATE (cross-element attribute state: cannot be inline) ---- */
+  .tbtn{cursor:pointer;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:5px;font:600 12px/1 'JetBrains Mono',monospace;padding:8px 12px;transition:all .15s}
+  .tbtn:hover{color:var(--fg);border-color:var(--border-hi)}
+  [data-theme="nocturne"] .tbtn--nocturne,[data-theme="ember"] .tbtn--ember,[data-theme="phosphor"] .tbtn--phosphor{color:var(--bg);background:var(--brain);border-color:var(--brain)}
+  [data-motion="reduced"] .mbtn{color:var(--bg);background:var(--confirmed);border-color:var(--confirmed)}
+</style>
+</helmet>
+<div ref="{{ rootRef }}" data-theme="nocturne" data-motion="full" style="background:var(--bg);color:var(--fg);min-height:100vh;padding:0 0 120px;font-family:'JetBrains Mono',ui-monospace,monospace;transition:background .3s,color .3s">
+
+  <!-- ============ MASTHEAD ============ -->
+  <header style="max-width:1180px;margin:0 auto;padding:56px 40px 0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px;letter-spacing:.24em;text-transform:uppercase">
+        <span style="display:inline-flex;width:9px;height:9px;border-radius:50%;background:var(--avail)" class="pulse-dot"></span>
+        <span>Visual Identity System</span>
+        <span style="color:var(--faint)">/</span>
+        <span>rev 2026.07</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="color:var(--faint);font-size:11px;letter-spacing:.16em;margin-right:4px">THEME</span>
+        <button class="tbtn tbtn--nocturne" onClick="{{ setNocturne }}">◆ nocturne</button>
+        <button class="tbtn tbtn--ember" onClick="{{ setEmber }}">◆ ember</button>
+        <button class="tbtn tbtn--phosphor" onClick="{{ setPhosphor }}">◆ phosphor</button>
+        <button class="tbtn mbtn" onClick="{{ toggleMotion }}" style="margin-left:6px">{{ motionLabel }}</button>
+      </div>
+    </div>
+
+    <div style="margin-top:44px;display:flex;align-items:baseline;gap:20px;flex-wrap:wrap">
+      <h1 style="font-size:clamp(40px,7vw,92px);font-weight:800;letter-spacing:-.03em;line-height:.9;color:var(--fg)">pi&#8288;-&#8288;orchestra</h1>
+      <span style="color:var(--brain);font-size:14px;letter-spacing:.1em">▸ conductor · bench · baton</span>
+    </div>
+    <p style="margin-top:22px;max-width:660px;font-size:15px;line-height:1.7;color:var(--muted)">
+      A design language for the terminal that orchestrates AI coding agents. One expensive <span style="color:var(--brain)">brain</span> plans and delegates to a bench of cheap <span style="color:var(--worker)">workers</span>. Sessions are durable — panes survive detach and crash. Everything below renders on a character grid via <span style="color:var(--fg)">ratatui</span>: box-drawing borders, block-element bars, braille motion, and monospace type where weight is simulated with color, bold, and reverse-video.
+    </p>
+  </header>
+
+  <!-- ============ HERO TERMINAL ============ -->
+  <section style="max-width:1180px;margin:44px auto 0;padding:0 40px">
+    <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;box-shadow:0 30px 80px -40px rgba(0,0,0,.8)">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--overlay);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)">
+        <span style="color:var(--brain)">◆</span>
+        <span style="color:var(--fg);font-weight:700">pi-orchestra</span>
+        <span style="color:var(--faint)">— session</span><span style="color:var(--fg)">nightly-refactor</span>
+        <span style="margin-left:auto;color:var(--faint)">STAGE · 1 conductor + 3 workers</span>
+      </div>
+      <pre style="margin:0;padding:18px 20px;font-size:13px;line-height:1.5;background:var(--bg);color:var(--fg);white-space:pre;overflow-x:auto">┌─ <span style="color:var(--brain);font-weight:700">◆ conductor</span> ──────────────── <span style="color:var(--brain)">claude-sonnet · planning</span> ─┐   ┌─ <span style="color:var(--worker);font-weight:700">● worker·1</span> ── <span style="color:var(--worker)">hermes</span> ─┐
+│ <span style="color:var(--muted)">plan› decompose auth refactor into 4 tasks</span>          │ <span class="baton-live">╺━━━━━━╸</span> │ <span style="color:var(--fg)">edit src/auth/mod.rs</span>      │
+│ <span style="color:var(--fg)">├─ T-104 split token store</span>          <span style="color:var(--confirmed)">✓ dispatched</span> │           │ <span style="color:var(--muted)">+ impl TokenStore for…</span>    │
+│ <span style="color:var(--fg)">├─ T-105 migrate refresh flow</span>       <span style="color:var(--confirmed)">✓ dispatched</span> │           │ <span style="color:var(--avail)">▁▂▃▅▇▆▄▂</span> <span style="color:var(--muted)">out 41 tok/s</span>    │
+│ <span style="color:var(--fg)">└─ T-106 update call sites</span>          <span style="color:var(--pending)">◔ queued</span>    │           └──────────────────────┘
+│ <span style="color:var(--muted)">think </span><span class="baton-live">⠿</span><span style="color:var(--muted)"> weighing worker load…</span><span class="cursor" style="color:var(--brain)">█</span>          │   ┌─ <span style="color:var(--worker);font-weight:700">● worker·2</span> ── <span style="color:var(--worker)">minimax</span> ┐
+└──────────────────────────────────────────┘ <span class="baton-live">╺━━━━━━╸</span> │ <span style="color:var(--confirmed);font-weight:700">✓ TASK CONFIRMED</span>       │
+  <span style="color:var(--faint)">n</span> <span style="color:var(--muted)">new</span>  <span style="color:var(--faint)">z</span> <span style="color:var(--muted)">zoom</span>  <span style="color:var(--faint)">s</span> <span style="color:var(--muted)">swap</span>  <span style="color:var(--faint)">tab</span> <span style="color:var(--muted)">focus</span>  <span style="color:var(--faint)">?</span> <span style="color:var(--muted)">help</span>         │ <span style="color:var(--muted)">T-104 · running 0:12</span>     │
+                                               └──────────────────────┘</pre>
+    </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--faint);text-align:center">Live preview — switch themes and toggle motion above. The <span style="color:var(--brain)">baton filaments</span> and cursor animate; reduced-motion freezes them to static equivalents.</p>
+  </section>
+
+  <!-- ============ 00 · LEGEND ============ -->
+  <section id="legend" style="max-width:1180px;margin:96px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">00</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">The metaphor</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">orchestra · conductor · bench · baton</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:2px;margin-top:28px;background:var(--border);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="background:var(--surface);padding:22px">
+        <div style="font-size:22px;color:var(--brain);font-weight:700">◆ conductor</div>
+        <p style="margin-top:10px;font-size:13px;line-height:1.6;color:var(--muted)">The one expensive brain. Plans, decomposes, and delegates. Rendered in <span style="color:var(--brain)">brain-accent</span>, always the top-left anchor, framed with a heavier active border.</p>
+      </div>
+      <div style="background:var(--surface);padding:22px">
+        <div style="font-size:22px;color:var(--worker);font-weight:700">● the bench</div>
+        <p style="margin-top:10px;font-size:13px;line-height:1.6;color:var(--muted)">The pool of cheap workers waiting for dispatch. Each seat resolves a harness on PATH. Rendered in <span style="color:var(--worker)">worker-accent</span>, filled circle when seated, hollow when idle.</p>
+      </div>
+      <div style="background:var(--surface);padding:22px">
+        <div style="font-size:22px;color:var(--confirmed);font-weight:700">╺━━╸ the baton</div>
+        <p style="margin-top:10px;font-size:13px;line-height:1.6;color:var(--muted)">The filament that connects conductor to worker. Idle = dim dotted rule; a <span style="color:var(--confirmed)">pulse</span> travels along it whenever a pane produces output. The signature motion of the app.</p>
+      </div>
+      <div style="background:var(--surface);padding:22px">
+        <div style="font-size:22px;color:var(--fg);font-weight:700">⏻ durable session</div>
+        <p style="margin-top:10px;font-size:13px;line-height:1.6;color:var(--muted)">Panes survive terminal detach and crash. A session is a shelf of reattachable cards, each carrying its own health, worker count, and last-seen time.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 01 · THEMES ============ -->
+  <section id="themes" style="max-width:1180px;margin:96px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">01</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Three themes</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">flagship + two anchors</span>
+    </div>
+    <p style="margin-top:20px;max-width:680px;font-size:14px;line-height:1.7;color:var(--muted)">Each theme is a full <span style="color:var(--fg)">Base16-style</span> semantic slot map — color encodes meaning, never decoration. Remove all color and the interface stays usable through layout, glyphs, and reverse-video. True color enhances; it never creates the hierarchy.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:28px">
+
+      <!-- nocturne -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div style="padding:18px 20px;background:#10131b;border-bottom:1px solid #262c3a">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:17px;font-weight:800;color:#c4cad6">nocturne</span>
+            <span style="font-size:11px;color:#e6b450;border:1px solid #e6b450;border-radius:20px;padding:3px 9px">FLAGSHIP</span>
+          </div>
+          <p style="margin-top:8px;font-size:12px;line-height:1.55;color:#727b8f">Stage at night. Near-black blue house lights, cool teal for the conductor, periwinkle for the bench, warm gold spotlight for confirmations. Theatrical, premium, dense.</p>
+        </div>
+        <div style="display:flex;height:40px">
+          <div style="flex:1;background:#0a0c11"></div><div style="flex:1;background:#10131b"></div><div style="flex:1;background:#171b26"></div>
+          <div style="flex:1.4;background:#5ad1c8"></div><div style="flex:1.4;background:#8ea2ff"></div><div style="flex:1.4;background:#e6b450"></div><div style="flex:1.4;background:#e07a80"></div><div style="flex:1.4;background:#6fd08c"></div>
+        </div>
+        <pre style="margin:0;padding:14px 16px;font-size:12px;line-height:1.5;background:#0a0c11;color:#c4cad6;white-space:pre">┌─ <span style="color:#5ad1c8;font-weight:700">◆ conductor</span> ──┐
+│ <span style="color:#e6b450">✓</span> T-104 <span style="color:#6fd08c">avail</span>  │
+│ <span style="color:#8ea2ff">● worker·1</span>   │
+│ <span style="color:#8a93a6">◔ queued…</span>   │
+└──────────────┘</pre>
+      </div>
+
+      <!-- ember -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div style="padding:18px 20px;background:#1d1710;border-bottom:1px solid #3d3122">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:17px;font-weight:800;color:#e9ddc7">ember</span>
+            <span style="font-size:11px;color:#9a8a6c;border:1px solid #3d3122;border-radius:20px;padding:3px 9px">ANCHOR</span>
+          </div>
+          <p style="margin-top:8px;font-size:12px;line-height:1.55;color:#9a8a6c">Warm charcoal and brass. Firelit study. Refined for higher contrast on the fg text and a cooler olive for confirmations so it reads against the warm base.</p>
+        </div>
+        <div style="display:flex;height:40px">
+          <div style="flex:1;background:#15110c"></div><div style="flex:1;background:#1d1710"></div><div style="flex:1;background:#282016"></div>
+          <div style="flex:1.4;background:#d7a355"></div><div style="flex:1.4;background:#cf8148"></div><div style="flex:1.4;background:#a9bd63"></div><div style="flex:1.4;background:#d1704a"></div><div style="flex:1.4;background:#b3c56a"></div>
+        </div>
+        <pre style="margin:0;padding:14px 16px;font-size:12px;line-height:1.5;background:#15110c;color:#e9ddc7;white-space:pre">┌─ <span style="color:#d7a355;font-weight:700">◆ conductor</span> ──┐
+│ <span style="color:#a9bd63">✓</span> T-104 <span style="color:#b3c56a">avail</span>  │
+│ <span style="color:#cf8148">● worker·1</span>   │
+│ <span style="color:#8f7d5c">◔ queued…</span>   │
+└──────────────┘</pre>
+      </div>
+
+      <!-- phosphor -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div style="padding:18px 20px;background:#08130c;border-bottom:1px solid #164a29">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:17px;font-weight:800;color:#48f57a">phosphor</span>
+            <span style="font-size:11px;color:#279c4b;border:1px solid #164a29;border-radius:20px;padding:3px 9px">ANCHOR · MONO</span>
+          </div>
+          <p style="margin-top:8px;font-size:12px;line-height:1.55;color:#279c4b">CRT green monochrome. One hue, five luminances. State is carried by brightness, bold, and reverse-video — not color. The purist / 16-color-safe anchor.</p>
+        </div>
+        <div style="display:flex;height:40px">
+          <div style="flex:1;background:#050c07"></div><div style="flex:1;background:#08130c"></div><div style="flex:1;background:#0c1c12"></div>
+          <div style="flex:1.4;background:#155f2e"></div><div style="flex:1.4;background:#279c4b"></div><div style="flex:1.4;background:#48f57a"></div><div style="flex:1.4;background:#7dff9e"></div><div style="flex:1.4;background:#d6ffe2"></div>
+        </div>
+        <pre style="margin:0;padding:14px 16px;font-size:12px;line-height:1.5;background:#050c07;color:#48f57a;white-space:pre">┌─ <span style="color:#a9ffc3;font-weight:700">◆ conductor</span> ──┐
+│ <span style="color:#d6ffe2;font-weight:700">✓</span> T-104 <span style="color:#7dff9e">avail</span>  │
+│ <span style="color:#48f57a">● worker·1</span>   │
+│ <span style="color:#279c4b">◔ queued…</span>   │
+└──────────────┘</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 02 · TOKEN SHEET ============ -->
+  <section id="tokens" style="max-width:1180px;margin:96px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">02</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Color token sheet</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">hex + nearest ANSI-256 fallback</span>
+    </div>
+    <p style="margin-top:20px;max-width:680px;font-size:14px;line-height:1.7;color:var(--muted)">Every semantic slot, all three themes. The <span style="color:var(--fg)">ANSI-256</span> column is the graceful fallback when truecolor is not detected. Widget code references the slot name, never a hex literal — themes are swapped by remapping the slots.</p>
+
+    <div style="margin-top:26px;border:1px solid var(--border);border-radius:8px;overflow:hidden;overflow-x:auto">
+      <table style="border-collapse:collapse;width:100%;font-size:12.5px;min-width:720px">
+        <thead>
+          <tr style="background:var(--overlay);color:var(--muted);text-align:left">
+            <th style="padding:11px 14px;font-weight:700;letter-spacing:.06em">SEMANTIC SLOT</th>
+            <th style="padding:11px 10px;font-weight:700">USAGE</th>
+            <th style="padding:11px 10px;font-weight:700" colspan="2">nocturne</th>
+            <th style="padding:11px 10px;font-weight:700" colspan="2">ember</th>
+            <th style="padding:11px 10px;font-weight:700" colspan="2">phosphor</th>
+          </tr>
+        </thead>
+        <tbody style="color:var(--fg)"></tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px;font-size:11.5px;color:var(--faint)">ANSI-256 codes are the nearest xterm cube/greyscale index; verify against your emulator's palette. Respect <span style="color:var(--muted)">NO_COLOR</span> — when set, fall through to the 16-color / phosphor tier below.</p>
+  </section>
+
+  <!-- ============ 03 · TYPOGRAPHY + GLYPHS ============ -->
+  <section id="type" style="max-width:1180px;margin:96px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">03</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Type &amp; iconography</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">monospace · nerd-font glyphs · ASCII fallback</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:26px">
+      <div style="border:1px solid var(--border);border-radius:8px;padding:22px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.14em">PRIMARY FACE</div>
+        <div style="font-size:38px;font-weight:800;margin-top:8px;color:var(--fg)">JetBrains Mono</div>
+        <p style="margin-top:12px;font-size:13px;line-height:1.65;color:var(--muted)">Chosen for a true 1:1 cell, unambiguous <span style="color:var(--fg)">0/O · 1/l/I</span>, crisp box-drawing joins, and a full <span style="color:var(--fg)">Nerd Font</span> patch. Ships free (OFL). Recommend the <span style="color:var(--fg)">Mono</span> nerd variant so every icon forces single-cell width.</p>
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:6px;font-size:13px">
+          <div style="color:var(--faint)">weight is simulated, never a font-weight axis:</div>
+          <div><span style="color:var(--muted)">regular</span> body · <span style="color:var(--fg);font-weight:700">bold</span> emphasis · <span style="background:var(--fg);color:var(--bg)">&nbsp;reverse&nbsp;</span> selection · <span style="color:var(--faint)">dim</span> metadata</div>
+        </div>
+        <div style="margin-top:14px;font-size:12px;color:var(--muted)">Alternatives: <span style="color:var(--fg)">Berkeley Mono</span> (premium, paid) · <span style="color:var(--fg)">Iosevka</span> (tall/condensed, dense dashboards) · <span style="color:var(--fg)">IBM Plex Mono</span> (technical). Phosphor pairs beautifully with a VT-style face if you have one.</div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:22px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.14em">TYPE SCALE — CELL ROWS, NOT PX</div>
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:11px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dashed var(--border);padding-bottom:8px"><span style="font-size:20px;font-weight:800;color:var(--fg)">Aa Screen title</span><span style="font-size:11px;color:var(--faint)">bold + brain · 1 row</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dashed var(--border);padding-bottom:8px"><span style="font-size:15px;font-weight:700;color:var(--fg)">Aa Panel header</span><span style="font-size:11px;color:var(--faint)">bold + fg · in border</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dashed var(--border);padding-bottom:8px"><span style="font-size:13px;color:var(--fg)">Aa Body / content — 80%</span><span style="font-size:11px;color:var(--faint)">regular fg.default</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;color:var(--faint)">Aa metadata · timestamps</span><span style="font-size:11px;color:var(--faint)">dim fg.muted</span></div>
+        </div>
+        <div style="margin-top:16px;font-size:12px;color:var(--muted);line-height:1.6">Hierarchy recipe: <span style="color:var(--fg)">80%</span> of content in fg.default, headers in bold+emphasis, metadata dim, status in its semantic color, accent reserved for interactive/active.</div>
+      </div>
+    </div>
+
+    <div style="margin-top:22px;border:1px solid var(--border);border-radius:8px;overflow:hidden;overflow-x:auto">
+      <div style="padding:12px 16px;background:var(--overlay);font-size:12px;color:var(--muted);letter-spacing:.1em">GLYPH REGISTER — every state has a symbol, so color is never load-bearing alone</div>
+      <table style="border-collapse:collapse;width:100%;font-size:13px;min-width:640px">
+        <thead>
+          <tr style="color:var(--faint);text-align:left;font-size:11px">
+            <th style="padding:9px 16px;font-weight:600;letter-spacing:.08em">CONCEPT</th>
+            <th style="padding:9px 10px;font-weight:600">GLYPH</th>
+            <th style="padding:9px 10px;font-weight:600">NERD-FONT NAME</th>
+            <th style="padding:9px 10px;font-weight:600">ASCII FALLBACK</th>
+            <th style="padding:9px 10px;font-weight:600">RENDERED AS</th>
+          </tr>
+        </thead>
+        <tbody style="color:var(--fg)"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 04 · HOME ============ -->
+  <section id="home" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">04</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Screen · HOME</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">landing · bench · durable shelf</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">The first thing you see. A one-line teaching moment, a <span style="color:var(--fg)">BENCH AVAILABILITY</span> strip showing which configured harnesses actually resolve on PATH, and a shelf of durable session cards you can reattach. The <span style="color:var(--brain)">press n</span> affordance is always in reach.</p>
+    <div style="margin-top:22px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--overlay);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)"><span style="color:var(--brain)">◆</span><span style="color:var(--fg);font-weight:700">pi-orchestra</span><span style="color:var(--faint)">— home</span><span style="margin-left:auto;color:var(--faint)">98×30</span></div>
+      <pre id="scr-home" style="margin:0;padding:16px 18px;font-size:12.5px;line-height:1.5;background:var(--bg);white-space:pre;overflow-x:auto"></pre>
+    </div>
+    <div style="display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-top:20px" data-wrap>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">LAYOUT · vertical constraints (ratatui)</div>
+        <pre style="margin:0;font-size:11.5px;line-height:1.55;color:var(--faint);white-space:pre;overflow-x:auto">┌─────────────────────────────────┐
+│ header · title + ⏻ count        │ <span style="color:var(--brain)">Length(1)</span>
+├─────────────────────────────────┤
+│ teaching moment · first-run      │ <span style="color:var(--brain)">Length(3)</span>
+├─────────────────────────────────┤
+│ BENCH AVAILABILITY               │ <span style="color:var(--brain)">Length(2+ceil(n/3))</span>
+│  grid 3-col, avail | unavail     │
+├─────────────────────────────────┤
+│ DURABLE SESSIONS · card shelf    │ <span style="color:var(--brain)">Min(0) → Fill(1)</span>
+│  cards ≈30 cols, wrap to width   │
+├─────────────────────────────────┤
+│ status bar · context keys        │ <span style="color:var(--brain)">Length(1)</span>
+└─────────────────────────────────┘</pre>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">RULES</div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:11px;font-size:12.5px;line-height:1.5;color:var(--muted)">
+          <li><span style="color:var(--avail)">●</span> available = filled dot + full-bright name + resolved path in dim</li>
+          <li><span style="color:var(--unavail)">○</span> unavailable = hollow dot + name dimmed + <span style="color:var(--faint)">not on PATH</span>, never hidden</li>
+          <li><span style="color:var(--brain)">◆</span> session card border brightens on selection; health glyph top-right</li>
+          <li><span style="color:var(--failed)">✕</span> dead session keeps its card — greyed, with elapsed + <span style="color:var(--confirmed)">R</span> to recover</li>
+          <li>teaching moment is dismissable and shown only until first session exists</li>
+        </ul>
+      </div>
+    </div>
+    <div style="margin-top:26px;font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">STATE MATRIX — empty · loading · error · conductor-down</div>
+    <div id="states-home" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
+  </section>
+
+  <!-- ============ 05 · STAGE ============ -->
+  <section id="stage" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">05</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Screen · STAGE</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">live panes · the baton · zoom / swap</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">The main live view: one conductor pane and up to three worker panes, each a bordered PTY card. The active card carries a heavier, accented frame — the same visual language as zellij's focused pane. <span style="color:var(--brain)">Baton filaments</span> run from the conductor to each worker and pulse whenever a pane produces output.</p>
+    <div style="margin-top:22px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--overlay);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)"><span style="color:var(--brain)">◆</span><span style="color:var(--fg);font-weight:700">pi-orchestra</span><span style="color:var(--faint)">— stage ·</span><span style="color:var(--fg)">nightly-refactor</span><span style="margin-left:auto;color:var(--faint)">1 conductor + 3 workers</span></div>
+      <pre id="scr-stage" style="margin:0;padding:16px 18px;font-size:12.5px;line-height:1.5;background:var(--bg);white-space:pre;overflow-x:auto"></pre>
+    </div>
+
+    <!-- baton animation -->
+    <div style="margin-top:24px;border:1px solid var(--border-hi);border-radius:8px;background:var(--surface);overflow:hidden">
+      <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <span style="font-size:15px;font-weight:800;color:var(--fg)">The baton pulse — frame by frame</span>
+        <span style="font-size:12px;color:var(--muted)">12 cells · ~110ms/frame · loops while output flows</span>
+      </div>
+      <div style="padding:20px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">LIVE (respects the motion toggle) — conductor <span style="color:var(--brain)">◆</span> to worker <span style="color:var(--worker)">●</span>:</div>
+        <pre style="margin:0 0 20px;font-size:15px;line-height:1.7;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px 16px;white-space:pre;overflow-x:auto"><span style="color:var(--brain);font-weight:700">◆</span> <span class="baton-live">╺━━━━━━━━━━━━╸</span> <span style="color:var(--worker);font-weight:700">●</span>   <span style="color:var(--faint)">idle rail (no output):</span> <span style="color:var(--faint)">◆ ·············· ●</span></pre>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">DISCRETE STATES — hand these to the engineer. Each frame is one render tick:</div>
+        <pre id="baton-frames" style="margin:0;font-size:13px;line-height:1.9;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px 16px;white-space:pre;overflow-x:auto"></pre>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px" data-wrap>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:14px 16px;background:var(--bg)">
+            <div style="font-size:12px;color:var(--confirmed);letter-spacing:.1em;margin-bottom:8px">✓ REDUCED-MOTION EQUIVALENT</div>
+            <pre style="margin:0;font-size:13px;line-height:1.7;white-space:pre;color:var(--fg)"><span style="color:var(--brain)">◆</span><span style="color:var(--brain)">━━━━━━━━━━━━</span><span style="color:var(--worker)">●</span>  <span style="color:var(--muted)">active: solid accent rail</span>
+<span style="color:var(--brain)">◆</span><span style="color:var(--faint)">············</span><span style="color:var(--worker)">●</span>  <span style="color:var(--muted)">idle: dim dotted rail</span></pre>
+            <p style="margin-top:10px;font-size:11.5px;color:var(--faint);line-height:1.5">No travel, no sweep. Activity is encoded by rail <em>fill</em> (solid vs dotted) and a single count badge, updated at most 1&times;/sec.</p>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:14px 16px;background:var(--bg)">
+            <div style="font-size:12px;color:var(--muted);letter-spacing:.1em;margin-bottom:8px">ENGINEERING NOTES</div>
+            <ul style="list-style:none;display:flex;flex-direction:column;gap:7px;font-size:11.5px;line-height:1.5;color:var(--muted)">
+              <li>• Packet = 3-cell window <span style="color:var(--fg)">░▒▓</span>→<span style="color:var(--fg)">▓▒░</span> swept L→R over the rail's dim base <span style="color:var(--faint)">─</span>.</li>
+              <li>• Color ramp within packet: <span style="color:var(--brain)">brain</span> at tail → <span style="color:var(--confirmed)">confirmed</span> at head. One direction only: conductor → worker.</li>
+              <li>• Trigger on a pane's stdout tick; decay to idle rail after 400ms of silence.</li>
+              <li>• Braille <span style="color:var(--brain)">⠿</span> spinner marks the conductor "thinking"; block <span style="color:var(--avail)">▁▂▃▅▇</span> sparkline = worker tok/s.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px" data-wrap>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">ZOOM-TO-ONE · <span style="color:var(--fg)">z</span></div>
+        <pre id="scr-stage-zoom" style="margin:0;font-size:11.5px;line-height:1.5;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px 14px;white-space:pre;overflow-x:auto"></pre>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">SWAP-PANE · <span style="color:var(--fg)">s</span> then ↑↓</div>
+        <pre id="scr-stage-swap" style="margin:0;font-size:11.5px;line-height:1.5;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px 14px;white-space:pre;overflow-x:auto"></pre>
+      </div>
+    </div>
+    <div style="margin-top:26px;font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">STATE MATRIX</div>
+    <div id="states-stage" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
+  </section>
+
+  <!-- ============ 06 · SCORE ============ -->
+  <section id="score" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">06</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Screen · SCORE</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">task board · lifecycle columns</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">A kanban of the run. Columns are lifecycle states — <span style="color:var(--fg)">todo → assigned → in&nbsp;progress → review → done</span>. Each card shows its task id, assignee, and confirmation status. The focused column gets the accent frame; the focused card is reverse-video.</p>
+    <div style="margin-top:22px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--overlay);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)"><span style="color:var(--brain)">◆</span><span style="color:var(--fg);font-weight:700">pi-orchestra</span><span style="color:var(--faint)">— score</span><span style="margin-left:auto;color:var(--faint)">14 tasks · 3 workers</span></div>
+      <pre id="scr-score" style="margin:0;padding:16px 18px;font-size:12px;line-height:1.5;background:var(--bg);white-space:pre;overflow-x:auto"></pre>
+    </div>
+    <div style="margin-top:20px;border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+      <div style="font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">LAYOUT · horizontal constraints — 5 equal columns, focused column may expand</div>
+      <pre style="margin:0;font-size:11.5px;line-height:1.55;color:var(--faint);white-space:pre;overflow-x:auto">├ todo ─────┼ assigned ─┼ in&nbsp;progress ┼ review ───┼ done ─────┤
+│ <span style="color:var(--brain)">Ratio(1,5)</span>│ <span style="color:var(--brain)">Ratio(1,5)</span>│ <span style="color:var(--brain)">Min(24)★</span>  │ <span style="color:var(--brain)">Ratio(1,5)</span>│ <span style="color:var(--brain)">Ratio(1,5)</span>│   ★ focused column takes Min, siblings share the rest</pre>
+    </div>
+    <div style="margin-top:26px;font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">STATE MATRIX</div>
+    <div id="states-score" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
+  </section>
+
+  <!-- ============ 07 · RUNS ============ -->
+  <section id="runs" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">07</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Screen · RUNS</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">cost ledger · savings hero · sparklines</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">A dashboard, not a log. The hero stat is the <span style="color:var(--confirmed)">savings</span> from delegating brain work to the bench. Beneath it: usage-over-time sparklines and bars (bottom's dense dashboard language), then a searchable, filterable ledger with atuin-style columns and exit-code badges.</p>
+    <div style="margin-top:22px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--overlay);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)"><span style="color:var(--brain)">◆</span><span style="color:var(--fg);font-weight:700">pi-orchestra</span><span style="color:var(--faint)">— runs</span><span style="margin-left:auto;color:var(--faint)">last 30 days</span></div>
+      <pre id="scr-runs" style="margin:0;padding:16px 18px;font-size:12px;line-height:1.5;background:var(--bg);white-space:pre;overflow-x:auto"></pre>
+    </div>
+    <div style="margin-top:26px;font-size:12px;color:var(--muted);letter-spacing:.12em;margin-bottom:12px">STATE MATRIX</div>
+    <div id="states-runs" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
+  </section>
+
+  <!-- ============ 08 · SIGNATURE MOMENTS ============ -->
+  <section id="signature" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">08</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Signature moments</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">TASK CONFIRMED · CONDUCTOR DOWN</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px" data-wrap>
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><span style="font-size:15px;font-weight:800;color:var(--confirmed)">✓ TASK CONFIRMED</span><p style="margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55">A dispatch lands. Not a text swap — a tactile stamp: the row flashes to reverse-video for 1 frame, the glyph stamps in scaling down, then settles to a steady confirmed badge with a gold underline.</p></div>
+        <div style="padding:18px;background:var(--bg)">
+          <div id="confirm-live" style="font-size:14px;line-height:1.8;white-space:pre;font-family:'JetBrains Mono',monospace"></div>
+          <div style="margin-top:14px;font-size:11.5px;color:var(--muted);letter-spacing:.08em">FRAMES</div>
+          <pre id="confirm-frames" style="margin:6px 0 0;font-size:12.5px;line-height:1.85;white-space:pre;color:var(--fg)"></pre>
+          <button class="tbtn" onClick="{{ replayConfirm }}" style="margin-top:14px">↺ replay</button>
+        </div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><span style="font-size:15px;font-weight:800;color:var(--failed)">⏻ CONDUCTOR DOWN</span><p style="margin-top:6px;font-size:12px;color:var(--muted);line-height:1.55">The brain process died. This must read as calm and recoverable, not alarming — muted coral, never red-alert; a slow breath, not a blink; elapsed time and a clear <span style="color:var(--confirmed)">R</span> to recover. Workers hold their last state.</p></div>
+        <div style="padding:18px;background:var(--bg)">
+          <pre id="down-live" style="margin:0;font-size:12.5px;line-height:1.55;white-space:pre;overflow-x:auto"></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 09 · DEGRADATION ============ -->
+  <section id="degrade" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">09</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Degradation tiers</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">design in layers — each stands alone</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">Start monochrome (usable?), add 16 ANSI colors (readable?), layer truecolor (beautiful?). And two orthogonal switches: reduced motion, and a minimum viewport. Below 80×24, everything collapses to a resize prompt.</p>
+    <div id="tiers" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:24px"></div>
+  </section>
+
+  <!-- ============ 10 · STATUS + KEYS ============ -->
+  <section id="chrome" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">10</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">Status bar &amp; keys</h2>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">context-sensitive · vim-fluent</span>
+    </div>
+    <p style="margin-top:18px;max-width:700px;font-size:14px;line-height:1.7;color:var(--muted)">One persistent line at the bottom shows the mode on the left and immediate context actions on the right — the same discipline as zellij and gitui. It changes per screen; it shows what's actionable <em>now</em>, never the whole keymap.</p>
+    <pre id="statusbars" style="margin:22px 0 0;font-size:12.5px;line-height:2.1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px 18px;white-space:pre;overflow-x:auto"></pre>
+  </section>
+
+  <!-- ============ 11 · SOURCES ============ -->
+  <section id="sources" style="max-width:1180px;margin:110px auto 0;padding:0 40px">
+    <div style="display:flex;align-items:baseline;gap:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+      <span style="font-size:13px;color:var(--brain);font-weight:700;letter-spacing:.2em">11</span>
+      <h2 style="font-size:26px;font-weight:800;letter-spacing:-.02em;color:var(--fg)">What this borrows &amp; sources</h2>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:24px">
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:13px;font-weight:700;color:var(--fg);margin-bottom:10px">Borrowed patterns</div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:9px;font-size:12px;line-height:1.5;color:var(--muted)">
+          <li><a href="https://github.com/extrawurst/gitui/blob/master/THEMES.md">gitui</a> — semantic RON theme slots (selection_fg, command_fg); theme-aware, light/dark-adaptive; context help footer.</li>
+          <li><a href="https://docs.rs/ratatui/latest/ratatui/widgets/struct.Sparkline.html">bottom / ratatui</a> — Sparkline NINE_LEVELS <span style="color:var(--fg)">▁▂▃▄▅▆▇█</span>, BarChart, Gauge; constraint layouts (Length/Ratio/Min/Fill).</li>
+          <li><a href="https://zellij.dev/documentation/creating-a-layout.html">zellij</a> — focused-pane frames, floating &amp; pinned panes, stacked (title-only) panes, per-pane color, status-bar modes.</li>
+          <li><a href="https://docs.atuin.sh/cli/reference/search/">atuin</a> — full-screen fuzzy search, columns [time · duration · exit · cmd], exit-code badges, filter cycling, <a href="https://docs.atuin.sh/cli/configuration/config/">reduced-motion</a> setting.</li>
+          <li><a href="https://github.com/alexpasmantier/television">television</a> — channels, real-time preview pane, nucleo fuzzy match highlighting, minimal chrome.</li>
+          <li><a href="https://github.com/ryanoasis/nerd-fonts">Nerd Fonts</a> — PUA icon glyphs + native Braille block; use <span style="color:var(--fg)">Mono</span> variants for single-cell width.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:18px 20px;background:var(--surface)">
+        <div style="font-size:13px;font-weight:700;color:var(--fg);margin-bottom:10px">Principles applied</div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:9px;font-size:12px;line-height:1.55;color:var(--muted)">
+          <li>Semantic color — remove all color, stay usable through layout, glyphs, reverse-video.</li>
+          <li>True color enhances, never <em>creates</em>, the hierarchy — the 16-color / phosphor tier must stand alone.</li>
+          <li>Never color alone — every state pairs with a glyph and, where it matters, a text label.</li>
+          <li>Context-sensitive footer — show what's actionable now, not the entire keymap.</li>
+          <li>Async everything, cancel with Esc; spinners for indeterminate work.</li>
+          <li>Min viewport 80×24; below it, a resize prompt.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer style="max-width:1180px;margin:110px auto 0;padding:32px 40px 0;border-top:1px solid var(--border);color:var(--faint);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <span>pi-orchestra — visual identity · character-grid spec for ratatui</span>
+    <span>nocturne · ember · phosphor</span>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { theme: 'nocturne', motion: 'full' };
+  rootRef = React.createRef();
+  _apply() {
+    const r = this.rootRef.current;
+    if (r) { r.dataset.theme = this.state.theme; r.dataset.motion = this.state.motion; }
+  }
+  componentDidMount() {
+    this._apply();
+    this._fillTokens();
+    this._fillGlyphs();
+    this._fillScreens();
+    this._fillStates();
+    this._fillBaton();
+    this._fillConfirm();
+    this._fillDown();
+    this._fillTiers();
+    this._fillStatus();
+  }
+
+  // ---------- grid primitives ----------
+  _pal(){return{bc:'var(--border)',ac:'var(--border-hi)',br:'var(--brain)',wk:'var(--worker)',cf:'var(--confirmed)',pd:'var(--pending)',fl:'var(--failed)',av:'var(--avail)',un:'var(--unavail)',fg:'var(--fg)',mu:'var(--muted)',ft:'var(--faint)'};}
+  _e(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  _seg(t,c,b,rev,cls){let st='';if(rev){st+='background:'+(c||'var(--fg)')+';color:var(--bg);';}else if(c){st+='color:'+c+';';}if(b)st+='font-weight:700;';const ca=cls?' class="'+cls+'"':'';return(st||cls)?'<span'+ca+' style="'+st+'">'+this._e(t)+'</span>':this._e(t);}
+  _chunk(segs){let h='',v=0;for(const g of segs){h+=this._seg(g[0],g[1],g[2],g[3],g[4]);v+=[...String(g[0])].length;}return{h,v};}
+  _pad(p,w){return{h:p.h+' '.repeat(Math.max(0,w-p.v)),v:Math.max(w,p.v)};}
+  _zip(ps){let h='',v=0;for(const p of ps){h+=p.h;v+=p.v;}return{h,v};}
+  _lineC(piece,W,fc){const p=this._pad(piece,W);return this._seg('│',fc)+p.h+this._seg('│',fc);}
+  _rule(c0,c1,left,right,W,fc){const fill=Math.max(0,W-left.v-right.v);return this._seg(c0,fc)+left.h+this._seg('─'.repeat(fill),fc)+right.h+this._seg(c1,fc);}
+  _pane(W2,tl,tr,lines,fc){const a=[];a.push({h:this._rule('┌','┐',this._chunk(tl),this._chunk(tr),W2,fc),v:W2+2});for(const sa of lines)a.push({h:this._lineC(this._chunk(sa),W2,fc),v:W2+2});a.push({h:this._rule('└','┘',this._chunk([]),this._chunk([]),W2,fc),v:W2+2});return a;}
+
+  _fillScreens(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const W=92;
+    // ===== HOME =====
+    (()=>{const el=R.querySelector('#scr-home');if(!el)return;const L=[];
+      const line=(s,fc)=>L.push(this._lineC(this._chunk(s),W,fc||P.bc));
+      const rule=(a,b,l,r,fc)=>L.push(this._rule(a,b,this._chunk(l||[]),this._chunk(r||[]),W,fc||P.bc));
+      rule('┌','┐',[['─ ',P.br],['HOME',P.fg,true],[' · pi-orchestra ',P.mu]],[['⏻ 3 durable sessions ─',P.mu]]);
+      line([]);
+      line([['  ',null],['◆',P.br,true],['  Welcome to the pit — a conductor plans, the bench executes.',P.mu]]);
+      line([['     Press ',P.mu],['n',P.cf,true],[' seat new   ',P.mu],['Enter',P.cf,true],[' reattach   ',P.mu],['?',P.cf,true],[' the full score',P.mu]]);
+      line([]);
+      rule('├','┤',[['─ ',P.bc],['BENCH AVAILABILITY',P.fg,true],[' ',P.bc]],[['4 / 6 on PATH ─',P.mu]]);
+      const ent=(dot,dc,name,role,path,nc,pc)=>this._pad(this._chunk([[' ',null],[dot,dc],[' ',null],[name.padEnd(12),nc],[role.padEnd(8),P.mu],[path,pc]]),46);
+      const brow=(a,b)=>L.push(this._lineC(this._zip([a,b]),W,P.bc));
+      brow(ent('●',P.av,'claude-code','brain','/usr/local/bin',P.fg,P.ft),ent('●',P.av,'codex','brain','~/.cargo/bin',P.fg,P.ft));
+      brow(ent('●',P.av,'hermes','worker','/usr/local/bin',P.fg,P.ft),ent('○',P.un,'minimax','worker','not on PATH',P.mu,P.un));
+      brow(ent('●',P.av,'qwen-coder','worker','/opt/harnesses',P.fg,P.ft),ent('○',P.un,'groq','worker','not on PATH',P.mu,P.un));
+      rule('├','┤',[['─ ',P.bc],['DURABLE SESSIONS',P.fg,true],[' ',P.bc]],[['↑↓ select · Enter reattach ─',P.mu]]);
+      line([]);
+      const cA=this._miniCard('nightly-refactor',P.fg,'● healthy',P.av,[[[' ',null],['◆',P.br],['1',P.fg],[' conductor  ',P.mu],['●',P.wk],['3',P.fg],[' workers',P.mu]],[[' ',null],['▁▂▃▅▇',P.av],[' output live',P.mu]],[[' seen ',P.ft],['now',P.fg]]],P.br);
+      const cB=this._miniCard('api-migration',P.fg,'◐ 1 stalled',P.pd,[[[' ',null],['◆',P.br],['1',P.fg],[' conductor  ',P.mu],['●',P.wk],['2',P.fg],[' workers',P.mu]],[[' ',null],['◐',P.pd],[' worker·2 stalled',P.mu]],[[' seen ',P.ft],['2m ago',P.fg]]],P.bc);
+      const cC=this._miniCard('hotfix-4821',P.mu,'✕ dead',P.fl,[[[' ',null],['✕',P.fl],[' conductor down',P.mu]],[[' held 0:47 · ',P.mu],['R',P.cf,true],[' recover',P.mu]],[[' seen ',P.ft],['47s ago',P.mu]]],P.bc);
+      for(let i=0;i<5;i++)L.push(this._lineC(this._zip([{h:' ',v:1},cA[i],{h:'  ',v:2},cB[i],{h:'  ',v:2},cC[i]]),W,P.bc));
+      line([]);
+      L.push(this._lineC(this._chunk([[' ',null],[' NORMAL ',P.br,true,true],['  ',null],['n',P.cf,true],[' new  ',P.mu],['Enter',P.cf,true],[' reattach  ',P.mu],['d',P.cf,true],[' delete  ',P.mu],['x',P.cf,true],[' dismiss dead  ',P.mu],['q',P.cf,true],[' quit',P.mu]]),W,P.bc));
+      L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W,P.bc));
+      el.innerHTML=L.join('\n');})();
+
+    // ===== STAGE =====
+    (()=>{const el=R.querySelector('#scr-stage');if(!el)return;
+      const cond=this._pane(48,[['─ ',P.br],['◆ conductor',P.br,true],[' ',P.br]],[['claude-sonnet · planning ─',P.br]],[
+        [],
+        [[' plan› decompose auth refactor into 4 tasks',P.mu]],
+        [[' ├─ ',P.ft],['T-104 split token store',P.fg],['         ',null],['✓ dispatched',P.cf]],
+        [[' ├─ ',P.ft],['T-105 migrate refresh flow',P.fg],['      ',null],['✓ dispatched',P.cf]],
+        [[' └─ ',P.ft],['T-106 update call sites',P.fg],['         ',null],['◔ queued',P.pd]],
+        [],
+        [[' think ',P.mu],['⠿',P.br,false,false,'baton-live'],[' weighing worker load…',P.mu],['█',P.br,false,false,'cursor']],
+        [],
+        [[' n ',P.cf,true],['new  ',P.mu],['z ',P.cf,true],['zoom  ',P.mu],['s ',P.cf,true],['swap  ',P.mu],['tab ',P.cf,true],['focus  ',P.mu],['? ',P.cf,true],['help',P.mu]]
+      ],P.br);
+      const w1=this._pane(30,[['─ ',P.wk],['● worker·1',P.wk,true],[' ',P.wk]],[['hermes ─',P.mu]],[
+        [[' edit src/auth/mod.rs',P.fg]],
+        [[' ',null],['▁▂▃▅▇▆▄▂',P.av],[' out 41 tok/s',P.mu]],
+        [[' T-104 · running 0:12',P.mu]]
+      ],P.wk);
+      const w2=this._pane(30,[['─ ',P.wk],['● worker·2',P.wk,true],[' ',P.wk]],[['minimax ─',P.mu]],[
+        [],
+        [['  ',null],['✓ TASK CONFIRMED',P.cf,true]],
+        [[' T-105 · accepted',P.mu]]
+      ],P.wk);
+      const spacer={h:' '.repeat(32),v:32};
+      const right=[w1[0],w1[1],w1[2],w1[3],w1[4],spacer,w2[0],w2[1],w2[2],w2[3],w2[4]];
+      const bIdle={h:' '.repeat(9),v:9};
+      const bLive=this._chunk([[' ',null],['╺━━━━━╸',P.cf,false,false,'baton-live'],[' ',null]]);
+      const baton=[bIdle,bIdle,bLive,bIdle,bIdle,bIdle,bIdle,bIdle,bLive,bIdle,bIdle];
+      const L=[];
+      for(let i=0;i<11;i++)L.push(this._lineC(this._zip([{h:' ',v:1},cond[i],baton[i],right[i]]),92,P.bc));
+      el.innerHTML=L.join('\n');})();
+
+    // ===== STAGE zoom =====
+    (()=>{const el=R.querySelector('#scr-stage-zoom');if(!el)return;const W2=42;const L=[];
+      const line=(s,fc)=>L.push(this._lineC(this._chunk(s),W2,fc||P.bc));
+      L.push(this._rule('┌','┐',this._chunk([['─ ',P.br],['◆ conductor',P.br,true],[' ',P.br]]),this._chunk([['zoom 1/4 ─',P.br]]),W2,P.br));
+      line([[' plan› full-height conductor output',P.mu]],P.br);
+      line([[' think ',P.mu],['⠿',P.br,false,false,'baton-live'],[' streaming plan…',P.mu]],P.br);
+      L.push(this._rule('├','┤',this._chunk([['─ ',P.bc],['stacked (collapsed)',P.mu],[' ',P.bc]]),this._chunk([]),W2,P.bc));
+      line([[' ',null],['●',P.wk],[' worker·1 hermes',P.fg],['   ',null],['▁▂▃',P.av],[' 41',P.mu]]);
+      line([[' ',null],['●',P.wk],[' worker·2 minimax',P.fg],['  ',null],['✓',P.cf],[' conf',P.mu]]);
+      line([[' ',null],['●',P.wk],[' worker·3 qwen',P.fg],['     ',null],['◔',P.pd],[' queue',P.mu]]);
+      L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W2,P.bc));
+      el.innerHTML=L.join('\n');})();
+
+    // ===== STAGE swap =====
+    (()=>{const el=R.querySelector('#scr-stage-swap');if(!el)return;const L=[];
+      const a=this._pane(18,[['─ ',P.ft],['◆ conductor',P.mu],[' ',P.ft]],[['─',P.ft]],[[[' held in place',P.ft]]],P.ft);
+      const b=this._pane(18,[['─ ',P.cf],['● worker·2',P.cf,true],[' ',P.cf]],[['─',P.cf]],[[['  ',null],[' « lifting » ',P.cf,true,true]]],P.cf);
+      for(let i=0;i<3;i++)L.push(this._lineC(this._zip([{h:' ',v:1},a[i],{h:'  ',v:2},b[i]]),42,P.bc));
+      L.push(' '+this._chunk([[' pick target ',P.mu],['↑↓',P.cf,true],[' · ',P.mu],['Enter',P.cf,true],[' place · ',P.mu],['Esc',P.cf,true],[' cancel',P.mu]]).h);
+      el.innerHTML=L.join('\n');})();
+
+    // ===== SCORE =====
+    (()=>{const el=R.querySelector('#scr-score');if(!el)return;const wds=[17,17,18,17,17];const L=[];
+      const rowK=(cells,lead)=>{const segs=[[' ',null]];cells.forEach((c,i)=>{segs.push([String(c[0]).padEnd(wds[i]),c[1],c[2]]);if(i<4)segs.push(['│',P.ft]);});L.push(this._lineC(this._chunk(segs),W,P.bc));};
+      L.push(this._rule('┌','┐',this._chunk([['─ ',P.br],['SCORE',P.fg,true],[' · task lifecycle ',P.mu]]),this._chunk([['14 tasks ─',P.mu]]),W,P.bc));
+      rowK([['todo · 2',P.mu,true],['assigned · 1',P.mu,true],['in progress · 2',P.wk,true],['review · 1',P.mu,true],['done · 8',P.cf,true]]);
+      L.push(this._rule('├','┼',this._chunk([['─',P.bc]]),this._chunk([]),W,P.bc));
+      rowK([['T-110  edit',P.fg],['T-108 → w3',P.fg],['◐ T-104 → w1',P.wk],['T-102 · gate',P.fg],['✓ T-100',P.cf]]);
+      rowK([['T-111  docs',P.fg],['—',P.ft],['◐ T-106 → w2',P.wk],['—',P.ft],['✓ T-101',P.cf]]);
+      rowK([['—',P.ft],['—',P.ft],['—',P.ft],['—',P.ft],['✓ T-099',P.cf]]);
+      L.push(this._lineC(this._chunk([[' ',null],[' focused: in progress ',P.wk,true,true],['   ',null],['J/K',P.cf,true],[' reorder · ',P.mu],['a',P.cf,true],[' reassign · ',P.mu],['Enter',P.cf,true],[' open pane',P.mu]]),W,P.bc));
+      L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W,P.bc));
+      el.innerHTML=L.join('\n');})();
+
+    // ===== RUNS =====
+    (()=>{const el=R.querySelector('#scr-runs');if(!el)return;const L=[];
+      const line=(s)=>L.push(this._lineC(this._chunk(s),W,P.bc));
+      const rule=(a,b,l,r)=>L.push(this._rule(a,b,this._chunk(l||[]),this._chunk(r||[]),W,P.bc));
+      rule('┌','┐',[['─ ',P.br],['RUNS',P.fg,true],[' · cost ledger ',P.mu]],[['last 30 days ─',P.mu]]);
+      line([]);
+      line([['   SAVED THIS MONTH',P.mu]]);
+      line([['   ',null],['$4,812',P.cf,true],['   ',null],['brain $6,240',P.br],[' → ',P.mu],['worker $1,428',P.wk],['   ',null],['77% cheaper',P.cf]]);
+      line([]);
+      rule('├','┤',[['─ ',P.bc],['USAGE',P.fg,true],[' ',P.bc]],[['▁ low → █ high ─',P.mu]]);
+      line([['   dispatches/day  ',P.mu],['▂▃▅▇▆▄▅▇█▆▅▃▄▆▇▅▄▆▇█▆▅▄▃▅▆▇▆▅▃',P.av]]);
+      line([['   cost/day        ',P.mu],['▁▂▂▃▂▁▂▃▄▃▂▂▃▂▁▂▃▄▃▂▁▂▃▂▁▂▂▃▂▁',P.br]]);
+      rule('├','┤',[['─ ',P.bc],['LEDGER',P.fg,true],[' ',P.bc]],[['/ search · f filter ─',P.mu]]);
+      const led=(t,d,ex,exc,model,mc,task,cost)=>line([['   ',null],[t.padEnd(6),P.ft],[d.padEnd(7),P.mu],[ex,exc],['  ',null],[model.padEnd(11),mc],[task.padEnd(9),P.fg],[cost,P.mu]]);
+      line([['   ',null],['TIME  ',P.faint||P.ft],['DUR    ',P.ft],['EXIT ',P.ft],['MODEL      ',P.ft],['TASK     ',P.ft],['COST',P.ft]]);
+      led('2m','0:12','[0]',P.avail||P.av,'hermes',P.wk,'T-104','$0.004');
+      led('5m','0:31','[0]',P.av,'minimax',P.wk,'T-105','$0.006');
+      led('8m','0:08','[1]',P.fl,'qwen-coder',P.wk,'T-106','$0.003');
+      led('12m','1:04','[0]',P.av,'claude',P.br,'T-plan','$0.180');
+      line([['   ',null],[' / ',P.cf,true,true],['docker________',P.fg],['  3 matches · fuzzy',P.mu]]);
+      L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W,P.bc));
+      el.innerHTML=L.join('\n');})();
+  }
+
+  _miniCard(title,tc,badge,bc2,lines,fc){return this._pane(27,[['─ ',fc],[title,tc,true],[' ',fc]],[[badge+' ',bc2],['─',fc]],lines,fc);}
+
+  _stateCard(label,lc,W2,tl,rows,fc){const P=this._pal();const L=[];L.push(this._rule('┌','┐',this._chunk([['─ ',fc]].concat(tl)),this._chunk([]),W2,fc));for(const r of rows)L.push(this._lineC(this._chunk(r),W2,fc));L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W2,fc));return '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)"><div style="padding:8px 12px;font-size:11px;letter-spacing:.1em;color:'+lc+';border-bottom:1px solid var(--border)">'+label+'</div><pre style="margin:0;padding:12px;font-size:11px;line-height:1.55;background:var(--bg);white-space:pre;overflow-x:auto">'+L.join('\n')+'</pre></div>';}
+
+  _fillStates(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const W2=32;
+    const spin=(t)=>[[' ',null],['⠿',P.br,false,false,'baton-live'],[' '+t,P.mu]];
+    const put=(id,arr)=>{const el=R.querySelector(id);if(el)el.innerHTML=arr.map(s=>this._stateCard(s.l,s.c,W2,s.tl,s.rows,s.fc||P.bc)).join('');};
+    put('#states-home',[
+      {l:'EMPTY',c:P.mu,tl:[['home',P.fg,true],[' ',P.bc]],rows:[[],[['   No sessions on the shelf.',P.mu]],[['   Press ',P.mu],['n',P.cf,true],[' to seat one.',P.mu]],[]]},
+      {l:'LOADING',c:P.mu,tl:[['home',P.fg,true],[' ',P.bc]],rows:[[],spin('scanning PATH for harnesses…'),[['   found 4 / 6',P.ft]],[]]},
+      {l:'ERROR',c:P.fl,tl:[['home',P.fl,true],[' ',P.fl]],rows:[[],[['   ',null],['✕',P.fl],[' theme.ron parse error',P.fg]],[['   line 12 · using default',P.mu]],[['   ',null],['R',P.cf,true],[' reload config',P.mu]]],fc:P.fl},
+      {l:'CONDUCTOR DOWN',c:P.fl,tl:[['home',P.fg,true],[' ',P.bc]],rows:[[],[['   hotfix-4821  ',P.mu],['✕ dead',P.fl]],[['   held 0:47 · ',P.mu],['R',P.cf,true],[' recover',P.mu]],[]]},
+    ]);
+    put('#states-stage',[
+      {l:'EMPTY',c:P.mu,tl:[['stage',P.fg,true],[' ',P.bc]],rows:[[],[['   No panes yet.',P.mu]],[['   ',null],['n',P.cf,true],[' spawn a conductor',P.mu]],[]]},
+      {l:'LOADING',c:P.mu,tl:[['stage',P.fg,true],[' ',P.bc]],rows:[[],spin('attaching PTY…'),[['   0:00 · pty/3 ready',P.ft]],[]]},
+      {l:'ERROR',c:P.fl,tl:[['stage',P.fl,true],[' ',P.fl]],rows:[[],[['   ',null],['✕',P.fl],[' worker·2 PTY spawn failed',P.fg]],[['   minimax not on PATH',P.mu]],[['   ',null],['R',P.cf,true],[' retry · ',P.mu],['s',P.cf,true],[' swap harness',P.mu]]],fc:P.fl},
+      {l:'CONDUCTOR DOWN',c:P.fl,tl:[['stage',P.fg,true],[' ',P.bc]],rows:[[],[['   ',null],['⏻',P.fl,false,false,'down-breath'],[' CONDUCTOR DOWN 0:38',P.fl]],[['   workers holding · ',P.mu],['R',P.cf,true],[' recover',P.mu]],[]]},
+    ]);
+    put('#states-score',[
+      {l:'EMPTY',c:P.mu,tl:[['score',P.fg,true],[' ',P.bc]],rows:[[],[['   Board is empty.',P.mu]],[['   Ask the conductor to plan.',P.mu]],[]]},
+      {l:'LOADING',c:P.mu,tl:[['score',P.fg,true],[' ',P.bc]],rows:[[],spin('syncing task graph…'),[['   14 tasks',P.ft]],[]]},
+      {l:'ERROR',c:P.fl,tl:[['score',P.fl,true],[' ',P.fl]],rows:[[],[['   ',null],['✕',P.fl],[' task store unreachable',P.fg]],[['   showing last snapshot',P.mu]],[['   ',null],['R',P.cf,true],[' resync',P.mu]]],fc:P.fl},
+      {l:'CONDUCTOR DOWN',c:P.fl,tl:[['score',P.fg,true],[' ',P.bc]],rows:[[],[['   ',null],['⏻',P.fl,false,false,'down-breath'],[' planning paused',P.fl]],[['   assigned tasks continue',P.mu]],[]]},
+    ]);
+    put('#states-runs',[
+      {l:'EMPTY',c:P.mu,tl:[['runs',P.fg,true],[' ',P.bc]],rows:[[],[['   No runs recorded yet.',P.mu]],[['   Savings appear after run 1.',P.mu]],[]]},
+      {l:'LOADING',c:P.mu,tl:[['runs',P.fg,true],[' ',P.bc]],rows:[[],spin('aggregating ledger…'),[['   30d · 1,204 dispatches',P.ft]],[]]},
+      {l:'ERROR',c:P.fl,tl:[['runs',P.fl,true],[' ',P.fl]],rows:[[],[['   ',null],['✕',P.fl],[' ledger read error',P.fg]],[['   db locked · retrying',P.mu]],[['   ',null],['R',P.cf,true],[' retry now',P.mu]]],fc:P.fl},
+      {l:'CONDUCTOR DOWN',c:P.fl,tl:[['runs',P.fg,true],[' ',P.bc]],rows:[[],[['   ',null],['⏻',P.fl,false,false,'down-breath'],[' metering paused',P.fl]],[['   totals frozen · ',P.mu],['R',P.cf,true],[' resume',P.mu]],[]]},
+    ]);
+  }
+
+  _fillBaton(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const el=R.querySelector('#baton-frames');if(!el)return;
+    const N=12,L=[];
+    for(let f=0;f<=6;f++){const s=f*2;const cells=[];for(let i=0;i<N;i++){
+      if(i===s)cells.push(['▓',P.cf]);else if(i===s+1)cells.push(['▒',P.br]);else if(i===s+2)cells.push(['░',P.br]);else cells.push(['─',P.ft]);}
+      const row=[['F'+f+'  ',P.mu],['◆ ',P.br,true]].concat(cells).concat([[' ●',P.wk,true]]);
+      L.push('<span>'+this._chunk(row).h+'</span>');
+    }
+    el.innerHTML=L.join('\n');
+  }
+  _fillConfirm(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;
+    const live=R.querySelector('#confirm-live');
+    if(live){live.innerHTML=this._chunk([[' ├─ ',P.ft],['T-105 migrate refresh flow',P.fg],['    ',null]]).h+'<span class="stamp" style="color:var(--confirmed);font-weight:700;border-bottom:2px solid var(--confirmed);padding-bottom:1px">✓ TASK CONFIRMED</span>';}
+    const fr=R.querySelector('#confirm-frames');
+    if(fr){const L=[];
+      L.push('<span>'+this._chunk([['F0  ',P.mu],['◔ T-105 dispatched · pending',P.pd]]).h+'</span>');
+      L.push('<span>'+this._chunk([['F1  ',P.mu],[' T-105  CONFIRMED ',P.cf,true,true],['   ← 1-frame reverse flash',P.ft]]).h+'</span>');
+      L.push('<span>'+this._chunk([['F2  ',P.mu],['✓ TASK CONFIRMED',P.cf,true],['   ← stamps in, 1.9→1',P.ft]]).h+'</span>');
+      L.push('<span>'+this._chunk([['F3  ',P.mu],['✓ confirmed',P.cf],['        accepted · 0:00',P.ft]]).h+'</span>');
+      fr.innerHTML=L.join('\n');}
+  }
+  _fillDown(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const el=R.querySelector('#down-live');if(!el)return;const W2=32;const L=[];
+    const line=(s)=>L.push(this._lineC(this._chunk(s),W2,P.fl));
+    L.push(this._rule('┌','┐',this._chunk([['─ ',P.fl],['◆ conductor',P.mu,true],[' ',P.fl]]),this._chunk([['⏻ down ─',P.fl]]),W2,P.fl));
+    line([]);
+    line([['   ',null],['⏻',P.fl,true,false,'down-breath'],['  CONDUCTOR DOWN',P.fl,true]]);
+    line([['   process exited · signal 9',P.mu]]);
+    line([['   elapsed ',P.mu],['0:38',P.fg]]);
+    line([]);
+    line([['   workers holding last state',P.mu]]);
+    line([['   press ',P.mu],['R',P.cf,true],[' to recover ',P.mu],['↺',P.cf]]);
+    line([]);
+    L.push(this._rule('└','┘',this._chunk([]),this._chunk([]),W2,P.fl));
+    el.innerHTML=L.join('\n');
+  }
+  _fillTiers(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const el=R.querySelector('#tiers');if(!el)return;
+    const sample=(segs)=>'<pre style="margin:8px 0 0;font-size:12px;line-height:1.6;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:9px 11px;white-space:pre;overflow-x:auto">'+this._chunk(segs).h+'</pre>';
+    const card=(t,d,s)=>'<div style="border:1px solid var(--border);border-radius:8px;padding:16px 18px;background:var(--surface)"><div style="font-size:13px;font-weight:700;color:var(--fg)">'+t+'</div><p style="margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--muted)">'+d+'</p>'+s+'</div>';
+    el.innerHTML=[
+      card('Truecolor · 24-bit','The full palette. Every semantic slot is its exact hex; baton gradients and sparklines bloom.',sample([['◆ ',P.br,true],['conductor  ',P.fg],['✓ ',P.cf],['dispatched  ',P.mu],['● ',P.wk],['▁▂▃▅▇',P.av]])),
+      card('256-color · ANSI cube','Falls to the nearest cube/greyscale index from the token sheet. Hierarchy fully intact.',sample([['◆ ',P.br,true],['conductor  ',P.fg],['✓ ',P.cf],['dispatched  ',P.mu],['● ',P.wk],['▁▂▃▅▇',P.av]])),
+      card('16-color / monochrome','Color drops out. Bold, reverse-video, glyphs and layout carry every state. This is the floor — and it still works.',sample([['◆ ',null,true],['conductor  ',null],[' CONFIRMED ',null,true,true],['  ',null],['● ',null,true],['worker',null]])),
+      card('Reduced motion · &lt;80×24','Motion freezes to static equivalents. Below the minimum viewport, everything yields to a resize prompt.',sample([['  terminal ',P.mu],['64×20',P.fl],[' — need ',P.mu],['80×24',P.cf]])),
+    ].join('');
+  }
+  _fillStatus(){
+    const P=this._pal(),R=this.rootRef.current;if(!R)return;const el=R.querySelector('#statusbars');if(!el)return;
+    const bar=(mode,keys)=>{const segs=[[' '+mode+' ',P.br,true,true],['  ',null]].concat(keys);return '<span>'+this._chunk(segs).h+'</span>';};
+    const k=(key,label)=>[[key,P.cf,true],[' '+label+'   ',P.mu]];
+    const flat=(arr)=>arr.reduce((a,b)=>a.concat(b),[]);
+    el.innerHTML=[
+      bar('HOME · NORMAL',flat([k('n','new'),k('Enter','reattach'),k('d','delete'),k('x','dismiss dead'),k('?','help')])),
+      bar('STAGE · NORMAL',flat([k('n','new'),k('z','zoom'),k('s','swap'),k('tab','focus'),k('|','split'),k('q','detach')])),
+      bar('SCORE · NORMAL',flat([k('h/l','column'),k('j/k','card'),k('J/K','reorder'),k('Enter','open'),k('a','assign')])),
+      bar('RUNS · NORMAL',flat([k('/','search'),k('f','filter'),k('e','export'),k('g','group'),k('r','range')])),
+    ].join('\n');
+  }
+  componentDidUpdate() { this._apply(); }
+
+  _fillTokens() {
+    const rows = [
+      ['bg.base','house lights / deepest','#0a0c11','233','#15110c','234','#050c07','232'],
+      ['bg.surface','panel fill','#10131b','234','#1d1710','235','#08130c','233'],
+      ['bg.overlay','floating pane / modal','#171b26','235','#282016','236','#0c1c12','234'],
+      ['border.dim','inactive pane frame','#262c3a','238','#3d3122','238','#164a29','22'],
+      ['border.active','focused pane frame','#39425a','240','#5a4630','240','#1f6b3a','28'],
+      ['fg.default','80% of all text','#c4cad6','251','#e9ddc7','223','#48f57a','83'],
+      ['fg.muted','metadata / labels','#727b8f','244','#9a8a6c','137','#279c4b','35'],
+      ['fg.faint','disabled / hint keys','#454c60','240','#5f5238','58','#155f2e','22'],
+      ['brain','◆ conductor accent','#5ad1c8','80','#d7a355','179','#a9ffc3','157'],
+      ['worker','● bench accent','#8ea2ff','111','#cf8148','173','#48f57a','83'],
+      ['confirmed','✓ TASK CONFIRMED','#e6b450','179','#a9bd63','107','#d6ffe2','195'],
+      ['pending','◔ queued / assigned','#8a93a6','245','#8f7d5c','137','#279c4b','35'],
+      ['failed','✕ dead / error','#e07a80','174','#d1704a','167','#b6ff54','154'],
+      ['available','harness on PATH','#6fd08c','114','#b3c56a','107','#7dff9e','120'],
+      ['unavailable','not resolved','#565e70','242','#6a5c42','101','#155f2e','22'],
+      ['selection','reverse-video bg','#1c2740','237','#33270f','237','#0f3d22','22'],
+    ];
+    const swatch = (hex) => `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;margin-right:6px;background:${hex};border:1px solid rgba(255,255,255,.12)"></span>`;
+    const html = rows.map((r,i)=>`
+      <tr style="border-top:1px solid var(--border);background:${i%2?'transparent':'color-mix(in oklab,var(--surface) 55%,transparent)'}">
+        <td style="padding:9px 14px;font-weight:700;white-space:nowrap">${r[0]}</td>
+        <td style="padding:9px 10px;color:var(--muted);white-space:nowrap">${r[1]}</td>
+        <td style="padding:9px 10px;white-space:nowrap">${swatch(r[2])}<span style="color:var(--muted)">${r[2]}</span></td>
+        <td style="padding:9px 10px;color:var(--faint)">${r[3]}</td>
+        <td style="padding:9px 10px;white-space:nowrap">${swatch(r[4])}<span style="color:var(--muted)">${r[4]}</span></td>
+        <td style="padding:9px 10px;color:var(--faint)">${r[5]}</td>
+        <td style="padding:9px 10px;white-space:nowrap">${swatch(r[6])}<span style="color:var(--muted)">${r[6]}</span></td>
+        <td style="padding:9px 10px;color:var(--faint)">${r[7]}</td>
+      </tr>`).join('');
+    const tb = this.rootRef.current && this.rootRef.current.querySelector('#tokens tbody');
+    if (tb) tb.innerHTML = html;
+  }
+
+  _fillGlyphs() {
+    const rows = [
+      ['conductor / brain','◆','nf-md-brain','(*) or [C]','var(--brain)'],
+      ['worker · seated','●','nf-cod-server_process','[w]','var(--worker)'],
+      ['worker · idle seat','○','nf-cod-circle_outline','( )','var(--muted)'],
+      ['baton filament','╺━╸','box-drawing (native)','->','var(--confirmed)'],
+      ['output pulse','⠿','braille (native)','~','var(--brain)'],
+      ['task confirmed','✓','nf-fa-check','[x] / OK','var(--confirmed)'],
+      ['queued / pending','◔','nf-md-timer_sand','... / o','var(--pending)'],
+      ['in progress','◐','nf-md-progress_clock','>> ','var(--worker)'],
+      ['failed / dead','✕','nf-fa-times','X','var(--failed)'],
+      ['conductor down','⏻','nf-md-power_sleep','DOWN','var(--failed)'],
+      ['detached (durable)','⊘','nf-md-lan_disconnect','~/~','var(--muted)'],
+      ['available on PATH','●','nf-fa-check_circle','+','var(--avail)'],
+      ['unavailable','○','nf-fa-circle_o','-','var(--unavail)'],
+      ['durable session','⏻','nf-md-content_save_move','[S]','var(--fg)'],
+      ['recovery hint','↺','nf-md-restore','R','var(--confirmed)'],
+      ['sparkline / rate','▁▂▃▅▇','block elements (native)','.:|','var(--avail)'],
+    ];
+    const html = rows.map((r,i)=>`
+      <tr style="border-top:1px solid var(--border);background:${i%2?'transparent':'color-mix(in oklab,var(--surface) 55%,transparent)'}">
+        <td style="padding:9px 16px;white-space:nowrap;color:var(--fg)">${r[0]}</td>
+        <td style="padding:9px 10px;font-size:16px;color:${r[4]}">${r[1]}</td>
+        <td style="padding:9px 10px;color:var(--muted)">${r[2]}</td>
+        <td style="padding:9px 10px;color:var(--faint)">${r[3]}</td>
+        <td style="padding:9px 10px;font-size:15px;color:${r[4]}">${r[1]}</td>
+      </tr>`).join('');
+    const tb = this.rootRef.current && this.rootRef.current.querySelector('#type tbody');
+    if (tb) tb.innerHTML = html;
+  }
+
+  renderVals() {
+    return {
+      rootRef: this.rootRef,
+      motionLabel: this.state.motion === 'full' ? '◐ motion: full' : '◑ motion: reduced',
+      setNocturne: () => this.setState({ theme: 'nocturne' }),
+      setEmber: () => this.setState({ theme: 'ember' }),
+      setPhosphor: () => this.setState({ theme: 'phosphor' }),
+      toggleMotion: () => this.setState(s => ({ motion: s.motion === 'full' ? 'reduced' : 'full' })),
+      replayConfirm: () => { const el = this.rootRef.current && this.rootRef.current.querySelector('#confirm-live'); if (el) { const h = el.innerHTML; el.innerHTML = ''; void el.offsetWidth; el.innerHTML = h; } },
+    };
+  }
+}
+</script>
+</body>
+</html>
