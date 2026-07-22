@@ -15,7 +15,7 @@ ship-log entries are part of finishing an issue.*
 
 | Issue | In plain words | Status | Branch |
 |---|---|---|---|
-| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | 👀 | `issue-16-research` |
+| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ✅ | merged (PR #18) |
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ⬜ *merge FIRST* | — |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
@@ -127,6 +127,7 @@ for schemas, `insta` for UI snapshots. The exact commands to drive Claude,
 Codex, OpenCode, Hermes and pi headlessly were verified against the real
 binaries on this machine, not blog posts. No code was written. This unblocks
 #3–#8 and #11; each got a comment naming what binds it.
+> **Review verdict (Claude, 2026-07-22): ACCEPT — contract satisfied; crate versions spot-checked against crates.io, all exact. Merged as PR #18.**
 
 ### 2026-07-22 — Program setup (Claude Code)
 The V1 plan is now real: spec, workflow, new visual identity docs, and 12
