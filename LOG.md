@@ -15,7 +15,7 @@ ship-log entries are part of finishing an issue.*
 
 | Issue | In plain words | Status | Branch |
 |---|---|---|---|
-| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ⬜ | — |
+| [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | 👀 | `issue-16-research` |
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ⬜ *merge FIRST* | — |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
@@ -117,6 +117,16 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-22 — Foundations research, issue #16 (Claude Code)
+Every big technical choice for V1 is now decided and written down in one
+place (`docs/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md`),
+so the build issues don't each re-argue them: official MCP SDK for the new
+server, plain `git` commands for worktrees, `backon` for retries, `schemars`
+for schemas, `insta` for UI snapshots. The exact commands to drive Claude,
+Codex, OpenCode, Hermes and pi headlessly were verified against the real
+binaries on this machine, not blog posts. No code was written. This unblocks
+#3–#8 and #11; each got a comment naming what binds it.
 
 ### 2026-07-22 — Program setup (Claude Code)
 The V1 plan is now real: spec, workflow, new visual identity docs, and 12
