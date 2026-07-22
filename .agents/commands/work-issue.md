@@ -21,6 +21,11 @@ You are the **implementer** in the pi-orchestra multi-agent workflow
    deviation from the contract explicitly.
 9. Append a dated entry to `progress.md` (actor: code-puppy) in the same
    branch before the final push.
+10. Update `LOG.md` in the same branch: set the issue's row to 👀 with the
+    branch name, and add a ship-log entry at the top of the Ship log
+    section — 2-4 plain-English sentences a non-engineer can follow: what
+    pi-orchestra can do now that it couldn't before, what you did NOT do,
+    and what this unblocks.
 
 Never: work multiple issues in one branch, push to `main`, touch files
 outside allowed paths, or mark a check passed without running it.

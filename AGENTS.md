@@ -55,5 +55,9 @@ cargo build --release --locked
 - Keep files focused; prefer new modules over growing a file past ~600 lines.
 - Update `progress.md` (append a dated entry) and the issue (evidence per
   acceptance check) before you finish.
+- Update `LOG.md` (the human's dashboard) whenever an issue changes state:
+  implementers set 👀 + branch and write a plain-English ship-log entry;
+  reviewers set 🧪 (or back to 🔨 with what must be fixed) and append a
+  one-line verdict under the entry. Never delete ship-log history.
 - Secrets: `GH_TOKEN` from env only; never write tokens into files, code,
   or logs.
