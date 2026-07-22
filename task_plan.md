@@ -18,27 +18,29 @@ the TUI wears the new visual identity.
 The epic issue on GitHub tracks live status; this table is the plan of
 record. (Issue numbers are filled in as issues are created.)
 
-| # | Work item | Depends on |
+| Issue | Work item | Depends on |
 |---|---|---|
-| E | EPIC: V1 Universal Delegation launch | — |
-| 1 | Harness auto-discovery → `~/.orchestra/harnesses.json` | — |
-| 2 | Capability probe suite + `orc doctor` honest report | 1 |
-| 3 | Task contract v2 (acceptance-driven schema + enforcement) | — |
-| 4 | Universal worker adapter (any probed harness as worker) | 2 |
-| 5 | Rate-limit-aware spawning (quota guard v2, per-harness concurrency) | 2 |
-| 6 | `orch_*` control surface: normalized CLI verbs + MCP server | 3 |
-| 7 | Trigger grammar in hosted panes (PTY detect + renderer highlight) | — |
-| 8 | Standalone integrations v2: Claude Code skill/hook + Codex block | 6 |
-| 9 | Worktree isolation hardening + independent review + final report | 3 |
-| 10 | Single-harness mode (honest degradation + sequential self-review) | 2, 4 |
-| 11 | Visual identity v1: three themes + glyph register + baton spec | — |
-| 12 | README + positioning revamp for V1 launch | most of 1–11 |
+| [#15](https://github.com/Legend101Zz/Agent-orchestra/issues/15) | EPIC: V1 Universal Delegation launch | — |
+| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | V1-1 Harness auto-discovery → `~/.orchestra/harnesses.json` | — |
+| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | V1-2 Capability probe suite + `orc doctor` honest report | #3 |
+| [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | V1-3 Task contract v2 (acceptance-driven schema + enforcement) | — |
+| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | V1-4 Universal worker adapter (any probed harness as worker) | #4 |
+| [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | V1-5 Rate-limit-aware spawning (quota guard v2, concurrency caps) | #4 |
+| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 |
+| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 |
+| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
+| [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
+
+**Parallel-safe starting set (no deps, disjoint paths): #3, #5, #9, #13.**
 
 ## Phase status
 
 - [x] V1 spec written and approved direction (2026-07-22)
 - [x] Workflow, AGENTS.md, templates, design docs committed
-- [ ] Issues created on GitHub (epic + 12)
+- [x] Issues created on GitHub: epic #15, tasks #3–#14 (2026-07-22)
 - [ ] Issues 1–11 implemented, reviewed, merged (tracked on the epic)
 - [ ] V1 launch: README revamp, screenshots/gifs re-recorded in new identity
 
