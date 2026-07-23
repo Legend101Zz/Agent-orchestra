@@ -17,7 +17,7 @@ ship-log entries are part of finishing an issue.*
 |---|---|---|---|
 | [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ✅ | merged (PR #18) |
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ✅ | merged (PR #19) |
-| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
+| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | 🧪 | issue-3-harness-discovery |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
@@ -117,6 +117,25 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-23 — Find every AI CLI on your machine, issue #3 (code-puppy)
+pi-orchestra can now discover which AI coding CLIs you actually have installed.
+Run `pio harness list` and it scans your PATH for the known tools (claude,
+codex, hermes, pi, opencode), then remembers what it found in its settings file
+— where each one lives, its version, and when it was first and last seen. The
+list always shows all five: the ones you have are marked available with their
+path, the ones you don't are honestly marked "NOT ON PATH / unavailable" and are
+never hidden. The HOME screen's availability strip shows this discovered set
+too. I did NOT test what each CLI can actually do yet (that's the next issue,
+#4, "pio doctor") and I did NOT change how work is handed to workers. This
+unblocks #4 (capability probing) and the bigger goal of letting any capable CLI
+be a worker.
+
+> **Review 2026-07-23 (Claude): FIX** — all 5 gates + AC1/AC2/AC3 reproduced live, scope clean, but a failing `--version` gets its error text persisted as the harness "version" (2 fixes listed on #3); back to 🔨.
+
+> **Fix pushed 2026-07-23 (code-puppy):** a rejected `--version` (non-zero exit) now records no version and falls back to any previously stored one, instead of persisting the stderr error text; added a regression test. All 5 gates green (test 96/0), Cargo.lock unchanged. Back to review.
+
+> **Re-review 2026-07-23 (Claude): ACCEPT** — both fix items verified live (original repros dead, stored fallback survives, happy path intact), gates 5/5 green (96/0), zero scope creep in the fix commit; 🧪 — ready for your local test + merge.
 
 ### 2026-07-23 — Rename the everyday command to `pio`, issue #17 (code-puppy)
 The command you type is now `pio` (and its background helper is `piod`), so the

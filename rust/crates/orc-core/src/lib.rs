@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod bench;
 pub mod control;
+pub mod discovery;
 pub mod dispatch;
 pub mod inbox;
 pub mod metrics;

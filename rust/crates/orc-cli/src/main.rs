@@ -8,6 +8,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::load_harness_registry;
 use orc_core::control::{self, LaunchOptions};
+use orc_core::discovery;
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
 use orc_core::quota;
 use orc_core::registry::list_runs;
@@ -189,6 +190,11 @@ enum Commands {
     Adapter {
         #[command(subcommand)]
         command: AdapterCommand,
+    },
+    /// Discover known coding harnesses on PATH and show the registry.
+    Harness {
+        #[command(subcommand)]
+        command: HarnessCommand,
     },
     /// Maintain the durable session task board.
     Task {
@@ -388,6 +394,15 @@ enum DispatchCommand {
 #[derive(Debug, Subcommand)]
 enum AdapterCommand {
     /// List configured harness capabilities without invoking a provider.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum HarnessCommand {
+    /// Scan PATH for known harnesses, persist discovery, and list all of them.
     List {
         #[arg(long)]
         json: bool,
@@ -643,6 +658,34 @@ fn dispatch_adapter(command: AdapterCommand) -> Result<i32> {
                         executable,
                     );
                     println!("    {}", adapter.degradation);
+                }
+            }
+            Ok(0)
+        }
+    }
+}
+
+fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
+    match command {
+        HarnessCommand::List { json } => {
+            let harnesses = discovery::discover(true)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&harnesses)?);
+            } else {
+                for harness in &harnesses {
+                    if harness.available {
+                        println!(
+                            "{:<10} on PATH · available     {}",
+                            harness.name,
+                            harness.path.as_deref().unwrap_or("?"),
+                        );
+                        println!(
+                            "    {}",
+                            harness.version.as_deref().unwrap_or("version unknown")
+                        );
+                    } else {
+                        println!("{:<10} NOT ON PATH · unavailable", harness.name);
+                    }
                 }
             }
             Ok(0)
@@ -917,6 +960,7 @@ fn dispatch(command: Commands) -> Result<i32> {
         }
         Commands::Dispatch { command } => dispatch_dispatch(command),
         Commands::Adapter { command } => dispatch_adapter(command),
+        Commands::Harness { command } => dispatch_harness(command),
         Commands::Task { command } => dispatch_task(command),
         Commands::Daemon { command } => match command {
             DaemonCommand::Status { json } => daemon::status(json),

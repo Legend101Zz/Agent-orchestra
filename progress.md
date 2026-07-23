@@ -410,3 +410,91 @@
   (PR #19) + "start the parallel set" note; task_plan.md order note updated.
 - Next: parallel-safe set #3 / #5 / #9 / #13, one puppy terminal each,
   branching from fresh main (now includes the rename).
+
+## Session — 2026-07-23 (code-puppy): issue #3 harness auto-discovery
+- Branch `issue-3-harness-discovery` off fresh `main` (5a2ca74, post-#17-merge).
+  Implemented V1-1: scan PATH for the extensible known set
+  [claude, codex, hermes, pi, opencode] and persist an additive per-harness
+  record (path, cheap version, first_seen, last_seen) in
+  `~/.orchestra/harnesses.json`; surface it in `pio harness list` and the HOME
+  availability strip.
+- Design honored the fact that harnesses.json was ALREADY owned by
+  bench.rs::HarnessRegistry. Extended it ADDITIVELY: new `DiscoveredHarness`
+  struct + `#[serde(default)] discovered: BTreeMap<String,DiscoveredHarness>`
+  field, both with `#[serde(flatten)] extra` so unknown fields at every layer
+  round-trip untouched. Nothing existing was renamed or moved.
+- New module orc-core/src/discovery.rs: `KNOWN_HARNESSES`, `discover(probe)`
+  (scan + bounded `--version` probe via the now-`pub(crate)`
+  quota::command_output_with_timeout, no duplicate timeout logic; additive
+  upsert = first_seen set once, missing harnesses never deleted), and
+  read-only `present_current()` for the strip. CLI got `pio harness list
+  [--json]` mirroring `adapter list`.
+- orc-app change kept to the availability-strip feature only: added a
+  `discovered` field to HomeData, populated once on entry in
+  BenchClient::home() via the READ-ONLY present_current() (respects the crate
+  invariant "never write registry files" — discover() which writes lives only
+  in the CLI), and rendered a "DISCOVERED ON PATH" block. No other screen or
+  daemon/proto code touched (those are out of allowed paths).
+- Tests (all 4 ACs): orc-cli/tests/harness_cli.rs — hermetic PATH with 3/5
+  fake harness scripts proves all five are listed (found w/ paths, missing
+  marked unavailable) [AC1] and a fixture-seeded registry proves additive
+  round-trip (unknown fields at top/app/discovered layers survive, first_seen
+  preserved, path/last_seen/version refreshed) [AC2]; orc-app HOME snapshot
+  updated + new pure `availability_lines_render_discovered_section` unit test
+  [AC3]; three orc-core discovery unit tests. tools/fixtures/
+  discovered-harnesses.json added as the AC2 fixture.
+- All five gates green on Rust 1.97 (brew) from rust/: fmt / clippy (0
+  warnings, no allow-flags) / test 95-0 (was 89, +6) / doc / release build
+  --locked. Cargo.lock unchanged. Live smoke test of the release `pio harness
+  ` (+ --json) confirmed human output and that only found harnesses are
+  persisted. One clarification noted on the issue: the orc-app edit touches
+  HomeData + home() as the minimal plumbing to feed the strip (still
+  "availability strip only" in spirit; no other UI/logic changed).
+- Branch pushed; PR left for Mrigesh to open (per the #17 pattern).
+
+## Session — 2026-07-23 (Claude reviewer): adversarial review of issue #3
+- Reviewed `issue-3-harness-discovery` (PR #20) against the #3 contract on the
+  SSD checkout. All 5 gates re-run green (95 tests, 0 failed); AC1/AC2/AC3
+  reproduced live with the release `pio` against hermetic ORC_HOME/PATH
+  fixtures; scope, deps (none), and additive JSON behavior all verified clean.
+- Adversarial probes found one honesty bug: `probe_version` ignores exit
+  status, so a failing `--version` persists its stderr error text as the
+  recorded version (demonstrated twice, incl. a truncated sh error path).
+  Verdict: **FIX** (2-item list on #3) — status back to 🔨, LOG.md verdict
+  line pushed @ c428cc7.
+- Next: code-puppy applies the fix + regression test (prompt 3), then
+  re-review (prompt 4).
+
+## Session — 2026-07-23 (code-puppy): issue #3 review fixes (round 2)
+- Pulled the reviewer's commits (c428cc7 FIX verdict, 7625f2d progress) onto
+  `issue-3-harness-discovery` before touching anything.
+- Fix 1 (discovery.rs): `probe_version` now returns `None` unless
+  `output.status.success()`, so a harness that rejects `--version` (non-zero
+  exit) never has its stderr error text recorded as a "version". The existing
+  `.or(stored_version)` fallback in `discover()` then keeps any prior version.
+  Updated the fn doc to state the exit-status guarantee.
+- Fix 2 (harness_cli.rs): added `failing_harness` helper (exit 1 + noisy
+  stderr) and regression test
+  `failed_version_probe_records_no_version_and_keeps_stored_fallback`: a
+  fresh failing harness (claude) records NO version and shows "version
+  unknown"; a failing harness with a seeded stored version (pi) keeps the
+  stored fallback; and the registry file contains zero leaked error text.
+- Verified live with the release binary: claude (fails --version, no stored)
+  -> `version unknown` + `claude.version = None` persisted; pi (fails
+  --version, stored `pi 0.0.1-preexisting`) -> stored fallback shown and
+  kept; `grep -c "unrecognized option" harnesses.json` = 0.
+- All 5 gates green from rust/: fmt / clippy (0 warnings) / test 96-0 (+1) /
+  doc / release build --locked. Cargo.lock unchanged. No new features, no
+  scope change — only the two numbered review items. Pushed; per-item
+  evidence commented on #3; LOG.md #3 back to review + ship-log fix note.
+
+
+## Session — 2026-07-23 (Claude reviewer): re-review of issue #3 → ACCEPT
+- Verified only the 2-item fix list @ 8cdbc2d: exit-status guard in
+  `probe_version` kills both original repros (no error text shown or
+  persisted; stored version survives a failed probe; happy path intact),
+  and the new end-to-end regression test covers exactly that failure mode.
+- Gates 5/5 green (96 tests, 0 failed, +1). Creep check on
+  `7625f2d..8cdbc2d`: only the 4 expected files, no scope drift.
+- Verdict ACCEPT commented on #3; LOG.md → 🧪. Next: Mrigesh local test +
+  merge (prompt 5), which unblocks #4 (`pio doctor`).

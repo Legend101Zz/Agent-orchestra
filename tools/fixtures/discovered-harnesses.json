@@ -1,0 +1,32 @@
+{
+  "harnesses": {
+    "hermes": {
+      "command": "hermes",
+      "args": ["--tui"],
+      "resume_args": [],
+      "roles": ["brain", "worker"],
+      "adapter": "hermes",
+      "dispatch_args": ["-z"],
+      "dispatch_uses_stdin": false,
+      "dispatch_timeout_sec": 120
+    }
+  },
+  "default_workers": ["hermes"],
+  "max_parallel_workers": 3,
+  "app": {
+    "leader_key": "ctrl-g",
+    "reduced_motion": false,
+    "theme": "ember",
+    "future_app_field": "kept-app-value"
+  },
+  "discovered": {
+    "pi": {
+      "path": "/pre/existing/bin/pi",
+      "version": "pi 0.0.1-preexisting",
+      "first_seen": "2026-01-01T00:00:00+00:00",
+      "last_seen": "2026-01-02T00:00:00+00:00",
+      "unknown_capability_field": ["steer", "exact_usage"]
+    }
+  },
+  "future_top_level_field": { "kept": true, "count": 42 }
+}
