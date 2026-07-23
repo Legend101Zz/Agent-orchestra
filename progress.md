@@ -488,6 +488,45 @@
   scope change — only the two numbered review items. Pushed; per-item
   evidence commented on #3; LOG.md #3 back to review + ship-log fix note.
 
+## Session — 2026-07-23 (code-puppy): issue #4 — capability probe + `pio doctor`
+- Started fresh from `main` (issue #3 / V1-1 confirmed merged, PR #20, so the
+  `Depends on: V1-1` gate is satisfied); branch `issue-4-capability-probe`.
+- New `orc-core/src/probe.rs`: probes each known harness by inspecting what its
+  binary *advertises* — a bounded `--help` corpus scanned for the §2
+  invocation-table flags (decision record binding: capabilities from probes,
+  never version pins). Eight capabilities in spec order; seven are
+  token-detected, `cancellation` is derived (orchestrator-provided: available
+  iff the harness can be driven non-interactively). Case-sensitive word-set
+  matching so short flags (`-p`) never collide with substrings (`--provider`).
+- Cache keyed on `BinaryIdentity{path,mtime_ns,size}` stored under
+  `discovered.<name>.probe` in `harnesses.json` with a `probed_at` stamp;
+  identity mismatch (reinstall/upgrade) or `--refresh` forces a re-probe.
+  Capabilities persist as string slugs so past/future pio tolerate unknown
+  ones (`typed()` drops them) — same additive contract as the rest of the file.
+- Downstream honesty API `probed_capabilities`/`has_capability` reads the
+  persisted set only, so a harness whose probe failed (or was never probed)
+  offers nothing (AC4). Discovery and doctor compose without clobbering:
+  discovery refreshes version/last_seen, doctor refreshes the probe.
+- `pio doctor` (+ `--json`, `--refresh`) in orc-cli renders the spec report
+  table (display · installed/unavailable · role · summary) plus a
+  glyph-paired capability matrix (color never load-bearing alone). Role is
+  derived: conductor = resume + structured output; worker = non-interactive.
+- Tests: 6 unit (`probe.rs`) + 3 orc-core integration (`tests/probe.rs`, AC4)
+  + 4 orc-cli e2e (`tests/doctor_cli.rs`, AC1/AC2/AC3) against hermetic
+  PATH/ORC_HOME fixtures whose fakes use only shell builtins. New fixture
+  `tools/fixtures/probed-harnesses.json` carries unknown fields at every
+  additive layer (incl. an unknown capability slug) to prove round-trip.
+- All 5 gates green from rust/ on Rust 1.97 (brew): fmt / clippy (0 warnings,
+  no allow-flags) / test (all pass, +13) / doc / release build --locked.
+  Cargo.lock unchanged (no new deps). Live smoke with the release `pio
+  doctor` confirmed the table, unavailable rows, and probe serialization.
+- Stayed strictly inside the contract's allowed paths (orc-core/, orc-cli/,
+  tools/fixtures/). Documented deviation: the report surfaces a harness's
+  last-known probe for a harness that has since left PATH (marked
+  unavailable), mirroring how #3 keeps last-known version/seen; exact
+  per-harness signal strings remain the decision record's open Q1 (feeds #7).
+- Next: Claude adversarial review of the branch (prompt 2).
+
 
 ## Session — 2026-07-23 (Claude reviewer): re-review of issue #3 → ACCEPT
 - Verified only the 2-item fix list @ 8cdbc2d: exit-status guard in

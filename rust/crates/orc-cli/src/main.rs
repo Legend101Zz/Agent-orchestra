@@ -10,6 +10,7 @@ use orc_core::bench::load_harness_registry;
 use orc_core::control::{self, LaunchOptions};
 use orc_core::discovery;
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
+use orc_core::probe::{self, Capability, DoctorOptions};
 use orc_core::quota;
 use orc_core::registry::list_runs;
 use orc_core::runner::Mode;
@@ -195,6 +196,14 @@ enum Commands {
     Harness {
         #[command(subcommand)]
         command: HarnessCommand,
+    },
+    /// Probe each harness's capabilities and print an honest capability report.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+        /// Re-probe every available harness, ignoring the binary-identity cache.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Maintain the durable session task board.
     Task {
@@ -693,6 +702,53 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
     }
 }
 
+fn dispatch_doctor(json: bool, refresh: bool) -> Result<i32> {
+    let reports = probe::doctor(&DoctorOptions { refresh })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(0);
+    }
+    let width = reports
+        .iter()
+        .map(|report| report.display.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(11);
+    // Spec report table: display, status, role, one-line capability summary.
+    for report in &reports {
+        if report.available {
+            println!(
+                "{:<width$}  installed     {:<11}  {}",
+                report.display, report.role, report.summary,
+            );
+        } else {
+            println!("{:<width$}  unavailable", report.display);
+        }
+    }
+    // Capability matrix: every probed capability, glyph + label, never hidden.
+    println!("\nCAPABILITIES (\u{2713} probed available \u{b7} \u{2717} not advertised)");
+    print!("{:<width$} ", "");
+    for capability in Capability::ALL {
+        print!(" {:<7}", capability.label());
+    }
+    println!();
+    for report in &reports {
+        print!("{:<width$} ", report.display);
+        for capability in Capability::ALL {
+            let mark = if !report.available {
+                "\u{2013}" // en dash: not applicable (harness unavailable)
+            } else if report.capabilities.get(capability.slug()).copied() == Some(true) {
+                "\u{2713}" // check
+            } else {
+                "\u{2717}" // cross
+            };
+            print!(" {mark:<7}");
+        }
+        println!();
+    }
+    Ok(0)
+}
+
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
@@ -961,6 +1017,7 @@ fn dispatch(command: Commands) -> Result<i32> {
         Commands::Dispatch { command } => dispatch_dispatch(command),
         Commands::Adapter { command } => dispatch_adapter(command),
         Commands::Harness { command } => dispatch_harness(command),
+        Commands::Doctor { json, refresh } => dispatch_doctor(json, refresh),
         Commands::Task { command } => dispatch_task(command),
         Commands::Daemon { command } => match command {
             DaemonCommand::Status { json } => daemon::status(json),

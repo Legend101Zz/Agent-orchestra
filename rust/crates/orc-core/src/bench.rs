@@ -86,6 +86,13 @@ pub struct DiscoveredHarness {
     pub first_seen: String,
     /// ISO-8601 timestamp of the most recent successful discovery.
     pub last_seen: String,
+    /// Cached capability probe result, set by `pio doctor` (issue #4).
+    ///
+    /// Independent of discovery's version probe: discovery refreshes
+    /// path/version/last_seen and leaves this untouched, while `pio doctor`
+    /// refreshes this and leaves version/first_seen untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<crate::probe::CapabilityProbe>,
     /// Unknown future fields, preserved verbatim across round-trips.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
