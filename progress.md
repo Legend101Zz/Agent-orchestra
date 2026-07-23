@@ -543,3 +543,23 @@
   closed, epic #15 box ticked. LOG.md #3 → ✅, task_plan.md row + order
   note updated: #4 (`pio doctor`) unblocked and recommended next (+ #5 in
   parallel), #13 deferred until #4's strip changes land.
+
+## Session — 2026-07-24 (Claude reviewer): #4 review → ACCEPT, then merged
+- Adversarial review of `issue-4-capability-probe` (7fbe493) against the #4
+  contract. Corrected a stale-local-`main` trap first: `git diff main` showed
+  a bogus 36-file diff until re-based on `origin/main` (real change = 1 commit,
+  11 files, allowed paths only).
+- Re-ran all 5 gates green (MSRV 1.91.1). Reproduced AC1/AC2/AC4 live on
+  hermetic fixtures + real harnesses; confirmed `discovered.<name>.probe`
+  serialization, spec-shape table with `unavailable` rows + glyph/en-dash
+  matrix, and that failed/never-probed/unknown harnesses offer nothing
+  downstream. One non-blocking deviation: cache keys on path/mtime/**size**,
+  not AC3's literal "hash" — demonstrated a contrived equal-size + exact-ns-mtime
+  content swap that evades re-probe, but every real reinstall bumps ns-mtime;
+  satisfies #16's "path + mtime/hash". Verdict ACCEPT commented on #4, LOG.md → 🧪,
+  pushed 88ecd20.
+- Mrigesh tested locally (./install.sh from branch) and merged PR #21 → main
+  @ 6edd213; issue #4 closed. LOG.md #4 → ✅ (moved to merged cluster),
+  #6/#7 unblocked, #12 dep trimmed to #6; task_plan.md row + order note
+  updated. Next: #5 (task contracts) — the remaining bottleneck (gates
+  #8/#11); #6 is the natural follow-on to #4.
