@@ -23,7 +23,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#15](https://github.com/Legend101Zz/Agent-orchestra/issues/15) | EPIC: V1 Universal Delegation launch | — |
 | [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | V1-0 Foundations research: crates + prior art (Claude session, no code) | — |
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | V1-0b Rename user-facing CLI `orc` → `pio` (`orcd` → `piod`) | — (✅ merged 2026-07-23, PR #19) |
-| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | V1-1 Harness auto-discovery → `~/.orchestra/harnesses.json` | — |
+| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | V1-1 Harness auto-discovery → `~/.orchestra/harnesses.json` | — (✅ merged 2026-07-23, PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | V1-2 Capability probe suite + `pio doctor` honest report | #3 |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | V1-3 Task contract v2 (acceptance-driven schema + enforcement) | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | V1-4 Universal worker adapter (any probed harness as worker) | #4 |
@@ -36,9 +36,10 @@ record. (Issue numbers are filled in as issues are created.)
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 
-**Order: #16 (research) and #17 (rename) are both merged (2026-07-23), so
-the rename-conflict hazard is gone. Now run the parallel-safe set: #3, #5,
-#9, #13 — each from fresh `main`.**
+**Order: #16, #17 and #3 are merged (2026-07-23). #4 is unblocked and on
+the critical path (gates #6/#7/#12); #5 is the other bottleneck (gates
+#8/#11). Parallel-safe now: #4, #5, #9 — each from fresh `main`; start #13
+after #4 lands to avoid TUI merge conflicts.**
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).

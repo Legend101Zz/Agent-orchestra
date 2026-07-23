@@ -17,7 +17,7 @@ ship-log entries are part of finishing an issue.*
 |---|---|---|---|
 | [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ✅ | merged (PR #18) |
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ✅ | merged (PR #19) |
-| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | 🧪 | issue-3-harness-discovery |
+| [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
@@ -30,9 +30,10 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *needs #4, #6* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#16 and #17 are merged (2026-07-23) — the rename landed, so parallel work
-is now safe. Start the parallel set: #3, #5, #9, #13 (prompt 1, one puppy
-terminal per issue; each branches from fresh `main`).**
+**#3 merged (2026-07-23, PR #20) — discovery is in, so #4 (`pio doctor`)
+is unblocked and next: it gates #6/#7/#12. Run #4 (and #5 in a parallel
+terminal if you want — the other bottleneck, gates #8/#11). #9/#13 anytime;
+start #13 after #4's strip changes land to avoid TUI merge pain.**
 
 ## Prompts you run
 

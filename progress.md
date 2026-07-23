@@ -498,3 +498,9 @@
   `7625f2d..8cdbc2d`: only the 4 expected files, no scope drift.
 - Verdict ACCEPT commented on #3; LOG.md → 🧪. Next: Mrigesh local test +
   merge (prompt 5), which unblocks #4 (`pio doctor`).
+
+## Session — 2026-07-23 (Claude reviewer): #3 merged, dashboards to ✅
+- Mrigesh tested locally and merged PR #20 → main @ 2a95b51; issue #3
+  closed, epic #15 box ticked. LOG.md #3 → ✅, task_plan.md row + order
+  note updated: #4 (`pio doctor`) unblocked and recommended next (+ #5 in
+  parallel), #13 deferred until #4's strip changes land.
