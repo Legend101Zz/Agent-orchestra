@@ -464,3 +464,27 @@
   line pushed @ c428cc7.
 - Next: code-puppy applies the fix + regression test (prompt 3), then
   re-review (prompt 4).
+
+## Session — 2026-07-23 (code-puppy): issue #3 review fixes (round 2)
+- Pulled the reviewer's commits (c428cc7 FIX verdict, 7625f2d progress) onto
+  `issue-3-harness-discovery` before touching anything.
+- Fix 1 (discovery.rs): `probe_version` now returns `None` unless
+  `output.status.success()`, so a harness that rejects `--version` (non-zero
+  exit) never has its stderr error text recorded as a "version". The existing
+  `.or(stored_version)` fallback in `discover()` then keeps any prior version.
+  Updated the fn doc to state the exit-status guarantee.
+- Fix 2 (harness_cli.rs): added `failing_harness` helper (exit 1 + noisy
+  stderr) and regression test
+  `failed_version_probe_records_no_version_and_keeps_stored_fallback`: a
+  fresh failing harness (claude) records NO version and shows "version
+  unknown"; a failing harness with a seeded stored version (pi) keeps the
+  stored fallback; and the registry file contains zero leaked error text.
+- Verified live with the release binary: claude (fails --version, no stored)
+  -> `version unknown` + `claude.version = None` persisted; pi (fails
+  --version, stored `pi 0.0.1-preexisting`) -> stored fallback shown and
+  kept; `grep -c "unrecognized option" harnesses.json` = 0.
+- All 5 gates green from rust/: fmt / clippy (0 warnings) / test 96-0 (+1) /
+  doc / release build --locked. Cargo.lock unchanged. No new features, no
+  scope change — only the two numbered review items. Pushed; per-item
+  evidence commented on #3; LOG.md #3 back to review + ship-log fix note.
+

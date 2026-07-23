@@ -152,10 +152,20 @@ fn record_discovery(
 }
 
 /// Best-effort cheap version string from one bounded `--version` invocation.
+///
+/// Returns `None` unless the command exits successfully, so a harness that
+/// rejects `--version` (non-zero exit) never has its stderr error text recorded
+/// as a "version". This upholds the module contract ("a version is recorded
+/// only when the executable actually printed one") and AGENTS.md's invariant
+/// ("never claim a capability that wasn't probed"). On `None`, [`discover`]
+/// falls back to any previously stored version rather than overwriting it.
 fn probe_version(path: &Path) -> Option<String> {
     let mut command = Command::new(path);
     command.arg("--version");
     let output = command_output_with_timeout(&mut command, VERSION_PROBE_TIMEOUT).ok()??;
+    if !output.status.success() {
+        return None;
+    }
     let raw = if output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()) {
         output.stdout
     } else {
