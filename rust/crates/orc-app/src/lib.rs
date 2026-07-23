@@ -23,6 +23,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use orc_core::discovery::{self, HarnessDiscovery};
 use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
     PaneSnapshot, ServerResponse, SessionSummary, TaskSummary, TerminalColor,
@@ -144,6 +145,8 @@ pub struct HomeData {
     pub sessions: Vec<SessionSummary>,
     /// Configured brain and worker choices.
     pub harnesses: Vec<HarnessSummary>,
+    /// PATH-discovered known harnesses (read-only view of the registry).
+    pub discovered: Vec<HarnessDiscovery>,
     /// Preselected but editable worker choices.
     pub default_workers: Vec<String>,
     /// Configured worker bound.
@@ -332,6 +335,7 @@ impl BenchClient {
             } => Ok(HomeData {
                 sessions,
                 harnesses,
+                discovered: discovery::present_current(),
                 default_workers,
                 max_parallel_workers,
                 theme,
@@ -979,9 +983,14 @@ fn render_home_masthead(
 
 /// One line per configured harness: PATH resolution and verified dispatch.
 ///
-/// The daemon computed these from the adapter summary; nothing here contacts
-/// a provider.
-fn availability_lines(harnesses: &[HarnessSummary], theme: Theme) -> Vec<Line<'static>> {
+/// The daemon computed the configured summaries from the adapter summary;
+/// nothing here contacts a provider. The DISCOVERED block is a read-only,
+/// local PATH probe of the additive registry (never written from the client).
+fn availability_lines(
+    harnesses: &[HarnessSummary],
+    discovered: &[HarnessDiscovery],
+    theme: Theme,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(
         "  BENCH AVAILABILITY",
         Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
@@ -1016,6 +1025,39 @@ fn availability_lines(harnesses: &[HarnessSummary], theme: Theme) -> Vec<Line<'s
             ),
             Span::styled(status.to_owned(), style),
         ]));
+    }
+    if !discovered.is_empty() {
+        lines.push(Line::styled(
+            "  DISCOVERED ON PATH",
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ));
+        let name_width = discovered
+            .iter()
+            .map(|harness| harness.name.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(6);
+        for harness in discovered {
+            let (status, style) = if harness.available {
+                let label = harness.version.as_deref().map_or_else(
+                    || "on PATH · available".to_owned(),
+                    |version| format!("on PATH · {version}"),
+                );
+                (label, Style::default().fg(theme.focus))
+            } else {
+                (
+                    "NOT ON PATH · unavailable".to_owned(),
+                    Style::default().fg(theme.attention),
+                )
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<name_width$}  ", harness.name),
+                    Style::default().fg(theme.text),
+                ),
+                Span::styled(status, style),
+            ]));
+        }
     }
     lines
 }
@@ -1244,7 +1286,11 @@ fn render_home(
             ]),
             Line::default(),
         ]);
-        lines.extend(availability_lines(&state.data.harnesses, theme));
+        lines.extend(availability_lines(
+            &state.data.harnesses,
+            &state.data.discovered,
+            theme,
+        ));
     } else {
         lines.push(Line::styled(
             "  SESSION SHELF",
@@ -1280,7 +1326,11 @@ fn render_home(
         lines.push(Line::default());
         lines.push(Line::styled("  enter attach · n new session · V RUNS", dim));
         lines.push(Line::default());
-        lines.extend(availability_lines(&state.data.harnesses, theme));
+        lines.extend(availability_lines(
+            &state.data.harnesses,
+            &state.data.discovered,
+            theme,
+        ));
     }
     if !state.message.is_empty() {
         lines.push(Line::default());
@@ -2651,10 +2701,10 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::{
-        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HomeData, HomeState, LeaderAction, LeaderKey,
-        RawRouter, ScoreState, ShellState, ShellView, StageState, Theme, ThemeName, baton_profile,
-        render_help, render_home, render_score, render_shell, render_stage, route_raw_mouse,
-        route_runs_key, score_mouse,
+        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HarnessDiscovery, HomeData, HomeState,
+        LeaderAction, LeaderKey, RawRouter, ScoreState, ShellState, ShellView, StageState, Theme,
+        ThemeName, baton_profile, render_help, render_home, render_score, render_shell,
+        render_stage, route_raw_mouse, route_runs_key, score_mouse,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2701,6 +2751,7 @@ mod tests {
                 data: HomeData {
                     sessions: Vec::new(),
                     harnesses: Vec::new(),
+                    discovered: Vec::new(),
                     default_workers: Vec::new(),
                     max_parallel_workers: 3,
                     theme: "ember".to_owned(),
@@ -2972,6 +3023,24 @@ mod tests {
                                 dispatch_verified: false,
                             },
                         ],
+                        discovered: vec![
+                            HarnessDiscovery {
+                                name: "codex".to_owned(),
+                                available: true,
+                                path: Some("/usr/local/bin/codex".to_owned()),
+                                version: Some("codex 1.2.3".to_owned()),
+                                first_seen: Some("2026-07-01T00:00:00+00:00".to_owned()),
+                                last_seen: Some("2026-07-23T00:00:00+00:00".to_owned()),
+                            },
+                            HarnessDiscovery {
+                                name: "opencode".to_owned(),
+                                available: false,
+                                path: None,
+                                version: None,
+                                first_seen: None,
+                                last_seen: None,
+                            },
+                        ],
                         default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
                         max_parallel_workers: 3,
                         theme: "ember".to_owned(),
@@ -3009,6 +3078,12 @@ mod tests {
                 assert!(text.contains("dispatch verified"));
                 assert!(text.contains("interactive pane only"));
                 assert!(text.contains("NOT ON PATH"));
+                // The DISCOVERED strip reflects the auto-discovery registry.
+                // Guarded to the tall layout where the whole strip is on-screen.
+                if height >= 44 {
+                    assert!(text.contains("DISCOVERED ON PATH"));
+                    assert!(text.contains("codex 1.2.3"));
+                }
                 terminal
                     .draw(|frame| {
                         render_home(frame, &state, Theme::from(theme_name), None, "ctrl-b")
@@ -3068,6 +3143,53 @@ mod tests {
     }
 
     #[test]
+    fn availability_lines_render_discovered_section() {
+        let harnesses = vec![HarnessSummary {
+            id: "hermes".to_owned(),
+            roles: vec!["worker".to_owned()],
+            resumable: false,
+            available: true,
+            dispatch_verified: true,
+        }];
+        let discovered = vec![
+            HarnessDiscovery {
+                name: "pi".to_owned(),
+                available: true,
+                path: Some("/usr/local/bin/pi".to_owned()),
+                version: Some("pi 0.9.1".to_owned()),
+                first_seen: Some("2026-07-01T00:00:00+00:00".to_owned()),
+                last_seen: Some("2026-07-23T00:00:00+00:00".to_owned()),
+            },
+            HarnessDiscovery {
+                name: "opencode".to_owned(),
+                available: false,
+                path: None,
+                version: None,
+                first_seen: None,
+                last_seen: None,
+            },
+        ];
+        let text =
+            super::availability_lines(&harnesses, &discovered, Theme::from(ThemeName::Ember))
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        // The configured availability strip is still rendered first.
+        assert!(text.contains("BENCH AVAILABILITY"));
+        // The discovered section reflects the registry and hides nothing.
+        assert!(text.contains("DISCOVERED ON PATH"));
+        assert!(text.contains("on PATH · pi 0.9.1"));
+        assert!(text.contains("opencode"));
+        assert!(text.contains("NOT ON PATH · unavailable"));
+    }
+
+    #[test]
     fn cwd_step_shows_choices_and_validates_the_path_before_launch() {
         let data = HomeData {
             sessions: Vec::new(),
@@ -3087,6 +3209,7 @@ mod tests {
                     dispatch_verified: true,
                 },
             ],
+            discovered: Vec::new(),
             default_workers: vec!["hermes".to_owned()],
             max_parallel_workers: 3,
             theme: "ember".to_owned(),
@@ -3136,6 +3259,7 @@ mod tests {
         let data = HomeData {
             sessions: Vec::new(),
             harnesses: Vec::new(),
+            discovered: Vec::new(),
             default_workers: Vec::new(),
             max_parallel_workers: 3,
             theme: "ember".to_owned(),

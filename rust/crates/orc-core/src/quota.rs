@@ -65,7 +65,7 @@ pub fn load_config() -> Config {
         .unwrap_or_default()
 }
 
-fn command_output_with_timeout(
+pub(crate) fn command_output_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<Option<Output>> {

@@ -410,3 +410,44 @@
   (PR #19) + "start the parallel set" note; task_plan.md order note updated.
 - Next: parallel-safe set #3 / #5 / #9 / #13, one puppy terminal each,
   branching from fresh main (now includes the rename).
+
+## Session — 2026-07-23 (code-puppy): issue #3 harness auto-discovery
+- Branch `issue-3-harness-discovery` off fresh `main` (5a2ca74, post-#17-merge).
+  Implemented V1-1: scan PATH for the extensible known set
+  [claude, codex, hermes, pi, opencode] and persist an additive per-harness
+  record (path, cheap version, first_seen, last_seen) in
+  `~/.orchestra/harnesses.json`; surface it in `pio harness list` and the HOME
+  availability strip.
+- Design honored the fact that harnesses.json was ALREADY owned by
+  bench.rs::HarnessRegistry. Extended it ADDITIVELY: new `DiscoveredHarness`
+  struct + `#[serde(default)] discovered: BTreeMap<String,DiscoveredHarness>`
+  field, both with `#[serde(flatten)] extra` so unknown fields at every layer
+  round-trip untouched. Nothing existing was renamed or moved.
+- New module orc-core/src/discovery.rs: `KNOWN_HARNESSES`, `discover(probe)`
+  (scan + bounded `--version` probe via the now-`pub(crate)`
+  quota::command_output_with_timeout, no duplicate timeout logic; additive
+  upsert = first_seen set once, missing harnesses never deleted), and
+  read-only `present_current()` for the strip. CLI got `pio harness list
+  [--json]` mirroring `adapter list`.
+- orc-app change kept to the availability-strip feature only: added a
+  `discovered` field to HomeData, populated once on entry in
+  BenchClient::home() via the READ-ONLY present_current() (respects the crate
+  invariant "never write registry files" — discover() which writes lives only
+  in the CLI), and rendered a "DISCOVERED ON PATH" block. No other screen or
+  daemon/proto code touched (those are out of allowed paths).
+- Tests (all 4 ACs): orc-cli/tests/harness_cli.rs — hermetic PATH with 3/5
+  fake harness scripts proves all five are listed (found w/ paths, missing
+  marked unavailable) [AC1] and a fixture-seeded registry proves additive
+  round-trip (unknown fields at top/app/discovered layers survive, first_seen
+  preserved, path/last_seen/version refreshed) [AC2]; orc-app HOME snapshot
+  updated + new pure `availability_lines_render_discovered_section` unit test
+  [AC3]; three orc-core discovery unit tests. tools/fixtures/
+  discovered-harnesses.json added as the AC2 fixture.
+- All five gates green on Rust 1.97 (brew) from rust/: fmt / clippy (0
+  warnings, no allow-flags) / test 95-0 (was 89, +6) / doc / release build
+  --locked. Cargo.lock unchanged. Live smoke test of the release `pio harness
+  ` (+ --json) confirmed human output and that only found harnesses are
+  persisted. One clarification noted on the issue: the orc-app edit touches
+  HomeData + home() as the minimal plumbing to feed the strip (still
+  "availability strip only" in spirit; no other UI/logic changed).
+- Branch pushed; PR left for Mrigesh to open (per the #17 pattern).

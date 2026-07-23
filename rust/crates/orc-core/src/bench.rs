@@ -68,6 +68,29 @@ pub fn dispatch_timeout_for(config: &HarnessConfig) -> u64 {
     }
 }
 
+/// One PATH-discovered harness executable recorded by auto-discovery.
+///
+/// These records are additive: discovery upserts by harness name, sets
+/// [`Self::first_seen`] once, and refreshes [`Self::last_seen`] and
+/// [`Self::path`] whenever the executable is resolved again. Records for
+/// harnesses that later leave `PATH` are never deleted, so the registry keeps
+/// an honest "last known" history. Unknown fields are preserved on round-trip.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DiscoveredHarness {
+    /// Absolute executable path recorded at the most recent successful probe.
+    pub path: String,
+    /// Cheap version string when one was obtainable, else absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// ISO-8601 timestamp of the first time this harness was discovered.
+    pub first_seen: String,
+    /// ISO-8601 timestamp of the most recent successful discovery.
+    pub last_seen: String,
+    /// Unknown future fields, preserved verbatim across round-trips.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// Client behavior stored alongside the harness registry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BenchAppConfig {
@@ -104,6 +127,12 @@ pub struct HarnessRegistry {
     pub max_parallel_workers: usize,
     /// Client behavior and theme.
     pub app: BenchAppConfig,
+    /// PATH-discovered harness executables keyed by harness name.
+    ///
+    /// Populated by `pio harness list` (auto-discovery). Additive and
+    /// independent of [`Self::harnesses`], which stays user-editable.
+    #[serde(default)]
+    pub discovered: BTreeMap<String, DiscoveredHarness>,
     /// Unknown future fields.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -179,6 +208,7 @@ impl Default for HarnessRegistry {
             default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
             max_parallel_workers: 3,
             app: BenchAppConfig::default(),
+            discovered: BTreeMap::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -312,6 +342,22 @@ pub fn load_harness_registry() -> Result<HarnessRegistry> {
 /// Atomically write the harness registry while preserving additive fields.
 pub fn write_harness_registry(registry: &HarnessRegistry) -> Result<()> {
     atomic_write_json(&harness_path(), registry)
+}
+
+/// Read the harness registry without creating the defaults file when absent.
+///
+/// Returns `Ok(None)` when `harnesses.json` does not yet exist, so read-only
+/// callers (such as the HOME availability strip) never trigger the
+/// default-writing side effect of [`load_harness_registry`].
+pub fn read_harness_registry() -> Result<Option<HarnessRegistry>> {
+    let path = harness_path();
+    match fs::read(&path) {
+        Ok(bytes) => Ok(Some(
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?,
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Create a durable session after validating its brain, worker, count, and cwd.
