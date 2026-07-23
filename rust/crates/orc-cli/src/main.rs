@@ -70,7 +70,7 @@ impl From<TaskStatusArg> for TaskStatus {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "orc", about = "pi-orchestra: MiniMax M3 worker delegation")]
+#[command(name = "pio", about = "pi-orchestra: MiniMax M3 worker delegation")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -195,7 +195,7 @@ enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Inspect or restart the per-user orcd daemon.
+    /// Inspect or restart the per-user piod daemon.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -211,7 +211,7 @@ enum DaemonCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Stop and relaunch orcd on the installed build.
+    /// Stop and relaunch piod on the installed build.
     ///
     /// Refuses while live panes exist unless --force, because daemon-owned
     /// PTYs die with the daemon.
@@ -457,7 +457,7 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&tasks)?);
             } else if tasks.is_empty() {
-                println!("no tasks yet — try: orc task add \"first task\" --session <session>");
+                println!("no tasks yet — try: pio task add \"first task\" --session <session>");
             } else {
                 for task in tasks {
                     print_task(&task, false)?;
@@ -606,7 +606,7 @@ fn dispatch_dispatch(command: DispatchCommand) -> Result<i32> {
                 println!("{}", serde_json::to_string_pretty(&records)?);
             } else if records.is_empty() {
                 println!(
-                    "no dispatches yet — try: orc dispatch send <task> <harness> <prompt> --session <session>"
+                    "no dispatches yet — try: pio dispatch send <task> <harness> <prompt> --session <session>"
                 );
             } else {
                 for record in records {
@@ -653,7 +653,7 @@ fn dispatch_adapter(command: AdapterCommand) -> Result<i32> {
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
-            println!("orc {}", orc_proto::BUILD_IDENTIFIER);
+            println!("pio {}", orc_proto::BUILD_IDENTIFIER);
             Ok(0)
         }
         Commands::Run {
@@ -731,7 +731,7 @@ fn dispatch(command: Commands) -> Result<i32> {
             } else {
                 let runs = list_runs(true)?;
                 if runs.is_empty() {
-                    println!("no runs yet — try: orc run \"hello\"");
+                    println!("no runs yet — try: pio run \"hello\"");
                 } else {
                     println!(
                         "{:<38} {:<6} {:<9} {:<20} TASK",
@@ -888,7 +888,7 @@ fn dispatch(command: Commands) -> Result<i32> {
                 ConfigCommand::Get { key } => control::read_config_value()
                     .get(&key)
                     .cloned()
-                    .ok_or_else(|| anyhow!("orc: config key '{key}' is not set"))?,
+                    .ok_or_else(|| anyhow!("pio: config key '{key}' is not set"))?,
                 ConfigCommand::Set { key, value } => control::set_config(&key, &value)?,
             };
             println!("{}", serde_json::to_string_pretty(&config)?);
@@ -900,7 +900,7 @@ fn dispatch(command: Commands) -> Result<i32> {
             Ok(0)
         }
         Commands::Top { theme } => {
-            let current = std::env::current_exe().context("locate orc binary")?;
+            let current = std::env::current_exe().context("locate pio binary")?;
             let sibling = current.with_file_name("pi-orchestra");
             let executable = if sibling.is_file() {
                 sibling

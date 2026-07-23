@@ -16,7 +16,7 @@ ship-log entries are part of finishing an issue.*
 | Issue | In plain words | Status | Branch |
 |---|---|---|---|
 | [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ✅ | merged (PR #18) |
-| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ⬜ *merge FIRST* | — |
+| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | 👀 *merge FIRST* | issue-17-rename-cli-pio |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
@@ -117,6 +117,22 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-23 — Rename the everyday command to `pio`, issue #17 (code-puppy)
+The command you type is now `pio` (and its background helper is `piod`), so the
+tool finally matches the "pi-orchestra" name instead of the old `orc`/`orcd`. If
+you still type the old `orc`, it keeps working but prints a friendly note telling
+you to switch, and the installer backs up your previous command first so nothing
+is lost. The installer, uninstaller, README, shell shortcuts, and both AI skill
+files all speak the new name now, and the built binaries were verified end to end
+(`pio version`, `piod --help`, and a full install/uninstall in a scratch folder).
+I did NOT rename the internal code folders, the `~/.orchestra` data directory, or
+the `ORC_*` settings (those stay for compatibility), and I left one dated
+historical guide (`docs/guide.html`) untouched on purpose. Heads-up for the
+reviewer: on this machine's freshly installed Rust 1.97 the clippy gate trips on
+three pre-existing warnings in files I did not touch (the repo targets Rust 1.91,
+where they don't fire); everything I changed is clippy-clean. This unblocks the
+parallel V1 work (#3, #5, #9, #13) without every branch colliding on the rename.
 
 ### 2026-07-22 — Foundations research, issue #16 (Claude Code)
 Every big technical choice for V1 is now decided and written down in one

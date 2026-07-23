@@ -29,19 +29,19 @@ that workflow first-class:
 ## Architecture
 
 ```text
-pi-orchestra client  ← Unix socket →  orcd  → conductor PTY + worker PTYs
+pi-orchestra client  ← Unix socket →  piod  → conductor PTY + worker PTYs
         HOME / STAGE / SCORE / RUNS   │
                                       └→ ~/.orchestra plain JSON records
-orc run / rpc / task / dispatch / list / quota ─────────────────────┘
+pio run / rpc / task / dispatch / list / quota ─────────────────────┘
 ```
 
 Three binaries, one data directory:
 
 | Binary | Role |
 |---|---|
-| `orcd` | Per-user daemon. Owns the PTYs and durable screen state; panes survive client detach and terminal crashes. |
+| `piod` | Per-user daemon. Owns the PTYs and durable screen state; panes survive client detach and terminal crashes. |
 | `pi-orchestra` | The TUI client: HOME (sessions), STAGE (live panes), SCORE (task board), RUNS (usage ledger). |
-| `orc` | Headless CLI: delegation, task board, dispatch, registry, quota — scriptable from anywhere, including from the brain itself. |
+| `pio` | Headless CLI: delegation, task board, dispatch, registry, quota — scriptable from anywhere, including from the brain itself. |
 
 The daemon starts on demand at `~/.orchestra/orcd.sock` (directory `0700`,
 socket `0600`, bounded attachment, stale-socket safety checks, rotating log).
@@ -93,7 +93,7 @@ cd pi-orchestra
 
 The installer performs a locked release build in an isolated target under
 `~/.local/share/pi-orchestra` (override with `ORC_INSTALL_CARGO_TARGET_DIR`)
-and links `orc`, `orcd`, and `pi-orchestra` into `~/.local/bin`. Existing
+and links `pio`, `piod`, and `pi-orchestra` into `~/.local/bin`. Existing
 commands are backed up before replacement. The marked `~/.zshrc` and AGENTS
 blocks are additive and idempotent. The installer **never** edits
 `~/.pi/agent/*`, `~/.claude/settings.json`, or `~/.codex/config.toml`, and it
@@ -114,8 +114,8 @@ CARGO_TARGET_DIR=/tmp/pi-orchestra-build cargo build --manifest-path rust/Cargo.
 
 ```bash
 source ~/.zshrc                 # reload helpers in an already-open shell
-command -v orc orcd pi-orchestra
-orc version
+command -v pio piod pi-orchestra
+pio version
 pi-orchestra home
 ```
 
@@ -137,7 +137,7 @@ Back on HOME, each shelf card reports pane health — live worker count,
 `CONDUCTOR DOWN` with the `R` recovery hint, or `ALL PANES DEAD` after a
 daemon restart — so a dead session is never a surprise on attach.
 
-Close the client any time with `ctrl-g q`; panes keep running in `orcd`.
+Close the client any time with `ctrl-g q`; panes keep running in `piod`.
 Reattach with:
 
 ```bash
@@ -152,12 +152,12 @@ an `ORC_DELEGATE_HINT`, so the brain knows exactly what it may delegate to.
 The durable path is the task board plus confirmed dispatch:
 
 ```bash
-orc task add "small, reviewable task" --session <session-id> --actor human
-orc task assign T0001 hermes --run <worker-pane> --session <session-id> --actor brain
-orc task start T0001 --session <session-id> --actor brain
-orc dispatch send T0001 hermes "bounded brief" --pane <worker-pane> --session <session-id> --actor brain --json
-orc task review T0001 --session <session-id> --actor human
-orc task move T0001 done --session <session-id> --actor human
+pio task add "small, reviewable task" --session <session-id> --actor human
+pio task assign T0001 hermes --run <worker-pane> --session <session-id> --actor brain
+pio task start T0001 --session <session-id> --actor brain
+pio dispatch send T0001 hermes "bounded brief" --pane <worker-pane> --session <session-id> --actor brain --json
+pio task review T0001 --session <session-id> --actor human
+pio task move T0001 done --session <session-id> --actor human
 ```
 
 Dispatch uses each worker's *locally verified* non-interactive interface
@@ -170,9 +170,9 @@ reattach. No terminal keystrokes are injected.
 ### Isolated tasks and worktrees
 
 ```bash
-orc task add "review parser" --isolate --session <id> --actor brain --json
-orc task diff T0001 --session <id> --json
-orc task merge T0001 --session <id> --actor human --json
+pio task add "review parser" --isolate --session <id> --actor brain --json
+pio task diff T0001 --session <id> --json
+pio task merge T0001 --session <id> --actor human --json
 ```
 
 Isolation creates an owned `orc/<session>/<task>` branch under an owned
@@ -182,16 +182,16 @@ unprovable paths and never auto-resolves merge conflicts.
 ### Verified worker capabilities
 
 ```bash
-orc adapter list        # what this machine can honestly offer
+pio adapter list        # what this machine can honestly offer
 ```
 
 | Harness | Delivery | Steering | Exact usage |
 |---|---|---|---|
 | Hermes | `-z/--oneshot`, verified | — | — |
-| pi / MiniMax-M3 | `-p --no-session`, verified | `orc rpc` follow-ups | when the completed event contains usage |
+| pi / MiniMax-M3 | `-p --no-session`, verified | `pio rpc` follow-ups | when the completed event contains usage |
 | Claude, Codex | interactive pane only | — | — |
 
-`orc adapter list` never contacts a provider; it reports the configured
+`pio adapter list` never contacts a provider; it reports the configured
 executable and the *demonstrated* capability. An entry in the registry is not
 delivery proof. Existing `~/.orchestra/harnesses.json` files are never
 rewritten — add verified `dispatch_args` yourself or leave the worker
@@ -201,18 +201,18 @@ visibly unavailable.
 
 | Goal | Command |
 |---|---|
-| Delegate once | `orc run "task" --brain codex` |
-| Streaming RPC worker | `orc rpc "task" --brain codex` |
-| List / inspect / kill | `orc list` / `orc show <id>` / `orc kill <id>` |
-| Send an RPC follow-up | `orc send <id> "message"` |
-| Retry / reviewed handoff | `orc retry <id>` / `orc handoff <id> "remaining work"` |
-| Usage and savings | `orc stats --json` |
-| MiniMax quota | `orc quota` (exit 0 ok / 2 warn / 3 block / 4 unknown) |
-| Bound a stalled worker | `orc run "task" --idle-timeout 120` |
-| Task board | `orc task add/assign/start/review/move/diff/merge` |
-| Confirmed dispatch | `orc dispatch send …` |
-| Daemon health | `orc daemon status` (exit 0 ok / 3 not running / 5 build mismatch) |
-| Daemon restart | `orc daemon restart` (refuses while panes are live; `--force` lists and kills them) |
+| Delegate once | `pio run "task" --brain codex` |
+| Streaming RPC worker | `pio rpc "task" --brain codex` |
+| List / inspect / kill | `pio list` / `pio show <id>` / `pio kill <id>` |
+| Send an RPC follow-up | `pio send <id> "message"` |
+| Retry / reviewed handoff | `pio retry <id>` / `pio handoff <id> "remaining work"` |
+| Usage and savings | `pio stats --json` |
+| MiniMax quota | `pio quota` (exit 0 ok / 2 warn / 3 block / 4 unknown) |
+| Bound a stalled worker | `pio run "task" --idle-timeout 120` |
+| Task board | `pio task add/assign/start/review/move/diff/merge` |
+| Confirmed dispatch | `pio dispatch send …` |
+| Daemon health | `pio daemon status` (exit 0 ok / 3 not running / 5 build mismatch) |
+| Daemon restart | `pio daemon restart` (refuses while panes are live; `--force` lists and kills them) |
 
 Shell helpers installed by the marked block: `deleg8 "task" /path/to/cwd`
 and `pi-rpc "task"`.
@@ -295,25 +295,25 @@ Release build on an M-series Mac (see `docs/notes/` for raw evidence):
 
 ## Troubleshooting
 
-- **`command not found: orc`** — open a new shell or `source ~/.zshrc`;
+- **`command not found: pio`** — open a new shell or `source ~/.zshrc`;
   confirm `~/.local/bin` is on your PATH.
 - **A worker shows UNAVAILABLE** — its executable is missing or its adapter
-  has no verified `dispatch_args`. Run `orc adapter list` to see exactly
+  has no verified `dispatch_args`. Run `pio adapter list` to see exactly
   what is missing; do not force it.
-- **`orc run` refuses to start** — it requires a working local `pi` with
+- **`pio run` refuses to start** — it requires a working local `pi` with
   `pi --list-models minimax` listing `MiniMax-M3`. Fix pi or use a Bench
   worker instead; don't reach for `--force`.
-- **Quota warnings** — `orc quota` exits 2 (warn) or 3 (block) with an
+- **Quota warnings** — `pio quota` exits 2 (warn) or 3 (block) with an
   `ORC WARNING`/`ORC BLOCKED` line. Blocks honor `--force`, but the message
   must be relayed, not swallowed.
-- **"daemon build X does not match client"** — `orcd` persists across
+- **"daemon build X does not match client"** — `piod` persists across
   installs, so after an update the running daemon may still be the old
-  build. `orc daemon status` shows both builds; detach clients, then
-  `orc daemon restart` (it refuses while live panes exist unless `--force`,
+  build. `pio daemon status` shows both builds; detach clients, then
+  `pio daemon restart` (it refuses while live panes exist unless `--force`,
   and lists exactly what would be lost).
 - **Stuck or stale session** — `pi-orchestra attach` replays daemon state;
-  `orc task list --session <id>` and `orc list` show the durable record.
-  Killing the client never kills panes; killing `orcd` does.
+  `pio task list --session <id>` and `pio list` show the durable record.
+  Killing the client never kills panes; killing `piod` does.
 
 ## Development
 

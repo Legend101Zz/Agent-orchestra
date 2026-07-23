@@ -338,3 +338,44 @@
   researched further; timebox honored.
 - Commented binding decisions on #3-#8 and #11; LOG.md status 👀 + ship-log
   entry. No code, no dependency changes.
+
+## Session — 2026-07-23 (code-puppy): issue #17 rename orc→pio / orcd→piod
+- Branch issue-17-rename-cli-pio off fresh main. Renamed the user-facing CLI
+  to `pio` and the daemon binary to `piod`; the TUI stays `pi-orchestra`.
+- Bin targets: orc-cli/Cargo.toml `orc`→`pio`, orc-daemon/Cargo.toml
+  `orcd`→`piod` (the workspace rust/Cargo.toml has no bin targets, so the
+  rename lives in the crate manifests — both inside allowed paths).
+- Code: clap command names, `pio version` output, all help/hint/error/context
+  strings in orc-cli/src/main.rs and orc-cli/src/daemon.rs. daemon.rs now
+  spawns `piod` (with_file_name/PathBuf) and its pgrep discovery searches
+  `piod` then `orcd` so `pio daemon restart` still finds a daemon started
+  before the rename. orc-daemon/src/main.rs got the piod doc comment plus an
+  explicit `#[command(name = "piod")]`.
+- KEPT deliberately (compat, per the issue): crate names (orc-core…), ORC_*
+  env vars, ORC WARNING/BLOCKED/NOTE markers, ~/.orchestra, and the
+  socket/log filenames orcd.sock/orcd.log — renaming the socket would break
+  the cross-version stale-daemon detection that install.sh's `pio daemon
+  status` relies on, and the issue only allows piod.sock if that keeps working.
+- install.sh: builds/links pio+piod+pi-orchestra, and a new retire_command
+  backs up any prior orc/orcd once then drops a forwarding “renamed to pio”
+  shim. uninstall.sh: removes the new links, removes our shims, restores the
+  backup. Verified live in a throwaway HOME (backup + shim + forward + restore).
+- Docs/integrations: README, codex/AGENTS-block.md, skills/*, shell helpers
+  all say pio/piod now (KEPT tokens preserved). docs/guide.html left as-is:
+  it is a dated historical artifact (“built 2026-07-10”, “Historical v3
+  console reference”) and AGENTS.md says docs retain original labels for
+  auditability; AC#2's gate scopes to help/README/skills only.
+- Tests: retargeted CARGO_BIN_EXE_orc→_pio in 4 suites; extended install.rs
+  for the shim/backup/restore migration; added tests/rename_gate.rs (AC#2
+  grep gate over pio --help + README + skills, neutralizing kept tokens).
+- Gates from rust/: fmt PASS, test PASS (89 passed / 0 failed / 32 suites),
+  doc PASS, release build PASS. clippy: orc-cli/orc-daemon and all new tests
+  are 100% clean; the only failures are 3 PRE-EXISTING lints in untouched
+  files (orc-pty/src/lib.rs:159 while_let_loop, orc-core/src/dispatch.rs:499
+  useless_borrows_in_formatting, orc-tui/src/app.rs:696 collapsible_match)
+  that fire under the freshly-installed clippy 1.97.0 (repo MSRV is 1.91).
+  Not my regressions and out of allowed paths, so left untouched and flagged
+  on the issue.
+- No Rust toolchain existed on this machine; installed via `brew install
+  rust` (1.97.0) behind Walmart proxies to run the gates. Pushed the branch;
+  human will open the PR.

@@ -27,7 +27,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn orc(home: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_orc"))
+    Command::new(env!("CARGO_BIN_EXE_pio"))
         .args(args)
         .env("ORC_HOME", home)
         .output()
