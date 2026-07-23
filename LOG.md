@@ -21,7 +21,7 @@ ship-log entries are part of finishing an issue.*
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | 👀 | issue-4-capability-probe |
+| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | 🧪 | issue-4-capability-probe |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *needs #4* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *needs #4* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *needs #5* | — |
@@ -134,6 +134,8 @@ to those tools yet (that's #6, the universal worker adapter), and the exact
 "rate-limited" wording each tool prints is still to be captured later (feeds
 #7). This unblocks #6, #7, and #12, which all need to know what each harness
 can really do.
+
+> **Review verdict (2026-07-24, Claude): ACCEPT** — all 5 gates re-run green on MSRV 1.91.1; AC1/AC2/AC4 independently reproduced live (fixture probe → `discovered.<name>.probe` serialization, spec-shape table with `unavailable` rows + honest glyph/en-dash matrix, failed/never-probed/unknown harnesses offer nothing downstream); scope clean (allowed paths only, no new deps, Cargo.lock untouched, no dead code/lint-silencing). One non-blocking deviation: the cache keys on path/mtime/**size**, not AC3's literal "hash" — I demonstrated a contrived equal-size + exact-nanosecond-mtime content swap that evades re-probe, but every real reinstall/upgrade bumps ns-mtime (verified), and this satisfies the #16 binding decision's "path + mtime/hash". Second note for V1-4: `probed_capabilities` returns last-known caps for a harness that has left PATH (capability ≠ availability, documented) — dispatch must gate on `locate_executable` separately. Set 🧪 — ready for your local test + merge.
 
 ### 2026-07-23 — Find every AI CLI on your machine, issue #3 (code-puppy)
 pi-orchestra can now discover which AI coding CLIs you actually have installed.
