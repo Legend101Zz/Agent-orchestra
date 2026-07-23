@@ -1,6 +1,6 @@
 # pi-orchestra shell helpers — sourced from ~/.zshrc marked block.
 
-# deleg8: fire-and-forget delegation to pi + MiniMax M3 via orc (registered + quota-gated)
+# deleg8: fire-and-forget delegation to pi + MiniMax M3 via pio (registered + quota-gated)
 # Usage: deleg8 "your task description" [/path/to/cwd]
 deleg8() {
   local task="$1"
@@ -11,10 +11,10 @@ deleg8() {
   fi
   local -a session_args
   [[ -n "${ORC_SESSION:-}" ]] && session_args=(--session "$ORC_SESSION")
-  orc run "$task" --cwd "$cwd" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
+  pio run "$task" --cwd "$cwd" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
 }
 
-# pi-rpc: streaming delegation (JSON-RPC) via orc; Ctrl+C cancels; kill via `orc kill <id>`
+# pi-rpc: streaming delegation (JSON-RPC) via pio; Ctrl+C cancels; kill via `pio kill <id>`
 # Usage: pi-rpc "task"
 pi-rpc() {
   local task="$1"
@@ -24,7 +24,7 @@ pi-rpc() {
   fi
   local -a session_args
   [[ -n "${ORC_SESSION:-}" ]] && session_args=(--session "$ORC_SESSION")
-  orc rpc "$task" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
+  pio rpc "$task" --brain "${ORC_BRAIN:-human}" "${session_args[@]}"
 }
 
 # bench-dispatch: confirmed non-interactive delivery to an offered Bench worker.
@@ -35,6 +35,6 @@ bench-dispatch() {
     echo 'Usage: ORC_SESSION=<id> bench-dispatch <task> <harness> <pane> "brief"' >&2
     return 1
   fi
-  orc dispatch send "$task" "$harness" "$brief" --session "$ORC_SESSION" \
+  pio dispatch send "$task" "$harness" "$brief" --session "$ORC_SESSION" \
     --pane "$pane" --actor "${ORC_ACTOR:-brain}" --json
 }

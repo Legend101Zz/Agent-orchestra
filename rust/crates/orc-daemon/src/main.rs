@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Per-user `orcd` process for durable Bench PTY ownership.
+//! Per-user `piod` process for durable Bench PTY ownership.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -21,7 +21,10 @@ const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const RETAINED_LOGS: usize = 3;
 
 #[derive(Debug, Parser)]
-#[command(about = "Host Bench PTYs behind the per-user Unix socket")]
+#[command(
+    name = "piod",
+    about = "Host Bench PTYs behind the per-user Unix socket"
+)]
 struct Args {
     #[arg(long)]
     socket: Option<PathBuf>,

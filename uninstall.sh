@@ -14,9 +14,26 @@ remove_link() {
   fi
 }
 
-remove_link orc
-remove_link orcd
+# `orc`/`orcd` are forwarding shims after the pio rename (issue #17): remove only
+# our own shim and restore any command we backed up during install.
+RENAME_SHIM_MARK='pi-orchestra-rename-shim'
+remove_shim() {
+  local destination="$HOME/.local/bin/$1"
+  if [ -f "$destination" ] && grep -qF "$RENAME_SHIM_MARK" "$destination" 2>/dev/null; then
+    rm "$destination"
+    if [ -e "$destination.pi-orchestra.bak" ] || [ -L "$destination.pi-orchestra.bak" ]; then
+      mv "$destination.pi-orchestra.bak" "$destination"
+    fi
+  elif [ -e "$destination" ] || [ -L "$destination" ]; then
+    echo "kept non-shim $destination" >&2
+  fi
+}
+
+remove_link pio
+remove_link piod
 remove_link pi-orchestra
+remove_shim orc
+remove_shim orcd
 remove_skill() {
   local name="$1"
   local destination="$HOME/.claude/skills/$name"

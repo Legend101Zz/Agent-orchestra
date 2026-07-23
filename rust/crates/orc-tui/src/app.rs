@@ -692,16 +692,16 @@ impl App {
             }
             MouseEventKind::ScrollDown => self.move_selection(3),
             MouseEventKind::ScrollUp => self.move_selection(-3),
-            MouseEventKind::Down(_) if self.view == View::Dashboard => {
-                if mouse.column >= self.table_area.x
+            MouseEventKind::Down(_)
+                if self.view == View::Dashboard
+                    && mouse.column >= self.table_area.x
                     && mouse.column < self.table_area.right()
                     && mouse.row > self.table_area.y
-                    && mouse.row < self.table_area.bottom()
-                {
-                    let row = self.viewport_start + usize::from(mouse.row - self.table_area.y - 1);
-                    if row < self.rows.len() {
-                        self.selected_row = row;
-                    }
+                    && mouse.row < self.table_area.bottom() =>
+            {
+                let row = self.viewport_start + usize::from(mouse.row - self.table_area.y - 1);
+                if row < self.rows.len() {
+                    self.selected_row = row;
                 }
             }
             _ => {}

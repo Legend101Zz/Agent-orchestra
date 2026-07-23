@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "orc"
+name = "pio"
 path = "src/main.rs"
 
 [dependencies]

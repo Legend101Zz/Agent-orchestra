@@ -7,7 +7,7 @@ case "${1:-}" in
   "") ;;
   -h|--help)
     echo "usage: ./install.sh"
-    echo "builds and installs the Rust orc, orcd, and pi-orchestra binaries"
+    echo "builds and installs the Rust pio, piod, and pi-orchestra binaries"
     exit 0
     ;;
   *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
@@ -38,25 +38,57 @@ install_link() {
   ln -sfn "$target" "$destination"
 }
 
+# `orc`/`orcd` were renamed to `pio`/`piod` (issue #17). Leave a forwarding shim
+# at the old name so existing muscle memory and scripts keep working while
+# nudging toward the new command. A pre-existing command that is not already our
+# shim is backed up once, mirroring install_link.
+RENAME_SHIM_MARK='pi-orchestra-rename-shim'
+retire_command() {
+  local old="$1"
+  local new="$2"
+  local destination="$DEST_DIR/$old"
+  if { [ -e "$destination" ] || [ -L "$destination" ]; } \
+     && ! grep -qF "$RENAME_SHIM_MARK" "$destination" 2>/dev/null \
+     && [ ! -e "$destination.pi-orchestra.bak" ] && [ ! -L "$destination.pi-orchestra.bak" ]; then
+    mv "$destination" "$destination.pi-orchestra.bak"
+    echo "    backed up old $destination"
+  fi
+  # rm first so we never write through a surviving symlink into its target.
+  rm -f "$destination"
+  cat > "$destination" <<EOF
+#!/usr/bin/env bash
+# $RENAME_SHIM_MARK
+# '$old' was renamed to '$new' (pi-orchestra issue #17); forwarding for now.
+echo "pi-orchestra: '$old' is now '$new' — forwarding this call. Please switch to '$new'." >&2
+exec "\$(dirname "\$0")/$new" "\$@"
+EOF
+  chmod +x "$destination"
+  echo "    installed $old → $new shim"
+}
+
 echo "==> command links"
-install_link orc
-install_link orcd
+install_link pio
+install_link piod
 install_link pi-orchestra
 
+echo "==> retiring old orc/orcd names"
+retire_command orc pio
+retire_command orcd piod
+
 echo "==> running daemon check"
-# orcd persists across installs; a daemon on an older build makes clients
+# piod persists across installs; a daemon on an older build makes clients
 # fail their build handshake until it is restarted.
 DAEMON_RC=0
-"$DEST_DIR/orc" daemon status >/dev/null 2>&1 || DAEMON_RC=$?
+"$DEST_DIR/pio" daemon status >/dev/null 2>&1 || DAEMON_RC=$?
 case "$DAEMON_RC" in
-  0) echo "    orcd is running the installed build" ;;
-  3) echo "    orcd is not running (it starts on demand)" ;;
+  0) echo "    piod is running the installed build" ;;
+  3) echo "    piod is not running (it starts on demand)" ;;
   5)
-    echo "    WARNING: the running orcd predates this install."
-    echo "    Detach clients, then run: orc daemon restart"
+    echo "    WARNING: the running daemon predates this install."
+    echo "    Detach clients, then run: pio daemon restart"
     echo "    (live panes die with the daemon; the command lists them first)"
     ;;
-  *) echo "    could not probe orcd (orc daemon status exit $DAEMON_RC)" ;;
+  *) echo "    could not probe the daemon (pio daemon status exit $DAEMON_RC)" ;;
 esac
 
 echo "==> private orchestra data directory"
@@ -131,5 +163,5 @@ fi
 
 echo "==> protected-config checksums"
 shasum -a 256 "$HOME/.pi/agent/settings.json" "$HOME/.claude/settings.json" \
-  "$HOME/.codex/config.toml" "$HOME/.local/bin/orc" 2>/dev/null || true
+  "$HOME/.codex/config.toml" "$HOME/.local/bin/pio" 2>/dev/null || true
 echo "done. Open a new shell or run: source ~/.zshrc"

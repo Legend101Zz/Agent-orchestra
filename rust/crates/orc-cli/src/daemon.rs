@@ -1,4 +1,4 @@
-//! `orc daemon status` and `orc daemon restart` for the per-user `orcd`.
+//! `pio daemon status` and `pio daemon restart` for the per-user `piod`.
 //!
 //! Status must keep working against a daemon running an older build — that is
 //! exactly the situation it exists to diagnose — so this module speaks the
@@ -112,7 +112,7 @@ fn live_panes(panes: &[DaemonPaneStatus]) -> Vec<&DaemonPaneStatus> {
 }
 
 fn print_status(probe: &DaemonProbe, socket: &Path) {
-    println!("orcd: running");
+    println!("piod: running");
     match probe.pid {
         Some(pid) => println!("  pid: {pid}"),
         None => println!("  pid: unknown (daemon predates the status protocol)"),
@@ -145,7 +145,7 @@ fn print_status(probe: &DaemonProbe, socket: &Path) {
     }
     if probe.build != BUILD_IDENTIFIER {
         println!(
-            "  BUILD MISMATCH — detach clients, then run `orc daemon restart` (live panes die with the daemon)"
+            "  BUILD MISMATCH — detach clients, then run `pio daemon restart` (live panes die with the daemon)"
         );
     }
 }
@@ -171,7 +171,7 @@ fn status_json(probe: Option<&DaemonProbe>, socket: &Path) -> serde_json::Value 
     }
 }
 
-/// `orc daemon status`: 0 running+matching, 3 not running, 5 build mismatch.
+/// `pio daemon status`: 0 running+matching, 3 not running, 5 build mismatch.
 pub fn status(json: bool) -> Result<i32> {
     let socket = socket_path();
     let probe = probe(&socket)?;
@@ -183,7 +183,7 @@ pub fn status(json: bool) -> Result<i32> {
     } else if let Some(probe) = &probe {
         print_status(probe, &socket);
     } else {
-        println!("orcd: not running (socket: {})", socket.display());
+        println!("piod: not running (socket: {})", socket.display());
         println!("  client build: {BUILD_IDENTIFIER}");
     }
     Ok(match probe {
@@ -201,19 +201,31 @@ fn pgrep(args: &[&str]) -> Result<Vec<u32>> {
         .collect())
 }
 
-/// Find the orcd owning `socket`; one user may run several isolated daemons.
+/// Daemon process names to search, newest first: the current `piod` and the
+/// pre-rename `orcd`, so restart still works against a daemon that was started
+/// before the rename landed.
+const DAEMON_PROCESS_NAMES: [&str; 2] = ["piod", "orcd"];
+
+/// Find the daemon owning `socket`; one user may run several isolated daemons.
 fn discover_pid(socket: &Path) -> Result<u32> {
     // A daemon started on demand always carries `--socket <path>`.
-    let by_socket = pgrep(&["-f", &format!("orcd .*--socket {}", socket.display())])?;
-    if let [pid] = by_socket.as_slice() {
-        return Ok(*pid);
+    for name in DAEMON_PROCESS_NAMES {
+        let by_socket = pgrep(&["-f", &format!("{name} .*--socket {}", socket.display())])?;
+        if let [pid] = by_socket.as_slice() {
+            return Ok(*pid);
+        }
     }
-    let all = pgrep(&["-x", "orcd"])?;
+    let mut all: Vec<u32> = Vec::new();
+    for name in DAEMON_PROCESS_NAMES {
+        all.extend(pgrep(&["-x", name])?);
+    }
+    all.sort_unstable();
+    all.dedup();
     match all.as_slice() {
         [pid] => Ok(*pid),
-        [] => bail!("could not find the orcd process; stop it manually and rerun"),
+        [] => bail!("could not find the piod process; stop it manually and rerun"),
         pids => bail!(
-            "multiple orcd processes are running ({pids:?}) and none names {} on its command line; stop the right one manually and rerun",
+            "multiple daemon processes are running ({pids:?}) and none names {} on its command line; stop the right one manually and rerun",
             socket.display()
         ),
     }
@@ -223,9 +235,9 @@ fn stop_daemon(pid: u32, socket: &Path) -> Result<()> {
     let killed = Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status()
-        .context("send SIGTERM to orcd")?;
+        .context("send SIGTERM to piod")?;
     if !killed.success() {
-        bail!("kill -TERM {pid} failed; stop orcd manually and rerun");
+        bail!("kill -TERM {pid} failed; stop piod manually and rerun");
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -241,16 +253,16 @@ fn stop_daemon(pid: u32, socket: &Path) -> Result<()> {
             _ => thread::sleep(Duration::from_millis(50)),
         }
     }
-    bail!("orcd (pid {pid}) did not exit within 5 seconds; stop it manually and rerun")
+    bail!("piod (pid {pid}) did not exit within 5 seconds; stop it manually and rerun")
 }
 
 fn start_daemon(socket: &Path) -> Result<()> {
-    let current = std::env::current_exe().context("locate orc")?;
-    let sibling = current.with_file_name("orcd");
+    let current = std::env::current_exe().context("locate pio")?;
+    let sibling = current.with_file_name("piod");
     let executable = if sibling.is_file() {
         sibling
     } else {
-        PathBuf::from("orcd")
+        PathBuf::from("piod")
     };
     let mut command = Command::new(executable);
     command
@@ -266,27 +278,27 @@ fn start_daemon(socket: &Path) -> Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().context("start orcd")?;
+    let mut child = command.spawn().context("start piod")?;
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         if UnixStream::connect(socket).is_ok() {
             return Ok(());
         }
-        if let Some(exit) = child.try_wait().context("poll starting orcd")?
+        if let Some(exit) = child.try_wait().context("poll starting piod")?
             && !exit.success()
         {
-            bail!("orcd exited before its socket became ready: {exit}");
+            bail!("piod exited before its socket became ready: {exit}");
         }
         thread::sleep(Duration::from_millis(25));
     }
-    bail!("orcd did not create {} within 3 seconds", socket.display())
+    bail!("piod did not create {} within 3 seconds", socket.display())
 }
 
-/// `orc daemon restart`: refuse while live panes exist unless `--force`.
+/// `pio daemon restart`: refuse while live panes exist unless `--force`.
 pub fn restart(force: bool) -> Result<i32> {
     let socket = socket_path();
     let Some(current) = probe(&socket)? else {
-        println!("orcd is not running — starting it");
+        println!("piod is not running — starting it");
         start_daemon(&socket)?;
         return status(false);
     };
@@ -324,9 +336,9 @@ pub fn restart(force: bool) -> Result<i32> {
         Some(pid) => pid,
         None => discover_pid(&socket)?,
     };
-    println!("stopping orcd (pid {pid})");
+    println!("stopping piod (pid {pid})");
     stop_daemon(pid, &socket)?;
-    println!("starting orcd on build {BUILD_IDENTIFIER}");
+    println!("starting piod on build {BUILD_IDENTIFIER}");
     start_daemon(&socket)?;
     status(false)
 }

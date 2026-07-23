@@ -94,7 +94,7 @@ fn setup(label: &str) -> (PathBuf, PathBuf, String) {
 }
 
 fn orc(root: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_orc"))
+    Command::new(env!("CARGO_BIN_EXE_pio"))
         .args(args)
         .env("ORC_HOME", home)
         .env("HOME", root.join("empty-home"))

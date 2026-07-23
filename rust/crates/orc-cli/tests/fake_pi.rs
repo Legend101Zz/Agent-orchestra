@@ -80,7 +80,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"usage":{"input":120,"output":30
 
 fn run(root: &Path, home: &Path, args: &[&str]) -> Output {
     let inherited = std::env::var("PATH").unwrap_or_default();
-    Command::new(env!("CARGO_BIN_EXE_orc"))
+    Command::new(env!("CARGO_BIN_EXE_pio"))
         .args(args)
         .env("ORC_HOME", home)
         .env("HOME", root.join("empty-home"))

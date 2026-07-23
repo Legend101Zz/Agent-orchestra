@@ -60,7 +60,7 @@ fn rust_cli_matches_normalized_python_json_and_exit_oracle() {
             .iter()
             .map(|arg| arg.as_str().unwrap())
             .collect::<Vec<_>>();
-        let output = Command::new(env!("CARGO_BIN_EXE_orc"))
+        let output = Command::new(env!("CARGO_BIN_EXE_pio"))
             .args(&args)
             .env("ORC_HOME", &home)
             .env("HOME", root.join("empty-home"))
