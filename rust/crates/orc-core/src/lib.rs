@@ -7,6 +7,7 @@ pub mod inbox;
 pub mod metrics;
 pub mod model;
 pub mod notification;
+pub mod probe;
 pub mod quota;
 pub mod registry;
 pub mod runner;

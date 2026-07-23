@@ -21,7 +21,7 @@ ship-log entries are part of finishing an issue.*
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ⬜ *needs #3* | — |
+| [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | 👀 | issue-4-capability-probe |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *needs #4* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *needs #4* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *needs #5* | — |
@@ -118,6 +118,22 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-23 — Find out what each installed CLI can actually do (`pio doctor`), issue #4 (code-puppy)
+pi-orchestra can now tell you what each AI CLI on your machine is genuinely
+capable of, instead of assuming. Run `pio doctor` and it asks every discovered
+tool (via its own `--help`) whether it can do the eight things that matter — run
+headless, resume a session, use tools, pick a model, emit machine-readable
+output, report usage, be cancelled, and control its working directory — then
+prints an honest table: each tool's role (conductor/worker/limited), a plain
+summary, and a check/cross grid where a missing tool is shown as "unavailable,"
+never hidden. It remembers the answers per tool and only re-checks when that
+tool's binary actually changes (or you pass `--refresh`), and it will never
+offer a capability a tool didn't prove it has. I did NOT make it hand real work
+to those tools yet (that's #6, the universal worker adapter), and the exact
+"rate-limited" wording each tool prints is still to be captured later (feeds
+#7). This unblocks #6, #7, and #12, which all need to know what each harness
+can really do.
 
 ### 2026-07-23 — Find every AI CLI on your machine, issue #3 (code-puppy)
 pi-orchestra can now discover which AI coding CLIs you actually have installed.

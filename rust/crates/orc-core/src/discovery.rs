@@ -144,6 +144,7 @@ fn record_discovery(
                     version,
                     first_seen: now.to_owned(),
                     last_seen: now.to_owned(),
+                    probe: None,
                     extra: BTreeMap::new(),
                 },
             );
@@ -251,6 +252,7 @@ mod tests {
                     version: Some("pi 9.9".to_owned()),
                     first_seen: "2026-01-01T00:00:00+00:00".to_owned(),
                     last_seen: "2026-01-02T00:00:00+00:00".to_owned(),
+                    probe: None,
                     extra: BTreeMap::new(),
                 },
             )]),
