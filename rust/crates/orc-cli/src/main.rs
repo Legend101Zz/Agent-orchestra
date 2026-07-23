@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::load_harness_registry;
+use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::discovery;
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
@@ -236,6 +237,72 @@ enum DaemonCommand {
     },
 }
 
+/// Acceptance-driven contract flags shared by task-creating commands.
+///
+/// Grouped into one `clap::Args` block so the flags stay cohesive and the
+/// contract-building logic lives in one testable place rather than sprawled
+/// across a command handler.
+#[derive(Debug, Default, clap::Args)]
+struct ContractArgs {
+    /// Contract objective: what exists when this task is done.
+    #[arg(long)]
+    objective: Option<String>,
+    /// A file or directory this task may modify. Repeat per path.
+    #[arg(long = "allowed")]
+    allowed: Vec<String>,
+    /// A forbidden action or no-go zone. Repeat per rule.
+    #[arg(long = "forbidden")]
+    forbidden: Vec<String>,
+    /// One acceptance check. Repeat per check.
+    #[arg(long = "check")]
+    check: Vec<String>,
+    /// Expected artifact (branch, doc, measurement).
+    #[arg(long)]
+    artifact: Option<String>,
+    /// Reviewer that will judge the delivered artifact.
+    #[arg(long)]
+    reviewer: Option<String>,
+    /// Bounded per-attempt timeout in seconds.
+    #[arg(long)]
+    timeout: Option<u64>,
+    /// Maximum automatic retries after a failed attempt.
+    #[arg(long)]
+    max_retries: Option<u32>,
+    /// Maximum worker tokens the task may spend.
+    #[arg(long)]
+    max_tokens: Option<u64>,
+    /// Maximum spend in whole US cents.
+    #[arg(long)]
+    max_usd_cents: Option<u64>,
+}
+
+impl ContractArgs {
+    /// Build an optional contract from the flags, returning `None` when no
+    /// contract field was supplied so an uncontracted task stays uncontracted.
+    fn into_contract(self) -> Option<TaskContract> {
+        let contract = TaskContract {
+            objective: self.objective.unwrap_or_default(),
+            allowed_paths: self.allowed,
+            forbidden: self.forbidden,
+            expected_artifact: self.artifact,
+            acceptance_checks: self.check,
+            reviewer: self.reviewer,
+            limits: TaskLimits {
+                timeout_sec: self.timeout,
+                max_retries: self.max_retries,
+                ..TaskLimits::default()
+            },
+            budget: TaskBudget {
+                max_tokens: self.max_tokens,
+                max_usd_cents: self.max_usd_cents,
+                ..TaskBudget::default()
+            },
+            ..TaskContract::default()
+        };
+        (!contract.is_empty()).then_some(contract)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum TaskCommand {
     /// Add one backlog task.
@@ -247,6 +314,8 @@ enum TaskCommand {
         depends_on: Vec<String>,
         #[arg(long)]
         isolate: bool,
+        #[command(flatten)]
+        contract: Box<ContractArgs>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long, value_enum, default_value = "human")]
@@ -263,6 +332,14 @@ enum TaskCommand {
     },
     /// Show one task and its append-only history.
     Show {
+        id: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the dispatch brief a worker receives for one task.
+    Brief {
         id: String,
         #[arg(long)]
         session: Option<String>,
@@ -453,6 +530,40 @@ fn print_task(task: &orc_core::tasks::Task, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Render a compact human-readable view of an attached contract under `show`.
+fn print_contract(contract: &TaskContract) {
+    if !contract.objective.is_empty() {
+        println!("  objective: {}", contract.objective);
+    }
+    for path in &contract.allowed_paths {
+        println!("  allowed:   {path}");
+    }
+    for rule in &contract.forbidden {
+        println!("  forbidden: {rule}");
+    }
+    if let Some(artifact) = &contract.expected_artifact {
+        println!("  artifact:  {artifact}");
+    }
+    for (index, check) in contract.acceptance_checks.iter().enumerate() {
+        println!("  check {}:   {check}", index + 1);
+    }
+    if let Some(reviewer) = &contract.reviewer {
+        println!("  reviewer:  {reviewer}");
+    }
+    if let Some(timeout) = contract.limits.timeout_sec {
+        println!("  timeout:   {timeout}s");
+    }
+    if let Some(retries) = contract.limits.max_retries {
+        println!("  retries:   {retries}");
+    }
+    if let Some(tokens) = contract.budget.max_tokens {
+        println!("  tokens:    {tokens}");
+    }
+    if let Some(cents) = contract.budget.max_usd_cents {
+        println!("  budget:    ${}.{:02}", cents / 100, cents % 100);
+    }
+}
+
 fn dispatch_task(command: TaskCommand) -> Result<i32> {
     match command {
         TaskCommand::Add {
@@ -460,6 +571,7 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
             description,
             depends_on,
             isolate,
+            contract,
             session,
             actor,
             json,
@@ -472,6 +584,7 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
                     description: description.unwrap_or_default(),
                     depends_on,
                     isolate,
+                    contract: contract.into_contract(),
                 },
             )?;
             print_task(&task, json)?;
@@ -489,7 +602,27 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
             }
         }
         TaskCommand::Show { id, session, json } => {
-            print_task(&tasks::read_task(&task_session(session)?, &id)?, json)?
+            let task = tasks::read_task(&task_session(session)?, &id)?;
+            print_task(&task, json)?;
+            if !json && let Some(contract) = &task.contract {
+                print_contract(contract);
+            }
+        }
+        TaskCommand::Brief { id, session, json } => {
+            let task = tasks::read_task(&task_session(session)?, &id)?;
+            let brief = render_brief(&task);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "id": task.id,
+                        "session": task.session,
+                        "brief": brief,
+                    }))?
+                );
+            } else {
+                print!("{brief}");
+            }
         }
         TaskCommand::Assign {
             id,

@@ -18,6 +18,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::bench::{BenchSession, read_session, write_session};
+use crate::contract::TaskContract;
 use crate::registry::{atomic_write_json, home, now_iso};
 
 const LOCK_ATTEMPTS: usize = 100;
@@ -205,6 +206,9 @@ pub struct Task {
     /// Isolation request or owned worktree lifecycle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<TaskWorktree>,
+    /// Acceptance-driven contract v2, when one was supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<TaskContract>,
     /// Creation timestamp.
     pub created_at: String,
     /// Last mutation timestamp.
@@ -228,6 +232,8 @@ pub struct NewTask {
     pub depends_on: Vec<String>,
     /// Whether Phase 3B must materialize a worktree.
     pub isolate: bool,
+    /// Acceptance-driven contract v2, when the caller supplies one.
+    pub contract: Option<TaskContract>,
 }
 
 struct BoardLock {
@@ -720,6 +726,14 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
     let all = read_all_strict(session)?;
     let id = next_id(&all);
     validate_dependencies(&id, &new.depends_on, &all)?;
+    let contract = match new.contract {
+        Some(mut contract) => {
+            contract.normalize();
+            contract.validate()?;
+            (!contract.is_empty()).then_some(contract)
+        }
+        None => None,
+    };
     let now = now_iso();
     let mut task = Task {
         id,
@@ -738,6 +752,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
             result_commit: None,
             extra: BTreeMap::new(),
         }),
+        contract,
         created_at: now.clone(),
         updated_at: now,
         history: Vec::new(),

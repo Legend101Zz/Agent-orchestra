@@ -563,3 +563,44 @@
   #6/#7 unblocked, #12 dep trimmed to #6; task_plan.md row + order note
   updated. Next: #5 (task contracts) — the remaining bottleneck (gates
   #8/#11); #6 is the natural follow-on to #4.
+
+## Session — 2026-07-24 (code-puppy implementer): issue #5 — task contract v2
+- Branch `issue-5-task-contract-v2` from fresh `origin/main`. Implemented the
+  acceptance-driven task contract v2 + its dispatch brief. Stayed inside the
+  allowed paths: `orc-core/`, `orc-cli/` (orc-app left untouched — see below).
+- New `orc-core/src/contract.rs`: `TaskContract` (objective, allowed_paths,
+  forbidden, expected_artifact, acceptance_checks, reviewer) + nested
+  `TaskLimits` (timeout_sec, max_retries) and `TaskBudget` (max_tokens,
+  max_usd_cents). All derive serde + schemars 1.2.1 `JsonSchema` per the #16
+  binding decision (one schema source, later powers #8's MCP tools). Every
+  struct keeps a `#[serde(flatten)] extra` map so unknown future fields survive
+  read->write. `render_brief(&Task)` renders the worker hand-off with all
+  sections verbatim; unset sections read "(none specified)", never hidden.
+  Dependencies are NOT duplicated in the contract — the brief reads the task's
+  existing validated `depends_on` graph (DRY).
+- `Task`/`NewTask` gain an additive `Option<TaskContract>` (skip_serializing_if
+  none, so pre-v2 records and uncontracted tasks emit no `contract` key).
+  `add_task` normalizes + validates the contract (an objective with no check is
+  rejected) and drops a hollow contract to `None`.
+- CLI: `pio task add` gains `--objective/--allowed/--forbidden/--check/
+  --artifact/--reviewer/--timeout/--max-retries/--max-tokens/--max-usd-cents`
+  (grouped into a `clap::Args` struct `ContractArgs`, boxed in the subcommand
+  variant to satisfy `clippy::large_enum_variant` with no allow). `pio task
+  show` renders the contract for humans; new `pio task brief` prints the
+  dispatch brief (text or `--json`).
+- Evidence: AC1 core test `tests/contract.rs` (pre-v2 record loads, no spurious
+  contract key; contract + nested unknown fields survive read->write). AC2/AC3
+  CLI test `tests/task_cli.rs::contract_flags_round_trip_through_add_show_and_brief`
+  drives the real `pio` binary; plus 6 unit tests in `contract.rs`. Ran a live
+  demo (add -> show -> brief) on a hand-seeded session. All 5 gates green
+  (fmt, clippy -D warnings, test workspace, doc -D warnings, release --locked).
+- Deviations: (1) SCORE card contract fields deferred — `TaskSummary` lives in
+  `orc-proto` and is built in `orc-daemon`, both forbidden by this contract, so
+  orc-app has nothing new to render without touching forbidden crates; noted as
+  a clean follow-up. (2) The brief is not yet wired into `dispatch send` (still
+  uses the caller's prompt) — out of scope here; `render_brief` is public and
+  ready for that follow-up. Needed the Walmart sysproxy to fetch schemars 1.2.1
+  (crates.io DNS blocked); it is now in Cargo.lock + cache.
+- Next: Claude adversarial review of the branch (prompt 2). #5 landing unblocks
+  #8 (orch_* control surface + MCP, reuses this schema) and #11 (worktree
+  isolation + review).
