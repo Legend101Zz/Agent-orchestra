@@ -16,7 +16,7 @@ ship-log entries are part of finishing an issue.*
 | Issue | In plain words | Status | Branch |
 |---|---|---|---|
 | [#16](https://github.com/Legend101Zz/Agent-orchestra/issues/16) | Research: pick the best Rust crates & steal the best prior art (Claude session, prompt 0) | ✅ | merged (PR #18) |
-| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | 🧪 *merge FIRST* | issue-17-rename-cli-pio |
+| [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ✅ | merged (PR #19) |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ⬜ | — |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
@@ -30,9 +30,9 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *needs #4, #6* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**Start now: #16 (Claude session, prompt 0) and #17 (puppy, prompt 1). Merge
-#17 before anything else — it renames files everywhere and parallel branches
-would all conflict. THEN the parallel set: #3, #5, #9, #13.**
+**#16 and #17 are merged (2026-07-23) — the rename landed, so parallel work
+is now safe. Start the parallel set: #3, #5, #9, #13 (prompt 1, one puppy
+terminal per issue; each branches from fresh `main`).**
 
 ## Prompts you run
 

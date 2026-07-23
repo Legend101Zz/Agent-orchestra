@@ -387,3 +387,26 @@
   bounds-check `if` into the match-arm guard. All behavior-preserving; full
   gate suite re-run with NO allow-flags: fmt/clippy/test(89-0)/doc/release all
   green. Cargo.lock unchanged. Kept as a separate commit from the rename.
+
+## Session — 2026-07-23 (Claude, reviewer): issue #17 review → ACCEPT → merged
+- Adversarial review of issue-17-rename-cli-pio (PR #19) per docs/WORKFLOW.md,
+  run on the SSD checkout. All five gates re-run independently on MSRV Rust
+  1.91.1: fmt / clippy (0 warnings, no allow-flags) / test 89-0 / doc /
+  release build — all green (implementer had gated on 1.97, so both
+  toolchain generations are now proven).
+- Every acceptance check reproduced live, none trusted: real install.sh into
+  a scratch HOME seeded with a pre-rename `orc` symlink (backup + shim +
+  forward-with-nag verified), uninstall.sh restore verified by executing the
+  restored binary, and an orc/orcd leak sweep across EVERY subcommand and
+  sub-subcommand --help screen (broader than rename_gate.rs scans) — zero
+  leaks. Cargo.lock/workspace root unchanged; the 3 out-of-path clippy fixes
+  (b5025e9) read line-by-line and confirmed behavior-preserving +
+  owner-approved. Verdict ACCEPT commented on #17; LOG.md 🧪 pushed (8cdf45c).
+  Three non-blocking notes recorded on the issue (uninstall keeps a non-shim
+  pre-rename orc link in one narrow upgrade path; backup-once policy;
+  SUN_LEN probe quirk in absurdly long $HOME).
+- Mrigesh tested locally and merged: PR #19 → main @ 846d74d; issue #17
+  closed, epic #15 box ticked. Dashboards updated: LOG.md #17 → ✅ merged
+  (PR #19) + "start the parallel set" note; task_plan.md order note updated.
+- Next: parallel-safe set #3 / #5 / #9 / #13, one puppy terminal each,
+  branching from fresh main (now includes the rename).
