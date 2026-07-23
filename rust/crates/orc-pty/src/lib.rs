@@ -156,10 +156,7 @@ impl HostedPane {
             .name("orc-pty-reader".to_owned())
             .spawn(move || {
                 let mut buffer = [0_u8; 64 * 1024];
-                loop {
-                    let Ok(read) = reader.read(&mut buffer) else {
-                        break;
-                    };
+                while let Ok(read) = reader.read(&mut buffer) {
                     if read == 0 {
                         break;
                     }

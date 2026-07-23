@@ -379,3 +379,11 @@
 - No Rust toolchain existed on this machine; installed via `brew install
   rust` (1.97.0) behind Walmart proxies to run the gates. Pushed the branch;
   human will open the PR.
+- Follow-up (same PR, owner-approved scope expansion beyond #17's allowed
+  paths): fixed the 3 pre-existing clippy 1.97 lints so the raw
+  `cargo clippy --workspace --all-targets -- -D warnings` is green on modern
+  toolchains. orc-pty/src/lib.rs loop -> `while let`; orc-core/src/dispatch.rs
+  dropped a redundant `&` in a format arg; orc-tui/src/app.rs folded a
+  bounds-check `if` into the match-arm guard. All behavior-preserving; full
+  gate suite re-run with NO allow-flags: fmt/clippy/test(89-0)/doc/release all
+  green. Cargo.lock unchanged. Kept as a separate commit from the rename.

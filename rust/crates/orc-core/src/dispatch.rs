@@ -496,7 +496,7 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
             };
             let placeholder = format!(
                 "{harness} {args}",
-                harness = &resolved_key,
+                harness = resolved_key,
                 args = registry
                     .harnesses
                     .get(&resolved_key)

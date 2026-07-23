@@ -128,11 +128,12 @@ files all speak the new name now, and the built binaries were verified end to en
 (`pio version`, `piod --help`, and a full install/uninstall in a scratch folder).
 I did NOT rename the internal code folders, the `~/.orchestra` data directory, or
 the `ORC_*` settings (those stay for compatibility), and I left one dated
-historical guide (`docs/guide.html`) untouched on purpose. Heads-up for the
-reviewer: on this machine's freshly installed Rust 1.97 the clippy gate trips on
-three pre-existing warnings in files I did not touch (the repo targets Rust 1.91,
-where they don't fire); everything I changed is clippy-clean. This unblocks the
-parallel V1 work (#3, #5, #9, #13) without every branch colliding on the rename.
+historical guide (`docs/guide.html`) untouched on purpose. On this machine's
+freshly installed Rust 1.97 the clippy gate first tripped on three pre-existing
+warnings in files the rename did not touch (the repo targets Rust 1.91, where
+they stay quiet); with your OK I cleaned up all three in this same PR, so now
+every gate passes green with nothing suppressed. This unblocks the parallel V1
+work (#3, #5, #9, #13) without every branch colliding on the rename.
 
 ### 2026-07-22 — Foundations research, issue #16 (Claude Code)
 Every big technical choice for V1 is now decided and written down in one
