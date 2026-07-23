@@ -488,3 +488,13 @@
   scope change — only the two numbered review items. Pushed; per-item
   evidence commented on #3; LOG.md #3 back to review + ship-log fix note.
 
+
+## Session — 2026-07-23 (Claude reviewer): re-review of issue #3 → ACCEPT
+- Verified only the 2-item fix list @ 8cdbc2d: exit-status guard in
+  `probe_version` kills both original repros (no error text shown or
+  persisted; stored version survives a failed probe; happy path intact),
+  and the new end-to-end regression test covers exactly that failure mode.
+- Gates 5/5 green (96 tests, 0 failed, +1). Creep check on
+  `7625f2d..8cdbc2d`: only the 4 expected files, no scope drift.
+- Verdict ACCEPT commented on #3; LOG.md → 🧪. Next: Mrigesh local test +
+  merge (prompt 5), which unblocks #4 (`pio doctor`).
