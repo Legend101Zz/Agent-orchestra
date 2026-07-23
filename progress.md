@@ -451,3 +451,16 @@
   HomeData + home() as the minimal plumbing to feed the strip (still
   "availability strip only" in spirit; no other UI/logic changed).
 - Branch pushed; PR left for Mrigesh to open (per the #17 pattern).
+
+## Session — 2026-07-23 (Claude reviewer): adversarial review of issue #3
+- Reviewed `issue-3-harness-discovery` (PR #20) against the #3 contract on the
+  SSD checkout. All 5 gates re-run green (95 tests, 0 failed); AC1/AC2/AC3
+  reproduced live with the release `pio` against hermetic ORC_HOME/PATH
+  fixtures; scope, deps (none), and additive JSON behavior all verified clean.
+- Adversarial probes found one honesty bug: `probe_version` ignores exit
+  status, so a failing `--version` persists its stderr error text as the
+  recorded version (demonstrated twice, incl. a truncated sh error path).
+  Verdict: **FIX** (2-item list on #3) — status back to 🔨, LOG.md verdict
+  line pushed @ c428cc7.
+- Next: code-puppy applies the fix + regression test (prompt 3), then
+  re-review (prompt 4).
