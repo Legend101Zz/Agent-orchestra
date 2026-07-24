@@ -714,3 +714,34 @@
   stream is the automated stand-in that would have caught the original miss.
 - LOG.md status restored to needs-review + fix-applied note appended under the
   FIX verdict (history preserved). Next: Claude re-review.
+
+## Session — 2026-07-24 (Claude review + owner-directed changes): #9 merged
+- Adversarial-reviewed the pushed `issue-9-trigger-grammar` branch: ran all 5
+  gates on a clean checkout and mutation-tested every acceptance check (neuter
+  grammar / drop colon / drop role guard each fail the right test). First
+  verdict ACCEPT — then Mrigesh live-tested and it did NOT highlight.
+- Root-caused the miss: the grammar was line-anchored to the first
+  non-whitespace char, but a real Claude Code pane renders input as
+  `❯ delegate: …` — the prompt glyph is first, so it never matched. Every
+  fixture used bare streams with no prompt prefix, so the green suite was
+  unrepresentative. RETRACTED the ACCEPT → FIX with a numbered list; puppy
+  applied the prompt-marker tolerance.
+- Owner then directed three enhancements (implemented directly, all 5 gates
+  green each time, no puppy round-trip):
+  1. Ultrathink positioning: `scan_line` now returns ALL word-boundary
+     `keyword:` matches (Vec) anywhere on the line, not just the first token.
+     Deleted `skip_prompt_marker`/`MAX_PROMPT_MARKER_RUN` — the word-boundary
+     rule subsumes prompt tolerance. Supersedes the original AC2 "mid-sentence
+     does not trigger" line (owner wants mid-sentence to fire); colon +
+     welded-word + case guards preserved.
+  2. Rainbow highlight: per-character 7-stop `TRIGGER_RAINBOW` gradient, BOLD,
+     replacing the reverse-video block. Colour not load-bearing — bold + the
+     `◆ LABEL` badge carry meaning under NO_COLOR.
+  3. Animated shimmer: `render_shell` derives a motion phase (gated on
+     reduced_motion) threaded through `render_stage`→`render_pane`; colour
+     index = `(offset + phase) % 7` slides one stop per ~120ms. Frozen static
+     under reduced motion. Shell repaint loop keeps ticking while
+     `StageState::has_live_trigger()`.
+- Mrigesh tested and merged to `main` (PR #23, merge 2d64a42). Updated LOG.md
+  (#9 → ✅, next-up → #6) and task_plan.md (#9 merged, order block). Next: #6
+  (universal worker adapter).

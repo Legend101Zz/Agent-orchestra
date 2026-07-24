@@ -29,21 +29,21 @@ record. (Issue numbers are filled in as issues are created.)
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | V1-4 Universal worker adapter (any probed harness as worker) | #4 |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | V1-5 Rate-limit-aware spawning (quota guard v2, concurrency caps) | #4 |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 |
-| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — |
+| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — (✅ merged 2026-07-24, PR #23) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 
-**Order: #16, #17, #3, #4 and #5 are merged (#5 on 2026-07-24, PR #22).
-Both bottlenecks are now cleared — #4 unblocked #6/#7/#12, #5 unblocked
-#8/#11. Ready set: #6 (universal worker adapter, follow-on to #4), #8
-(`orch_*` + MCP, reuses the #5 schema), #11 (worktree isolation, builds on
-#5), plus #7/#9/#13. Recommended next: #6 then #8. Follow-ups seeded by #5's
-review to fold into #6/#8: wire `render_brief` into `dispatch send`, and add
-a headless `session create`. Parallel-safe now: #6, #8, #9 — each from fresh
-`main`; start #13 before more TUI churn lands to avoid merge conflicts.**
+**Order: #16, #17, #3, #4, #5 and #9 are merged (#9 on 2026-07-24, PR #23).
+Both bottlenecks are cleared — #4 unblocked #6/#7/#12, #5 unblocked #8/#11.
+Ready set: #6 (universal worker adapter, follow-on to #4), #8 (`orch_*` +
+MCP, reuses the #5 schema), #11 (worktree isolation, builds on #5), plus
+#7/#13. Next: #6 (in progress), then #8. Follow-ups seeded by #5's review to
+fold into #6/#8: wire `render_brief` into `dispatch send`, and add a headless
+`session create`. Parallel-safe now: #6, #8 — each from fresh `main`; start
+#13 before more TUI churn lands to avoid merge conflicts.**
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).
