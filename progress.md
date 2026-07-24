@@ -901,3 +901,45 @@
   (same situation #5 had with schemars, accepted then). (2) queued exit code 75
   (EX_TEMPFAIL) is a new convention, documented. (3) retry-after honored only in
   the warning, not the sleep (blocking backon has no adjust()).
+
+## Session — 2026-07-24 (code-puppy): #7 review fixes (Claude verdict was FIX)
+- Reviewer (Claude/Fable) on PR #25: all 4 ACs + 5 gates pass independently,
+  but one confirmed blocker (Fix 1) + two disclosed minors (Fix 2, Fix 3).
+- Fix 1 (BLOCKING): invoke_with_backoff (dispatch.rs) checked is_rate_limited
+  BEFORE the success branch, so a worker that exits 0 whose output merely
+  mentions a signal substring (429, "rate limit", "overloaded", "throttl",
+  ...) was treated as rate-limited, retried the full budget, and recorded
+  failed/rate_limited. Coding CLIs emit those words on SUCCESSFUL tasks (HTTP
+  clients, retry logic, or literally summarizing this PR's own diff), so good
+  work was silently failed and provider load multiplied 4x -- the exact
+  opposite of the issue objective -- and AC2 hid it (all its fixtures exit
+  non-zero). FIXED: a clean exit-0 run is confirmed regardless of output text;
+  only a non-success (non-zero exit) invocation is scanned for a throttle
+  signal (real provider limits exit non-zero, so AC2 stays green). Regression
+  a_successful_worker_whose_output_mentions_a_rate_limit_is_confirmed_once:
+  exit-0 worker printing "...rate limit backoff and 429 handling" -> confirmed,
+  exactly 1 attempt, no warnings.
+- Fix 2 (minor): spawn_guard.rs lock_slots had no stale-lock reclamation -- a
+  dispatcher SIGKILLed while holding .slots.lock wedged that harness's cap
+  (~1s spin then "busy" error) until manual cleanup. FIXED: the lock file now
+  records the holder pid; on AlreadyExists, reclaim_if_stale reclaims it when
+  the recorded pid is dead OR the lock is aged past STALE_LOCK (30s) via an
+  ATOMIC rename-steal (only one racer's rename wins, so a concurrent reclaim
+  can't delete a freshly-recreated lock; losers see the source gone and retry
+  create_new). Unknown holder (empty/old-binary lock) reclaimed only when
+  aged, so a live old-binary holder is never stolen. Regression
+  a_lock_abandoned_by_a_dead_holder_is_reclaimed_not_wedged plants a dead
+  (spawned+reaped) pid's lock and asserts acquire_slot reclaims it.
+- Fix 3 (minor): ratelimit.rs digits_after -> seconds_after now honors
+  second/minute/hour/millisecond unit words (defaulting to seconds), so
+  "retry after 2 minutes" surfaces 120 not ~2; ms reported as whole seconds.
+  Only shown in the operator warning (Deviation 3 unchanged) but no longer
+  misleading. Unit assertions added to parses_retry_after_hints_in_several_shapes.
+- Integrated the reviewer's verdict commit (4dd1805: LOG.md status -> hammer +
+  verdict blockquote) by rebasing my fix commit on top; verdict preserved,
+  LOG.md status set back to eyes (re-review requested) with a "Fixed" reply
+  under the verdict.
+- Gates from rust/ (Rust 1.97): fmt clean; clippy --workspace --all-targets
+  -D warnings clean; test --workspace 0 failed (+2 tests: quota_guard 5,
+  spawn_guard 4, ratelimit unit expanded); doc -D warnings clean; build
+  --release --locked clean.

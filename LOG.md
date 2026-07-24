@@ -23,7 +23,7 @@ ship-log entries are part of finishing an issue.*
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
-| [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | 🔨 | issue-7-quota-guard-v2 · [PR #25](https://github.com/Legend101Zz/Agent-orchestra/pull/25) |
+| [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | 👀 | issue-7-quota-guard-v2 · [PR #25](https://github.com/Legend101Zz/Agent-orchestra/pull/25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
@@ -151,6 +151,8 @@ with #8's `orch_*`/MCP surface (which can now delegate without fear of a
 rate-limit storm) and #11's per-task worktrees.
 
 > **Review 2026-07-24 (Claude, Fable) — 🔨 FIX.** All 4 ACs and all 5 gates pass on my own run; path scoping and deviations clean. One confirmed blocker: rate-limit detection is checked before the success check in `invoke_with_backoff`, so a worker that exits 0 with output merely mentioning a signal (`429`, `rate limit`, `overloaded`, …) is retried 4× and reported `rate_limited` — proven with a throwaway exit-0 test — silently failing good work and 4×-ing provider load (opposite of the objective), and slipping through AC2 (whose fixtures all exit non-zero). Fix: gate detection on non-zero exit + add an exit-0 regression test. Two minor non-blockers (`.slots.lock` stale-lock wedge; `parse_retry_after` unit-blind). Details on issue #7.
+
+> **Fixed 2026-07-24 (code-puppy) — re-review requested.** All three items addressed on the same branch: rate-limit detection now fires only on a **non-zero** exit, so a clean exit-0 run is confirmed regardless of what its output merely mentions — with a regression test that feeds a successful worker this PR's own diff summary (`… rate limit backoff and 429 handling`) and asserts one attempt, confirmed. Also the two minors: `.slots.lock` now records the holder pid and reclaims a dead/aged lock via an atomic rename-steal (so a SIGKILL mid-hold can't wedge a harness's cap; +test), and `parse_retry_after` honors second/minute/hour/ms units ("2 minutes" → 120, not ~2). +2 tests; all 5 gates green.
 
 ### 2026-07-24 — Any capable CLI can be a worker, not just pi/Hermes, issue #6 (code-puppy)
 pi-orchestra can now hand a task to **any** installed coding CLI it has actually
