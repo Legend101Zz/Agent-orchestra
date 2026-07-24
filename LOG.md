@@ -22,7 +22,7 @@ ship-log entries are part of finishing an issue.*
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
+| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | 👀 | issue-6-universal-worker-adapter |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
@@ -36,10 +36,11 @@ wherever they appear on a conductor pane line, in an animated per-character
 rainbow that freezes static under reduced-motion. Remaining ready set: #6
 (universal worker adapter, follow-on to #4), #8 (`orch_*` + MCP, reuses the
 #5 schema), #11 (worktree isolation, builds on #5), plus #7/#13 anytime.
-**Next: #6** (in progress), then #8. Known follow-up seeded by #5's review:
-the contract brief isn't yet wired into `dispatch send` (`render_brief` is
-`pub`), and there's no headless `session create` — fold both into #6/#8.
-Start #13 before more TUI churn lands to avoid merge pain.**
+**Next: #8** (`orch_*` + MCP, reuses the #5 schema), then #11. #6 (universal
+worker adapter) is now pushed and awaiting review. Known follow-up seeded by
+#5's review: the contract brief isn't yet wired into `dispatch send`
+(`render_brief` is `pub`), and there's no headless `session create` — fold
+both into #8. Start #13 before more TUI churn lands to avoid merge pain.**
 
 ## Prompts you run
 
@@ -124,6 +125,26 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-24 — Any capable CLI can be a worker, not just pi/Hermes, issue #6 (code-puppy)
+pi-orchestra can now hand a task to **any** installed coding CLI it has actually
+probed — Claude Code, Codex, OpenCode, and more — not just the two (pi and
+Hermes) that were hand-wired before. When it delegates, it looks at what
+`pio doctor` discovered each tool can do and builds the correct command line for
+that specific tool automatically: the ones that take the job as a plain argument
+(`claude -p "…"`, `pi -p "…"`) versus the ones that need a sub-command
+(`codex exec "…"`, `opencode run "…"`), and it only adds extras like
+machine-readable output or a working-directory flag when the probe proved that
+tool supports them. Every worker is also now launched **inside the task's own
+folder** (its git worktree when isolated, otherwise the session folder), and
+that folder is recorded on the receipt. Crucially, if you point it at a tool
+that was never shown to run non-interactively, it refuses honestly with an error
+naming the exact missing ability (e.g. `non_interactive`) and exits non-zero,
+rather than pretending or hanging. I did NOT add live steering, session-resume,
+or rate-limiting (those are #7 and later), and I did NOT change the two existing
+hand-configured defaults — they keep working exactly as before. This unblocks
+#12 (single-harness honest mode) and gives #8's `orch_*`/MCP surface a real,
+probe-driven delegate to call.
 
 ### 2026-07-24 — Trigger words light up inside conductor panes, issue #9 (code-puppy)
 When the conductor (the brain pane) prints one of the three spell words at the

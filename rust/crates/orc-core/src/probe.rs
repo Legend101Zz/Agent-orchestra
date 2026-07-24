@@ -41,7 +41,8 @@ use serde_json::Value;
 
 use crate::adapter::locate_executable;
 use crate::bench::{
-    DiscoveredHarness, load_harness_registry, read_harness_registry, write_harness_registry,
+    DiscoveredHarness, HarnessRegistry, load_harness_registry, read_harness_registry,
+    write_harness_registry,
 };
 use crate::discovery::KNOWN_HARNESSES;
 use crate::quota::command_output_with_timeout;
@@ -474,6 +475,23 @@ fn summary_for(
         parts.push("model select");
     }
     parts.join(" \u{b7} ")
+}
+
+/// Verified capabilities for one adapter, read from an already-loaded registry.
+///
+/// The probe cache is keyed by the discovered executable name, which is exactly
+/// the adapter identity for the known harnesses (`claude`, `codex`, ...). Reading
+/// from a registry the caller already holds avoids a second disk read on the
+/// dispatch hot path. A never-probed or probe-failed adapter yields an empty set,
+/// so [`crate::invocation::resolve_worker_invocation`] refuses honestly.
+#[must_use]
+pub fn probed_from(registry: &HarnessRegistry, adapter: &str) -> BTreeSet<Capability> {
+    registry
+        .discovered
+        .get(adapter)
+        .and_then(|record| record.probe.as_ref())
+        .map(CapabilityProbe::typed)
+        .unwrap_or_default()
 }
 
 /// Verified capabilities for one harness, read from the persisted registry.

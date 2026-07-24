@@ -5,6 +5,7 @@ pub mod control;
 pub mod discovery;
 pub mod dispatch;
 pub mod inbox;
+pub mod invocation;
 pub mod metrics;
 pub mod model;
 pub mod notification;

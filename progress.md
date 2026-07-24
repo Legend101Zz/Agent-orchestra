@@ -745,3 +745,42 @@
 - Mrigesh tested and merged to `main` (PR #23, merge 2d64a42). Updated LOG.md
   (#9 → ✅, next-up → #6) and task_plan.md (#9 merged, order block). Next: #6
   (universal worker adapter).
+
+## Session — 2026-07-24 (code-puppy): #6 universal worker adapter (pushed)
+- Implemented issue #6 (V1-4) on `issue-6-universal-worker-adapter` from fresh
+  `main`. Dependency V1-2 (#4, capability probes) confirmed CLOSED/merged
+  (commit 7fbe493, PR #21) before starting.
+- New `orc-core/src/invocation.rs`: probe-driven worker invocation. Two paths —
+  (1) explicit override: a non-empty `dispatch_args` is trusted verbatim (keeps
+  the pre-#6 hermes `-z` / pi `-p` defaults and every existing dispatch test
+  passing = AC3); (2) probe-driven: a per-adapter `InvocationTemplate` (from the
+  #16 §2 ground-truth table) is synthesized, adding structured-output flags iff
+  `StructuredOutput` was probed and an explicit `--dir`/`-C` flag iff
+  `WorkingDir` was probed. A required-but-unprobed capability refuses via
+  `InvocationError`, message prefixed `CAPABILITY UNAVAILABLE:` naming the slug.
+- Design call (documented in the module): cwd control is ORCHESTRATOR-provided —
+  every worker is spawned with `Command::current_dir` = the task's effective cwd
+  (worktree.path when isolated, else session.cwd), mirroring how probe.rs
+  *derives* `cancellation`. So the single probe-GATED requirement is
+  `NonInteractive`; that's why hermes/pi (no cwd flag) stay first-class workers.
+- `dispatch.rs` rewired: `select_available_worker` → `select_worker` (role check
+  only; deleted the dead `default_workers` fallback — dispatch always passes an
+  explicit harness); `invoke_harness` now takes a resolved program + `Invocation`
+  + cwd; 3 duplicated pre-invocation failure blocks consolidated into one
+  `persist_failure`; additive `DispatchRecord.cwd` field records where the worker
+  ran (evidence of cwd control). `probe::probed_from(&registry, adapter)` reads
+  capabilities from the already-loaded registry (no second disk read).
+- Fixtures: `tools/fixtures/harness-styles/{flag-style.sh,subcommand-style.sh,
+  README.md}` — one fake worker per invocation style, each echoes argv+brief+cwd
+  and exits 0.
+- Tests: 7 unit tests in `invocation.rs`; new `tests/invocation_dispatch.rs`
+  (AC1: flag + subcommand workers return confirmed receipts; probe toggles
+  optional flags; AC2: unprobed-capability refusal names it); new CLI test in
+  `orc-cli/tests/dispatch.rs` (AC2 at the CLI: exits 1, error names
+  `non_interactive`).
+- All 5 gates green from `rust/`: fmt --check, clippy -D warnings, test
+  --workspace (0 failed), doc -D warnings (fixed one private intra-doc link),
+  build --release --locked. Stayed strictly inside allowed paths (orc-core/,
+  orc-cli/, tools/fixtures/). Out-of-scope respected: no rate limiting (#7), no
+  MCP (#8), no session-id resume capture (deferred with #16 open-Q; resume
+  dispatch isn't in this issue's ACs). Next: push + issue comment; then review.
