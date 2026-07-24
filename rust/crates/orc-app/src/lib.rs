@@ -2603,6 +2603,21 @@ struct TriggerSpan {
     len: u16,
 }
 
+/// The per-character gradient a highlighted trigger cycles through, column by
+/// column, so a spell shimmers like Claude Code's `ultrathink` rather than
+/// sitting in a flat accent block. Meaning never rides on the rainbow alone:
+/// the token stays **bold** and keeps its `◆ LABEL` title badge, both of which
+/// survive a monochrome / `NO_COLOR` terminal — the colour is decoration on top.
+const TRIGGER_RAINBOW: [Color; 7] = [
+    Color::Rgb(255, 107, 107), // red
+    Color::Rgb(255, 169, 77),  // orange
+    Color::Rgb(255, 224, 102), // yellow
+    Color::Rgb(99, 230, 190),  // green
+    Color::Rgb(77, 171, 247),  // blue
+    Color::Rgb(177, 151, 252), // indigo
+    Color::Rgb(247, 131, 172), // violet
+];
+
 /// Scan one grid row of a hosted pane for **every** trigger token, mapping the
 /// grammar's character offsets back onto terminal columns.
 fn scan_pane_row(pane: &PaneSnapshot, row: u16) -> Vec<(TriggerSpan, Trigger)> {
@@ -2754,17 +2769,20 @@ fn render_pane(
             if source.inverse {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            // A detected conductor trigger is highlighted in the theme accent
-            // (`focus`, the brain slot). BOLD + REVERSED keep the token legible
-            // with color removed, so the highlight never depends on color alone.
-            let in_trigger = trigger_spans
+            // A detected conductor trigger shimmers like `ultrathink`: each
+            // column of the token takes the next colour in TRIGGER_RAINBOW,
+            // kept BOLD so the span still reads when colour is stripped (the
+            // `◆ LABEL` title badge names it too — never colour alone).
+            if let Some(span) = trigger_spans
                 .iter()
-                .any(|span| span.row == row && col >= span.col && col < span.col + span.len);
-            if in_trigger {
-                style = Style::default()
-                    .fg(theme.focus)
-                    .bg(theme.stage)
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+                .find(|span| span.row == row && col >= span.col && col < span.col + span.len)
+            {
+                let offset = usize::from(col - span.col);
+                let colour = TRIGGER_RAINBOW[offset % TRIGGER_RAINBOW.len()];
+                style = style
+                    .fg(colour)
+                    .add_modifier(Modifier::BOLD)
+                    .remove_modifier(Modifier::REVERSED);
             }
             target.set_symbol(if source.text.is_empty() {
                 " "
@@ -3058,17 +3076,16 @@ mod tests {
         }
     }
 
-    /// The concatenated symbols of every accent-highlighted cell, in buffer
-    /// (row-major) order. For a single trigger this is exactly the token, so
-    /// tests can assert the prompt glyph is never part of the highlight.
-    fn highlighted_symbols(buffer: &ratatui::buffer::Buffer, focus: super::Color) -> String {
+    /// The concatenated symbols of every rainbow-highlighted trigger cell, in
+    /// buffer (row-major) order. A highlighted cell is BOLD with a foreground
+    /// drawn from `TRIGGER_RAINBOW`; for a single trigger this is exactly the
+    /// token, so tests can assert the prompt glyph is never part of the span.
+    fn highlighted_symbols(buffer: &ratatui::buffer::Buffer) -> String {
         buffer
             .content()
             .iter()
             .filter(|cell| {
-                cell.fg == focus
-                    && cell.modifier.contains(Modifier::REVERSED)
-                    && cell.modifier.contains(Modifier::BOLD)
+                cell.modifier.contains(Modifier::BOLD) && super::TRIGGER_RAINBOW.contains(&cell.fg)
             })
             .map(ratatui::buffer::Cell::symbol)
             .collect()
@@ -3104,10 +3121,9 @@ mod tests {
                     terminal
                         .draw(|frame| render_stage(frame, &mut state))
                         .expect("render stage");
-                    let theme: Theme = theme_name.into();
                     let buffer = terminal.backend().buffer();
                     assert_eq!(
-                        highlighted_symbols(buffer, theme.focus),
+                        highlighted_symbols(buffer),
                         format!("{}:", trigger.keyword()),
                         "{trigger:?} prompt={prompt:?} in {theme_name:?}: highlighted span"
                     );
@@ -3145,10 +3161,9 @@ mod tests {
                 terminal
                     .draw(|frame| render_stage(frame, &mut state))
                     .expect("render stage");
-                let theme: Theme = theme_name.into();
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
-                    highlighted_symbols(buffer, theme.focus),
+                    highlighted_symbols(buffer),
                     expected,
                     "{stream:?} in {theme_name:?}: highlighted spans"
                 );
@@ -3182,10 +3197,9 @@ mod tests {
                 terminal
                     .draw(|frame| render_stage(frame, &mut state))
                     .expect("render stage");
-                let theme: Theme = theme_name.into();
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
-                    highlighted_symbols(buffer, theme.focus),
+                    highlighted_symbols(buffer),
                     "",
                     "{stream:?} in {theme_name:?}: false-positive highlight"
                 );
@@ -3210,10 +3224,9 @@ mod tests {
             terminal
                 .draw(|frame| render_stage(frame, &mut state))
                 .expect("render stage");
-            let theme: Theme = theme_name.into();
             let buffer = terminal.backend().buffer();
             assert_eq!(
-                highlighted_symbols(buffer, theme.focus),
+                highlighted_symbols(buffer),
                 "",
                 "{theme_name:?}: worker pane highlighted a trigger"
             );
@@ -3262,13 +3275,12 @@ mod tests {
     #[test]
     fn trigger_highlight_is_reduced_motion_and_color_safe() {
         // AC3: with reduced motion on or off the highlight is identical (it is
-        // static), and the affordance survives color removal because the token
-        // is bold + reverse-video and a glyph + label badge names it. Uses a
-        // real Claude Code prompt prefix (U+276F, as UTF-8 bytes) so the
-        // fixture matches a live pane, not a bare stream.
+        // static — a fixed rainbow, not an animation), and the affordance
+        // survives color removal because the token stays BOLD and a glyph +
+        // label badge names it. Uses a real Claude Code prompt prefix (U+276F,
+        // as UTF-8 bytes) so the fixture matches a live pane, not a bare stream.
         let stream = b"\xe2\x9d\xaf delegate: add OAuth login\r\n";
         for theme_name in ThemeName::ALL {
-            let theme: Theme = theme_name.into();
             let mut frames = Vec::new();
             for reduced_motion in [false, true] {
                 let backend = TestBackend::new(120, 40);
@@ -3280,7 +3292,7 @@ mod tests {
                     .expect("render shell");
                 let buffer = terminal.backend().buffer().clone();
                 assert_eq!(
-                    highlighted_symbols(&buffer, theme.focus),
+                    highlighted_symbols(&buffer),
                     "delegate:",
                     "{theme_name:?} reduced_motion={reduced_motion}: token span"
                 );
@@ -3318,11 +3330,10 @@ mod tests {
             terminal
                 .draw(|frame| render_stage(frame, &mut state))
                 .expect("render stage");
-            let theme: Theme = theme_name.into();
             let buffer = terminal.backend().buffer();
             // Only the keyword+colon lights up -- never the colored prompt glyph.
             assert_eq!(
-                highlighted_symbols(buffer, theme.focus),
+                highlighted_symbols(buffer),
                 "delegate:",
                 "{theme_name:?}: recorded prompt stream did not light up the trigger"
             );
