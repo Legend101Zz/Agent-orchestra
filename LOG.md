@@ -22,7 +22,7 @@ ship-log entries are part of finishing an issue.*
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | 🧪 | issue-6-universal-worker-adapter ([PR #24](https://github.com/Legend101Zz/Agent-orchestra/pull/24)) — reviewed, ACCEPT |
+| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | 🧪 | issue-6-universal-worker-adapter ([PR #24](https://github.com/Legend101Zz/Agent-orchestra/pull/24)) — reviewed; codex fix applied in-branch, real-CLI verified |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
@@ -145,7 +145,7 @@ or rate-limiting (those are #7 and later), and I did NOT change the two existing
 hand-configured defaults — they keep working exactly as before. This unblocks
 #12 (single-harness honest mode) and gives #8's `orch_*`/MCP surface a real,
 probe-driven delegate to call.
-> **Review verdict (Claude, 2026-07-24): 🧪 ACCEPT.** All 5 gates pass and all 4 ACs independently re-verified (mutation-tested — the AC2/probe-gating tests fail when the gates are removed); no scope violations, no new deps, no dead code; the cwd-as-orchestrator-provided deviation is sound and disclosed.
+> **Review verdict (Claude, 2026-07-24): fixture ACs all pass — but real-CLI testing found a defect, now fixed in-branch.** All 5 gates green; all 4 fixture ACs re-verified and mutation-tested. Going beyond the fixtures, a live dispatch to the actual installed CLIs showed `claude` working end-to-end but **`codex exec` failing** ("Not inside a trusted directory and --skip-git-repo-check was not specified") — a worker's orchestrator-assigned cwd is not guaranteed to be a git repo, so codex could never run as a probe-driven worker. **Fix applied here (orc-core only):** codex's template now carries the mandatory, permissive `--skip-git-repo-check` (a new probe-independent `fixed` flags slot; NOT a dangerous-skip flag, per #16). Re-tested live: codex + claude both confirmed, exit 0, returned PONG in a non-git sandbox. Ready for owner test + merge.
 
 ### 2026-07-24 — Trigger words light up inside conductor panes, issue #9 (code-puppy)
 When the conductor (the brain pane) prints one of the three spell words at the

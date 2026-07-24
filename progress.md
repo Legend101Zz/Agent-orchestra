@@ -784,3 +784,32 @@
   orc-cli/, tools/fixtures/). Out-of-scope respected: no rate limiting (#7), no
   MCP (#8), no session-id resume capture (deferred with #16 open-Q; resume
   dispatch isn't in this issue's ACs). Next: push + issue comment; then review.
+
+## Session — 2026-07-24 (Claude review of #6: real-CLI test → FIX applied in-branch)
+- Adversarial review of PR #24 / #6. All 5 gates re-run green; all 4 fixture-based
+  ACs independently re-verified and mutation-tested (removing the capability gate
+  or the structured-output probe-gate makes the tests fail, as they should).
+- Went beyond the fixtures and dispatched to the **real** installed CLIs (isolated
+  ORC_HOME, empty non-git sandbox cwd, trivial prompt). `claude` worked end-to-end
+  (`claude -p --output-format stream-json --verbose …` → confirmed, returned PONG).
+  **`codex` failed**: `codex exec --json -C <dir>` exits 1 with "Not inside a
+  trusted directory and --skip-git-repo-check was not specified." A worker cwd is
+  orchestrator-assigned and not guaranteed to be a git repo, so codex could never
+  run as a probe-driven worker. Root cause confirmed by reproducing the exact
+  invocation (with the flag → works and returns PONG; without → exit 1).
+- **Fix (in-branch, orc-core only):** added a `fixed: &'static [&'static str]`
+  field to `InvocationTemplate` for mandatory adapter-specific flags applied after
+  `style`, independent of any probe. codex now carries `--skip-git-repo-check`
+  (permissive only — NOT a sandbox/approval skip, per #16's rule against dangerous
+  defaults). Other templates set `fixed: &[]`. Added two unit tests (exact codex
+  argv incl. the flag even when optional probes are absent) written failing-first,
+  plus an integration assertion that `--skip-git-repo-check` reaches `command_line`.
+- Re-tested against real codex + claude: **both confirmed, exit 0, returned PONG**;
+  codex ran in the non-git sandbox via `codex exec --skip-git-repo-check --json -C`.
+  All 5 gates green again. opencode's template matches its 1.18.4 `run --format
+  json --dir` interface; hermes/pi keep the override path.
+- Known follow-up (NOT this branch): `pio doctor` reports an identical full
+  capability set for all five harnesses — accurate for codex here, but worth a
+  dedicated pass to confirm #4 truly exercises each harness rather than asserting
+  optimistically. Unattended permission mapping for codex/claude on real coding
+  tasks (approval prompts) is #16's open question, out of scope for #6's ACs.

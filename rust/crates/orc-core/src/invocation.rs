@@ -115,6 +115,12 @@ impl InvocationError {
 struct InvocationTemplate {
     /// Non-interactive style tokens, e.g. `["-p"]` (claude) or `["exec"]`.
     style: &'static [&'static str],
+    /// Mandatory adapter-specific flags always added after [`Self::style`],
+    /// independent of any probe. Used for a harness that will not run headless
+    /// in an orchestrator-assigned cwd without them (e.g. codex needs
+    /// `--skip-git-repo-check` to start outside a trusted git repo). Never a
+    /// dangerous permission-skip flag — those stay off by default (issue #16).
+    fixed: &'static [&'static str],
     /// Tokens added only when [`Capability::StructuredOutput`] was probed.
     structured: &'static [&'static str],
     /// Working-directory flag added only when [`Capability::WorkingDir`] was
@@ -133,14 +139,18 @@ fn template_for(adapter: &str) -> Option<InvocationTemplate> {
         // (its --add-dir only *adds* directories, it doesn't set the root).
         "claude" => InvocationTemplate {
             style: &["-p"],
+            fixed: &[],
             structured: &["--output-format", "stream-json", "--verbose"],
             cwd_flag: None,
             delivery: PromptDelivery::Argument,
             required: &[Capability::NonInteractive],
         },
-        // codex exec [--json] [-C <dir>] "<brief>"
+        // codex exec --skip-git-repo-check [--json] [-C <dir>] "<brief>"
+        // (--skip-git-repo-check is mandatory: codex refuses to start in a
+        // non-git worker cwd without it; it is permissive, not a sandbox skip.)
         "codex" => InvocationTemplate {
             style: &["exec"],
+            fixed: &["--skip-git-repo-check"],
             structured: &["--json"],
             cwd_flag: Some("-C"),
             delivery: PromptDelivery::Argument,
@@ -149,6 +159,7 @@ fn template_for(adapter: &str) -> Option<InvocationTemplate> {
         // opencode run [--format json] [--dir <dir>] "<brief>"
         "opencode" => InvocationTemplate {
             style: &["run"],
+            fixed: &[],
             structured: &["--format", "json"],
             cwd_flag: Some("--dir"),
             delivery: PromptDelivery::Argument,
@@ -157,6 +168,7 @@ fn template_for(adapter: &str) -> Option<InvocationTemplate> {
         // hermes -z "<brief>" — prints only the final answer (no structured out).
         "hermes" => InvocationTemplate {
             style: &["-z"],
+            fixed: &[],
             structured: &[],
             cwd_flag: None,
             delivery: PromptDelivery::Argument,
@@ -165,6 +177,7 @@ fn template_for(adapter: &str) -> Option<InvocationTemplate> {
         // pi -p --no-session [--mode json] "<brief>"; spawn cwd.
         "pi" => InvocationTemplate {
             style: &["-p", "--no-session"],
+            fixed: &[],
             structured: &["--mode", "json"],
             cwd_flag: None,
             delivery: PromptDelivery::Argument,
@@ -215,6 +228,7 @@ pub fn resolve_worker_invocation(
     }
     let mut args = config.args.clone();
     args.extend(template.style.iter().map(|token| (*token).to_owned()));
+    args.extend(template.fixed.iter().map(|token| (*token).to_owned()));
     if !template.structured.is_empty() && probed.contains(&Capability::StructuredOutput) {
         args.extend(template.structured.iter().map(|token| (*token).to_owned()));
     }
@@ -310,7 +324,30 @@ mod tests {
             Some(Path::new("/work/tree")),
         )
         .expect("codex resolves");
-        assert_eq!(full.args, vec!["exec", "--json", "-C", "/work/tree"]);
+        assert_eq!(
+            full.args,
+            vec![
+                "exec",
+                "--skip-git-repo-check",
+                "--json",
+                "-C",
+                "/work/tree"
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_always_gets_skip_git_repo_check_so_it_runs_in_any_worker_cwd() {
+        // codex refuses to start in a directory that is not a trusted git repo
+        // unless --skip-git-repo-check is passed. A worker's effective cwd is
+        // whatever the orchestrator assigns (a worktree when isolated, else the
+        // session cwd) and is not guaranteed to be a repo, so the flag is a
+        // mandatory part of codex's non-interactive form — added even when the
+        // optional structured-output and working-dir probes are absent.
+        let codex = config("codex", "codex", &[], &[]);
+        let bare = resolve_worker_invocation(&codex, &caps(&[Capability::NonInteractive]), None)
+            .expect("codex resolves with only non-interactive probed");
+        assert_eq!(bare.args, vec!["exec", "--skip-git-repo-check"]);
     }
 
     #[test]

@@ -247,9 +247,16 @@ fn subcommand_worker_receives_brief_and_uses_probed_cwd_and_json_flags() {
     .expect("dispatch resolves");
 
     assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
-    // codex probed non-interactive + structured + working-dir → exec --json -C.
+    // codex probed non-interactive + structured + working-dir →
+    // exec --skip-git-repo-check --json -C.
     assert!(
         record.command_line.contains("exec"),
+        "{}",
+        record.command_line
+    );
+    // codex will not start in a non-git worker cwd without this mandatory flag.
+    assert!(
+        record.command_line.contains("--skip-git-repo-check"),
         "{}",
         record.command_line
     );
