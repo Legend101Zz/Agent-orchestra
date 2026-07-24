@@ -37,3 +37,29 @@ resolved (v4 Phases 0–6) and preserved in git history and
   HTML + screenshots), distilled to `docs/design/visual-identity.md`.
   Three themes (nocturne flagship / ember / phosphor mono), 17 semantic
   slots, glyph register with ASCII fallbacks, baton pulse spec.
+
+## 2026-07-24 — Capability probe: advertisement ≠ runtime (from #6 real-CLI review)
+
+- **The `pio doctor` probe is help-token based and correctly per-harness.**
+  Each capability is proven by finding a harness-specific flag in that harness's
+  `--help` corpus (`probe/profiles.rs`). Verified live: Hermes (empty
+  structured-output and working-dir proof tokens) probes those two **false**,
+  while claude/codex/pi/opencode advertise and probe all eight **true**. It is
+  NOT rubber-stamping. (An earlier reviewer note claiming "identical capabilities
+  for all five" was a bug in the *inspection* script — it sorted the report's
+  `capabilities` map keys instead of filtering by `value == true`; the doctor
+  output is a full `{cap: bool}` map, so every capability name appears as a key.)
+- **What a positive probe guarantees:** the flag is *advertised*, not that the
+  one-shot invocation actually *runs* on this host. Live proof: codex advertises
+  `exec` / `--json` / `-C` (all probe true) yet `codex exec` refuses to start in
+  a non-git dir without `--skip-git-repo-check`. No help token can surface that.
+- **Where runtime quirks live:** per-adapter invocation *templates*
+  (`orc-core/src/invocation.rs`, the `fixed` flags slot), NOT the probe and NOT
+  as synthetic capabilities. Codex's `--skip-git-repo-check` is the first entry;
+  it is permissive only — never a sandbox/approval-skip (#16). Rule of thumb for
+  a new harness: `profiles.rs` = *what it advertises*; `invocation.rs` = *what it
+  takes to actually launch it*.
+- **Deliberately NOT done:** no execution/"smoke" probe that spawns a real
+  one-shot to verify it runs. That would make `pio doctor` incur real model
+  calls (cost + latency) on every refresh; the template layer already carries the
+  known runtime quirks. Revisit only if per-harness launch quirks proliferate.

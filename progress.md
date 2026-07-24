@@ -808,8 +808,14 @@
   codex ran in the non-git sandbox via `codex exec --skip-git-repo-check --json -C`.
   All 5 gates green again. opencode's template matches its 1.18.4 `run --format
   json --dir` interface; hermes/pi keep the override path.
-- Known follow-up (NOT this branch): `pio doctor` reports an identical full
-  capability set for all five harnesses — accurate for codex here, but worth a
-  dedicated pass to confirm #4 truly exercises each harness rather than asserting
-  optimistically. Unattended permission mapping for codex/claude on real coding
+- Probe follow-up — investigated and CLOSED here (no code fix needed): my first
+  note that "`pio doctor` reports an identical capability set for all five" was
+  wrong — a bug in my inspection script (sorted the `{cap: bool}` report map's
+  keys instead of filtering by `value == true`). Re-probed correctly: the probe
+  is honest and per-harness — Hermes probes `structured_output` and `working_dir`
+  **false** (its profile has empty proof tokens), the full agent CLIs probe all
+  eight true. Documented the real lesson (help-token probe proves *advertisement*
+  not *runtime*; runtime quirks like codex's `--skip-git-repo-check` live in the
+  invocation template, not the probe) in `findings.md` and the `probe/profiles.rs`
+  module header. Unattended permission mapping for codex/claude on real coding
   tasks (approval prompts) is #16's open question, out of scope for #6's ACs.
