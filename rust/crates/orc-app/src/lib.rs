@@ -3054,7 +3054,10 @@ mod tests {
         }
     }
 
-    fn highlighted_cells(buffer: &ratatui::buffer::Buffer, focus: super::Color) -> usize {
+    /// The concatenated symbols of every accent-highlighted cell, in buffer
+    /// (row-major) order. For a single trigger this is exactly the token, so
+    /// tests can assert the prompt glyph is never part of the highlight.
+    fn highlighted_symbols(buffer: &ratatui::buffer::Buffer, focus: super::Color) -> String {
         buffer
             .content()
             .iter()
@@ -3063,7 +3066,8 @@ mod tests {
                     && cell.modifier.contains(Modifier::REVERSED)
                     && cell.modifier.contains(Modifier::BOLD)
             })
-            .count()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     fn rendered_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -3074,37 +3078,45 @@ mod tests {
             .collect()
     }
 
+    // Prompt prefixes a real hosted pane renders before typed input. `\u{276f}`
+    // is Claude Code; `\u{279c}` is oh-my-zsh; the bare case keeps back-compat.
+    // These are the shapes the earlier bare-only fixtures failed to represent.
+    const REAL_PROMPTS: [&str; 6] = ["", "\u{276f} ", "> ", "$ ", "% ", "\u{279c} "];
+
     #[test]
     fn conductor_trigger_grammar_highlights_each_spell_in_every_theme() {
-        // AC1: each trigger streamed through the vt parser produces accent
-        // highlight spans in every theme, plus a glyph + label badge.
+        // AC1: each trigger streamed through the vt parser produces an accent
+        // highlight span in every theme, behind every real prompt prefix, plus
+        // a glyph + label badge. The highlighted span is exactly the
+        // keyword+colon -- never the prompt glyph.
         for trigger in Trigger::ALL {
-            let stream = format!("{}: build the thing\r\n", trigger.keyword());
-            for theme_name in ThemeName::ALL {
-                let backend = TestBackend::new(120, 40);
-                let mut terminal = Terminal::new(backend).expect("test terminal");
-                let mut state =
-                    StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
-                terminal
-                    .draw(|frame| render_stage(frame, &mut state))
-                    .expect("render stage");
-                let theme: Theme = theme_name.into();
-                let buffer = terminal.backend().buffer();
-                let expected = trigger.keyword().chars().count() + 1; // keyword + ':'
-                assert_eq!(
-                    highlighted_cells(buffer, theme.focus),
-                    expected,
-                    "{trigger:?} in {theme_name:?}: highlighted-cell count"
-                );
-                let text = rendered_text(buffer);
-                assert!(
-                    text.contains(Trigger::GLYPH),
-                    "{trigger:?} in {theme_name:?}: missing glyph badge"
-                );
-                assert!(
-                    text.contains(trigger.label()),
-                    "{trigger:?} in {theme_name:?}: missing label badge"
-                );
+            for prompt in REAL_PROMPTS {
+                let stream = format!("{prompt}{}: build the thing\r\n", trigger.keyword());
+                for theme_name in ThemeName::ALL {
+                    let backend = TestBackend::new(120, 40);
+                    let mut terminal = Terminal::new(backend).expect("test terminal");
+                    let mut state =
+                        StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
+                    terminal
+                        .draw(|frame| render_stage(frame, &mut state))
+                        .expect("render stage");
+                    let theme: Theme = theme_name.into();
+                    let buffer = terminal.backend().buffer();
+                    assert_eq!(
+                        highlighted_symbols(buffer, theme.focus),
+                        format!("{}:", trigger.keyword()),
+                        "{trigger:?} prompt={prompt:?} in {theme_name:?}: highlighted span"
+                    );
+                    let text = rendered_text(buffer);
+                    assert!(
+                        text.contains(Trigger::GLYPH),
+                        "{trigger:?} prompt={prompt:?} in {theme_name:?}: missing glyph badge"
+                    );
+                    assert!(
+                        text.contains(trigger.label()),
+                        "{trigger:?} prompt={prompt:?} in {theme_name:?}: missing label badge"
+                    );
+                }
             }
         }
     }
@@ -3112,11 +3124,16 @@ mod tests {
     #[test]
     fn conductor_pane_does_not_highlight_non_triggers() {
         // AC2: `redelegate:` is a different word and a bare `delegate` without a
-        // colon is prose; neither may highlight or badge, in any theme.
+        // colon is prose; neither may highlight or badge, in any theme -- and
+        // that must still hold with a real prompt prefix present.
         for stream in [
             "redelegate: not a trigger\r\n",
             "please delegate this work\r\n",
             "orchestrate the plan carefully\r\n",
+            "\u{276f} redelegate: not a trigger\r\n",
+            "\u{276f} please delegate this work\r\n",
+            "\u{276f} Delegate: capitalized\r\n",
+            "> delegated: past tense\r\n",
         ] {
             for theme_name in ThemeName::ALL {
                 let backend = TestBackend::new(120, 40);
@@ -3129,8 +3146,8 @@ mod tests {
                 let theme: Theme = theme_name.into();
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
-                    highlighted_cells(buffer, theme.focus),
-                    0,
+                    highlighted_symbols(buffer, theme.focus),
+                    "",
                     "{stream:?} in {theme_name:?}: false-positive highlight"
                 );
                 assert!(
@@ -3157,8 +3174,8 @@ mod tests {
             let theme: Theme = theme_name.into();
             let buffer = terminal.backend().buffer();
             assert_eq!(
-                highlighted_cells(buffer, theme.focus),
-                0,
+                highlighted_symbols(buffer, theme.focus),
+                "",
                 "{theme_name:?}: worker pane highlighted a trigger"
             );
         }
@@ -3207,8 +3224,10 @@ mod tests {
     fn trigger_highlight_is_reduced_motion_and_color_safe() {
         // AC3: with reduced motion on or off the highlight is identical (it is
         // static), and the affordance survives color removal because the token
-        // is bold + reverse-video and a glyph + label badge names it.
-        let stream = b"delegate: add OAuth login\r\n";
+        // is bold + reverse-video and a glyph + label badge names it. Uses a
+        // real Claude Code prompt prefix (U+276F, as UTF-8 bytes) so the
+        // fixture matches a live pane, not a bare stream.
+        let stream = b"\xe2\x9d\xaf delegate: add OAuth login\r\n";
         for theme_name in ThemeName::ALL {
             let theme: Theme = theme_name.into();
             let mut frames = Vec::new();
@@ -3222,8 +3241,8 @@ mod tests {
                     .expect("render shell");
                 let buffer = terminal.backend().buffer().clone();
                 assert_eq!(
-                    highlighted_cells(&buffer, theme.focus),
-                    9,
+                    highlighted_symbols(&buffer, theme.focus),
+                    "delegate:",
                     "{theme_name:?} reduced_motion={reduced_motion}: token span"
                 );
                 let text = rendered_text(&buffer);
@@ -3240,6 +3259,42 @@ mod tests {
             assert_eq!(
                 frames[0], frames[1],
                 "{theme_name:?}: reduced motion altered the trigger highlight"
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_claude_code_prompt_stream_lights_up_the_typed_trigger() {
+        // Evidence beyond hand-placed cells (the gap that hid the prompt bug):
+        // a recorded Claude-Code-shaped byte stream -- ANSI color around the
+        // U+276F prompt glyph, then the typed trigger -- run through the REAL
+        // vt100 parser and the full render pipeline. This is the exact line the
+        // reviewer typed live (`\u{276f} delegate: some web research ...`).
+        let stream = b"\x1b[2K\x1b[38;5;213m\xe2\x9d\xaf\x1b[39m \
+                       delegate: some web research to the workers\r\n";
+        for theme_name in ThemeName::ALL {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state))
+                .expect("render stage");
+            let theme: Theme = theme_name.into();
+            let buffer = terminal.backend().buffer();
+            // Only the keyword+colon lights up -- never the colored prompt glyph.
+            assert_eq!(
+                highlighted_symbols(buffer, theme.focus),
+                "delegate:",
+                "{theme_name:?}: recorded prompt stream did not light up the trigger"
+            );
+            let text = rendered_text(buffer);
+            assert!(
+                text.contains(Trigger::GLYPH),
+                "{theme_name:?}: missing glyph badge"
+            );
+            assert!(
+                text.contains("DELEGATE"),
+                "{theme_name:?}: missing label badge"
             );
         }
     }
