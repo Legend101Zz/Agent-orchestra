@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod bench;
+pub mod contract;
 pub mod control;
 pub mod discovery;
 pub mod dispatch;

@@ -19,7 +19,7 @@ ship-log entries are part of finishing an issue.*
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ✅ | merged (PR #19) |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
-| [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ⬜ | — |
+| [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | 🧪 | issue-5-task-contract-v2 |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
@@ -119,6 +119,27 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-24 — Every delegated task carries a contract, issue #5 (code-puppy)
+pi-orchestra tasks can now carry a full "contract": the objective, the exact
+files a worker may touch, forbidden actions, the expected artifact, numbered
+acceptance checks, a per-attempt timeout and retry limit, a named reviewer, and
+a token/dollar budget. You attach one when you create a task — `pio task add
+"title" --objective … --allowed … --forbidden … --check … --artifact …
+--reviewer … --timeout … --max-tokens … --max-usd-cents …` — and read it back
+with `pio task show`. The new `pio task brief` prints the exact hand-off a
+worker receives: every contract section, reproduced word-for-word, with any
+unset section clearly marked "(none specified)" instead of quietly dropped, so
+no one mistakes a blank contract for a satisfied one. Old task files written
+before contracts still load untouched, and unknown future fields survive a
+read→write cycle, so nothing on disk breaks. I did NOT wire the brief into the
+actual dispatch send yet (a worker still gets the prompt you pass), and I did
+NOT surface contract fields on the SCORE board — that card is fed by crates
+(`orc-proto`/`orc-daemon`) this issue isn't allowed to touch, so it's a clean
+follow-up. This unblocks #8 (the `orch_*` control surface + MCP server, which
+reuses this exact schema) and #11 (worktree isolation + independent review).
+
+> **Review verdict (2026-07-24, Claude): ACCEPT** — all 5 gates re-run green on MSRV 1.91.1 incl. the offline `--locked` build (schemars 1.2.1 resolves from cache); AC1/AC2/AC3 independently reproduced (pre-v2 records load with no spurious `contract` key + unknown fields survive at top/contract/nested layers; `task add`→`show`→`brief` round-trips every field; brief reproduces each section verbatim and marks unset ones `(none specified)`). Scope clean: allowed paths + the two justified deviations — `rust/Cargo.toml`/`Cargo.lock` for the **#16-mandated** schemars dep (decision record §5, MIT, exact version), and the SCORE-card deferral (its data lives in the *forbidden* `orc-proto`/`orc-daemon`, so genuinely blocked). No dead code, no lint-silencing. One non-blocking note: the brief isn't yet wired into `dispatch send` (`render_brief` is `pub` and ready) — AC3 is about brief *content*, which passes, but closing that loop is the real follow-on for #8/#11. Set 🧪 — ready for your local test + merge.
 
 ### 2026-07-23 — Find out what each installed CLI can actually do (`pio doctor`), issue #4 (code-puppy)
 pi-orchestra can now tell you what each AI CLI on your machine is genuinely
