@@ -116,7 +116,7 @@ fn parse_retry_after(lower: &str) -> Option<u64> {
     for key in KEYS {
         if let Some(index) = lower.find(key) {
             let window: String = lower[index + key.len()..].chars().take(24).collect();
-            if let Some(seconds) = digits_after(&window) {
+            if let Some(seconds) = seconds_after(&window) {
                 return Some(seconds);
             }
         }
@@ -124,21 +124,40 @@ fn parse_retry_after(lower: &str) -> Option<u64> {
     None
 }
 
-/// First run of digits after leading separators; `None` if a word intervenes.
-fn digits_after(window: &str) -> Option<u64> {
+/// Parse the first "<number> [unit]" after the key into **seconds**.
+///
+/// Understands second / minute / hour / millisecond unit words (defaulting to
+/// seconds when none follows), so "retry after 2 minutes" surfaces 120, not 2
+/// (reviewer Fix 3 — a unit-blind number is a misleading operator hint).
+/// Returns `None` if a non-numeric word intervenes before any digits.
+fn seconds_after(window: &str) -> Option<u64> {
     let mut started = false;
-    let mut value = String::new();
-    for ch in window.chars() {
+    let mut digits = String::new();
+    let mut rest = "";
+    for (index, ch) in window.char_indices() {
         if ch.is_ascii_digit() {
             started = true;
-            value.push(ch);
+            digits.push(ch);
         } else if started {
+            rest = &window[index..];
             break;
         } else if ch.is_ascii_alphabetic() {
             return None;
         }
     }
-    value.parse::<u64>().ok()
+    let value = digits.parse::<u64>().ok()?;
+    if rest.contains("ms") || rest.contains("milli") {
+        // Sub-second: report whole seconds rather than mislabel millis as seconds.
+        return Some(value / 1000);
+    }
+    let multiplier = if rest.contains("hour") || rest.contains("hr") {
+        3600
+    } else if rest.contains("min") {
+        60
+    } else {
+        1
+    };
+    Some(value.saturating_mul(multiplier))
 }
 
 /// Exponential backoff configuration for one retryable operation.
@@ -275,6 +294,18 @@ mod tests {
             detect("pi", "Too many requests, please try again in 5 seconds")
                 .and_then(|signal| signal.retry_after),
             Some(5)
+        );
+        // Units are honored so the operator hint is not misleading (Fix 3):
+        // "2 minutes" is 120 seconds, not 2; "1 hour" is 3600.
+        assert_eq!(
+            detect("claude", "rate limit hit; retry after 2 minutes")
+                .and_then(|signal| signal.retry_after),
+            Some(120)
+        );
+        assert_eq!(
+            detect("codex", "overloaded, try again in 1 hour")
+                .and_then(|signal| signal.retry_after),
+            Some(3600)
         );
         // A signal with no numeric hint still detects, hint is None.
         assert_eq!(

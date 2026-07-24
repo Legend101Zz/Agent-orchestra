@@ -7,7 +7,8 @@
 //! the workspace denies `unsafe`. They prove the per-harness concurrency cap is
 //! enforced by durable, cross-session leases: N slots admit N holders and queue
 //! the next, a released slot frees exactly one, each harness has its own pool,
-//! and an abandoned lease is pruned so it never wedges the cap forever.
+//! an abandoned lease is pruned, and a lock left by a dead holder is reclaimed,
+//! so neither ever wedges the cap forever.
 
 use std::fs;
 use std::path::PathBuf;
@@ -110,5 +111,37 @@ fn an_abandoned_lease_is_pruned_and_does_not_wedge_the_cap() {
         .expect("acquire after prune")
         .expect("slot free after prune");
     drop(refreshed);
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_lock_abandoned_by_a_dead_holder_is_reclaimed_not_wedged() {
+    // Reviewer Fix 2: if a dispatcher is SIGKILLed in the microsecond window
+    // while holding `.slots.lock`, the lockfile must not wedge this harness's
+    // cap forever. A lock whose recorded holder pid is dead is reclaimed on the
+    // next acquire (parity with the dead-pid lease prune).
+    let _guard = lock();
+    let home = fresh_home("stale-lock");
+    // `hermes` is left unchanged by the dir sanitizer, so this is the real path.
+    let dir = home.join("slots").join("hermes");
+    fs::create_dir_all(&dir).expect("create slots dir");
+
+    // A pid guaranteed dead: spawn a trivial process and reap it.
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn true");
+    let dead_pid = child.id();
+    child.wait().expect("reap true");
+
+    // Plant a lock as if a crashed dispatcher still held it.
+    fs::write(dir.join(".slots.lock"), format!("{dead_pid}\n")).expect("plant stale lock");
+
+    // acquire_slot must reclaim the dead-holder lock and hand out a slot rather
+    // than spin out and error "busy".
+    let lease = acquire_slot("hermes", 1, DEFAULT_LEASE_TTL, None)
+        .expect("acquire must not error on a dead-holder lock")
+        .expect("slot is free once the stale lock is reclaimed");
+    assert_eq!(active_slots("hermes").expect("count after reclaim"), 1);
+    drop(lease);
     let _ = fs::remove_dir_all(home);
 }

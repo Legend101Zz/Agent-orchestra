@@ -37,8 +37,8 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -56,6 +56,12 @@ use crate::registry::{atomic_write_json, home, pid_alive};
 /// lease older than this is considered abandoned even if some live process now
 /// happens to own that pid.
 pub const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(1800);
+
+/// A `.slots.lock` older than this whose holder cannot be proven alive is
+/// treated as abandoned and reclaimed. The lock is only ever held for a few
+/// microseconds (prune + count + one write), so any lock this old is a crash
+/// artifact, not real contention.
+const STALE_LOCK: Duration = Duration::from_secs(30);
 
 const LOCK_ATTEMPTS: usize = 200;
 const LOCK_WAIT: Duration = Duration::from_millis(5);
@@ -183,13 +189,24 @@ impl Drop for SlotLock {
     }
 }
 
-fn lock_slots(dir: &PathBuf) -> Result<SlotLock> {
+fn lock_slots(dir: &Path) -> Result<SlotLock> {
     fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let path = dir.join(".slots.lock");
     for _ in 0..LOCK_ATTEMPTS {
         match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok(SlotLock { path, _file: file }),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => thread::sleep(LOCK_WAIT),
+            Ok(mut file) => {
+                // Record the holder pid so a crashed holder's lock is reclaimable.
+                let _ = writeln!(file, "{}", std::process::id());
+                return Ok(SlotLock { path, _file: file });
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                // Self-heal a lock abandoned by a crashed dispatcher (parity with
+                // the dead-pid/TTL lease prune) so a SIGKILL mid-hold never wedges
+                // this harness's cap forever (reviewer Fix 2).
+                if !reclaim_if_stale(&path) {
+                    thread::sleep(LOCK_WAIT);
+                }
+            }
             Err(error) => return Err(error).with_context(|| format!("lock {}", path.display())),
         }
     }
@@ -197,6 +214,44 @@ fn lock_slots(dir: &PathBuf) -> Result<SlotLock> {
         "slot guard for {} is busy; retry the command",
         dir.display()
     )
+}
+
+/// Reclaim an abandoned `.slots.lock` if its holder is dead or it is older than
+/// [`STALE_LOCK`]. Returns whether the caller should retry immediately.
+///
+/// The steal is atomic: only one racer can `rename` the lockfile away, so a
+/// concurrent reclaim can never delete a lock a different process just recreated
+/// — losers see the source gone and simply retry `create_new`.
+fn reclaim_if_stale(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        // Already gone (a racer reclaimed it) — retry the create immediately.
+        return true;
+    };
+    let aged = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|elapsed| elapsed >= STALE_LOCK);
+    let holder = fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok());
+    // Dead recorded holder -> reclaim now. Unknown holder (empty/old-binary
+    // lock) or a live-but-recycled pid -> only reclaim once it is clearly aged,
+    // so a genuinely held lock is never stolen from a live holder.
+    let reclaimable = match holder {
+        Some(pid) => !pid_alive(Some(pid)) || aged,
+        None => aged,
+    };
+    if !reclaimable {
+        return false;
+    }
+    let stolen = path.with_extension(format!("stale.{}", std::process::id()));
+    if fs::rename(path, &stolen).is_ok() {
+        let _ = fs::remove_file(&stolen);
+    }
+    // Whether we won the steal or another racer did, the stale lock is going or
+    // gone; retry the create.
+    true
 }
 
 /// Whether a lease is still live: its owning process is alive and the TTL has

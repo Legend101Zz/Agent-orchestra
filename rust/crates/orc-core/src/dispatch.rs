@@ -520,16 +520,25 @@ fn invoke_with_backoff(
     let attempt = || -> std::result::Result<Invoked, AttemptError> {
         match invoke_harness(program, invocation, prompt, cwd, timeout) {
             Ok(invoked) => {
-                let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
-                if ratelimit::is_rate_limited(adapter, &combined) {
-                    Err(AttemptError::RateLimited(invoked))
-                } else if invoked.success {
+                if invoked.success {
+                    // A clean (exit 0) run is confirmed regardless of what its
+                    // output merely *mentions*: a coding worker that summarizes
+                    // "added 429 handling / rate-limit backoff" is not itself
+                    // rate-limited. Only a non-success invocation is scanned for
+                    // a throttle signal, because real provider rate limits exit
+                    // non-zero (reviewer Fix 1 — detection must not fail good work
+                    // nor multiply provider load on successful runs).
                     Ok(invoked)
                 } else {
-                    Err(AttemptError::Terminal(
-                        DispatchFailureKind::HarnessError,
-                        Some(invoked),
-                    ))
+                    let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
+                    if ratelimit::is_rate_limited(adapter, &combined) {
+                        Err(AttemptError::RateLimited(invoked))
+                    } else {
+                        Err(AttemptError::Terminal(
+                            DispatchFailureKind::HarnessError,
+                            Some(invoked),
+                        ))
+                    }
                 }
             }
             Err(kind) => Err(AttemptError::Terminal(kind, None)),

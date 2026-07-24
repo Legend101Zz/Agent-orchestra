@@ -325,6 +325,68 @@ exit 1
     let _ = fs::remove_dir_all(home);
 }
 
+#[test]
+fn a_successful_worker_whose_output_mentions_a_rate_limit_is_confirmed_once() {
+    // Reviewer Fix 1 regression: detection must fire only on a *non-success*
+    // exit. A coding worker that finishes cleanly (exit 0) but whose output
+    // merely mentions a signal substring — here this PR's own diff summary —
+    // must be confirmed on the FIRST attempt, never retried or mislabeled.
+    let _guard = lock();
+    let home = fresh_home("success-mentions-limit");
+    let counter = home.join("attempts.count");
+    let script = write_script(
+        &home,
+        "mentions-limit.sh",
+        &format!(
+            r#"#!/bin/sh
+count_file='{counter}'
+n=0
+[ -f "$count_file" ] && n=$(cat "$count_file")
+n=$((n + 1))
+echo "$n" > "$count_file"
+echo "summary: added quota guard v2 with rate limit backoff and 429 handling"
+exit 0
+"#,
+            counter = counter.display()
+        ),
+    );
+    let mut registry = HarnessRegistry::default();
+    registry
+        .harnesses
+        .insert("clean".to_owned(), worker(&script, "hermes"));
+    write_harness_registry(&registry).expect("write registry");
+    let session = session_in(&home, "clean", &["clean".to_owned()]);
+    let task = running_task(&session.id, "summarize the diff", "clean");
+
+    let record = dispatch_with_policy(
+        &request(&session.id, &task, "clean", "summarize"),
+        &BackoffPolicy::fast(),
+    )
+    .expect("dispatch persists a record");
+
+    assert_eq!(
+        record.status, "confirmed",
+        "a clean exit-0 run is confirmed even when its output mentions a limit"
+    );
+    assert!(
+        record.failure_kind.is_none(),
+        "not a failure: {:?}",
+        record.failure_kind
+    );
+    assert!(
+        record.warnings.is_empty(),
+        "no backoff warning on a successful run: {:?}",
+        record.warnings
+    );
+    let attempts: u32 = fs::read_to_string(&counter)
+        .expect("counter file")
+        .trim()
+        .parse()
+        .expect("counter is numeric");
+    assert_eq!(attempts, 1, "confirmed on the first attempt — no retries");
+    let _ = fs::remove_dir_all(home);
+}
+
 // ---------------------------------------------------------------------------
 // AC3 — the cap is configured in the registry and spans sessions.
 // ---------------------------------------------------------------------------
