@@ -28,6 +28,7 @@ use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
     PaneSnapshot, ServerResponse, SessionSummary, TaskSummary, TerminalColor,
 };
+use orc_pty::trigger::{Trigger, scan_line};
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -77,6 +78,10 @@ pub enum ThemeName {
 }
 
 impl ThemeName {
+    /// Every approved theme, so snapshot coverage tracks the palette set
+    /// automatically as themes are added.
+    pub const ALL: [Self; 2] = [Self::Ember, Self::Phosphor];
+
     /// Parse a configured theme name.
     #[must_use]
     pub fn named(name: &str) -> Self {
@@ -2591,6 +2596,70 @@ fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState) {
     );
 }
 
+/// A trigger token located on the pane grid, in terminal columns.
+struct TriggerSpan {
+    row: u16,
+    col: u16,
+    len: u16,
+}
+
+/// Scan one grid row of a hosted pane for a line-anchored trigger, mapping the
+/// grammar's character offsets back onto terminal columns.
+fn scan_pane_row(pane: &PaneSnapshot, row: u16) -> Option<(TriggerSpan, Trigger)> {
+    let cols = pane.cols;
+    let mut line = String::new();
+    // char index -> source column, so a token can be located even when earlier
+    // cells hold wide graphemes or blanks.
+    let mut columns: Vec<u16> = Vec::new();
+    for col in 0..cols {
+        let index = usize::from(row) * usize::from(cols) + usize::from(col);
+        let text = pane.cells.get(index).map_or("", |cell| cell.text.as_str());
+        if text.is_empty() {
+            line.push(' ');
+            columns.push(col);
+        } else {
+            for ch in text.chars() {
+                line.push(ch);
+                columns.push(col);
+            }
+        }
+    }
+    let matched = scan_line(&line)?;
+    let start_col = *columns.get(matched.char_start)?;
+    let end_col = *columns.get(matched.char_start + matched.char_len - 1)?;
+    Some((
+        TriggerSpan {
+            row,
+            col: start_col,
+            len: end_col - start_col + 1,
+        },
+        matched.trigger,
+    ))
+}
+
+/// Detect every trigger token in a conductor pane's current screen.
+///
+/// Detection is scoped to the conductor (`brain`) pane: the trigger grammar is
+/// the conductor asserting intent, and workers must never light up because they
+/// happened to echo the word. Returns the spans to highlight and the distinct
+/// triggers present, in first-seen order, for the title badge.
+fn conductor_triggers(pane: &PaneSnapshot) -> (Vec<TriggerSpan>, Vec<Trigger>) {
+    if pane.role.as_deref() != Some("brain") {
+        return (Vec::new(), Vec::new());
+    }
+    let mut spans = Vec::new();
+    let mut seen: Vec<Trigger> = Vec::new();
+    for row in 0..pane.rows {
+        if let Some((span, trigger)) = scan_pane_row(pane, row) {
+            if !seen.contains(&trigger) {
+                seen.push(trigger);
+            }
+            spans.push(span);
+        }
+    }
+    (spans, seen)
+}
+
 fn render_pane(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2599,13 +2668,26 @@ fn render_pane(
     confirmed: bool,
     theme: Theme,
 ) {
+    let (trigger_spans, triggers) = conductor_triggers(pane);
+    // A glyph + label badge so the trigger is legible without color.
+    let badge = if triggers.is_empty() {
+        String::new()
+    } else {
+        let labels = triggers
+            .iter()
+            .map(|trigger| trigger.label())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(" · {} {}", Trigger::GLYPH, labels)
+    };
     let border_color = if focus { theme.focus } else { theme.dim };
     let block = Block::default()
         .title(format!(
-            " {}  {}{} ",
+            " {}  {}{}{} ",
             pane.title.to_uppercase(),
             pane.state.as_deref().unwrap_or("LIVE"),
-            if confirmed { " · TASK CONFIRMED" } else { "" }
+            if confirmed { " · TASK CONFIRMED" } else { "" },
+            badge,
         ))
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
@@ -2668,6 +2750,18 @@ fn render_pane(
             if source.inverse {
                 style = style.add_modifier(Modifier::REVERSED);
             }
+            // A detected conductor trigger is highlighted in the theme accent
+            // (`focus`, the brain slot). BOLD + REVERSED keep the token legible
+            // with color removed, so the highlight never depends on color alone.
+            let in_trigger = trigger_spans
+                .iter()
+                .any(|span| span.row == row && col >= span.col && col < span.col + span.len);
+            if in_trigger {
+                style = Style::default()
+                    .fg(theme.focus)
+                    .bg(theme.stage)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+            }
             target.set_symbol(if source.text.is_empty() {
                 " "
             } else {
@@ -2699,6 +2793,7 @@ mod tests {
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
 
     use super::{
         AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HarnessDiscovery, HomeData, HomeState,
@@ -2707,6 +2802,8 @@ mod tests {
         render_stage, route_raw_mouse, route_runs_key, score_mouse,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use orc_pty::cells_from_stream;
+    use orc_pty::trigger::Trigger;
 
     fn ledger_run(id: &str, status: &str, session: Option<&str>) -> orc_core::model::RunMeta {
         orc_core::model::RunMeta {
@@ -2935,6 +3032,215 @@ mod tests {
                 assert!(text.contains("HERMES"));
                 assert!(text.contains("TASK CONFIRMED"));
             }
+        }
+    }
+
+    fn conductor_pane(stream: &[u8]) -> PaneSnapshot {
+        let rows = 30;
+        let cols = 90;
+        PaneSnapshot {
+            id: "brain".to_owned(),
+            title: "claude".to_owned(),
+            rows,
+            cols,
+            cursor: (0, 0),
+            sequence: 1,
+            cells: cells_from_stream(rows, cols, stream).expect("parse conductor stream"),
+            session_id: None,
+            harness: None,
+            role: Some("brain".to_owned()),
+            state: None,
+            down_at: None,
+        }
+    }
+
+    fn highlighted_cells(buffer: &ratatui::buffer::Buffer, focus: super::Color) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| {
+                cell.fg == focus
+                    && cell.modifier.contains(Modifier::REVERSED)
+                    && cell.modifier.contains(Modifier::BOLD)
+            })
+            .count()
+    }
+
+    fn rendered_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    #[test]
+    fn conductor_trigger_grammar_highlights_each_spell_in_every_theme() {
+        // AC1: each trigger streamed through the vt parser produces accent
+        // highlight spans in every theme, plus a glyph + label badge.
+        for trigger in Trigger::ALL {
+            let stream = format!("{}: build the thing\r\n", trigger.keyword());
+            for theme_name in ThemeName::ALL {
+                let backend = TestBackend::new(120, 40);
+                let mut terminal = Terminal::new(backend).expect("test terminal");
+                let mut state =
+                    StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
+                terminal
+                    .draw(|frame| render_stage(frame, &mut state))
+                    .expect("render stage");
+                let theme: Theme = theme_name.into();
+                let buffer = terminal.backend().buffer();
+                let expected = trigger.keyword().chars().count() + 1; // keyword + ':'
+                assert_eq!(
+                    highlighted_cells(buffer, theme.focus),
+                    expected,
+                    "{trigger:?} in {theme_name:?}: highlighted-cell count"
+                );
+                let text = rendered_text(buffer);
+                assert!(
+                    text.contains(Trigger::GLYPH),
+                    "{trigger:?} in {theme_name:?}: missing glyph badge"
+                );
+                assert!(
+                    text.contains(trigger.label()),
+                    "{trigger:?} in {theme_name:?}: missing label badge"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn conductor_pane_does_not_highlight_non_triggers() {
+        // AC2: `redelegate:` is a different word and a bare `delegate` without a
+        // colon is prose; neither may highlight or badge, in any theme.
+        for stream in [
+            "redelegate: not a trigger\r\n",
+            "please delegate this work\r\n",
+            "orchestrate the plan carefully\r\n",
+        ] {
+            for theme_name in ThemeName::ALL {
+                let backend = TestBackend::new(120, 40);
+                let mut terminal = Terminal::new(backend).expect("test terminal");
+                let mut state =
+                    StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
+                terminal
+                    .draw(|frame| render_stage(frame, &mut state))
+                    .expect("render stage");
+                let theme: Theme = theme_name.into();
+                let buffer = terminal.backend().buffer();
+                assert_eq!(
+                    highlighted_cells(buffer, theme.focus),
+                    0,
+                    "{stream:?} in {theme_name:?}: false-positive highlight"
+                );
+                assert!(
+                    !rendered_text(buffer).contains(Trigger::GLYPH),
+                    "{stream:?} in {theme_name:?}: false-positive badge"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn worker_pane_never_highlights_a_trigger() {
+        // The grammar is the conductor asserting intent; a worker echoing the
+        // word must stay quiet even with an exact trigger on screen.
+        let mut pane = conductor_pane(b"delegate: worker echo\r\n");
+        pane.role = Some("worker".to_owned());
+        for theme_name in ThemeName::ALL {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            let mut state = StageState::new(vec![pane.clone()], theme_name);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state))
+                .expect("render stage");
+            let theme: Theme = theme_name.into();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(
+                highlighted_cells(buffer, theme.focus),
+                0,
+                "{theme_name:?}: worker pane highlighted a trigger"
+            );
+        }
+    }
+
+    fn stage_shell(
+        panes: Vec<PaneSnapshot>,
+        theme_name: ThemeName,
+        reduced_motion: bool,
+    ) -> ShellState {
+        let tui_theme = if theme_name == ThemeName::Phosphor {
+            orc_tui::PHOSPHOR
+        } else {
+            orc_tui::EMBER
+        };
+        ShellState {
+            view: ShellView::Stage,
+            home: HomeState {
+                data: HomeData {
+                    sessions: Vec::new(),
+                    harnesses: Vec::new(),
+                    discovered: Vec::new(),
+                    default_workers: Vec::new(),
+                    max_parallel_workers: 3,
+                    theme: theme_name.as_str().to_owned(),
+                    reduced_motion,
+                    leader_key: "ctrl-g".to_owned(),
+                },
+                selected: 0,
+                flow: None,
+                message: String::new(),
+            },
+            stage: Some(StageState::new(panes, theme_name)),
+            score: None,
+            theme: theme_name.into(),
+            runs: orc_tui::App::with_runs(Vec::new(), tui_theme),
+            help: false,
+            reduced_motion,
+            epoch: std::time::Instant::now(),
+            leader: LeaderKey::parse("ctrl-g"),
+            watch_session: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn trigger_highlight_is_reduced_motion_and_color_safe() {
+        // AC3: with reduced motion on or off the highlight is identical (it is
+        // static), and the affordance survives color removal because the token
+        // is bold + reverse-video and a glyph + label badge names it.
+        let stream = b"delegate: add OAuth login\r\n";
+        for theme_name in ThemeName::ALL {
+            let theme: Theme = theme_name.into();
+            let mut frames = Vec::new();
+            for reduced_motion in [false, true] {
+                let backend = TestBackend::new(120, 40);
+                let mut terminal = Terminal::new(backend).expect("test terminal");
+                let mut shell =
+                    stage_shell(vec![conductor_pane(stream)], theme_name, reduced_motion);
+                terminal
+                    .draw(|frame| render_shell(frame, &mut shell))
+                    .expect("render shell");
+                let buffer = terminal.backend().buffer().clone();
+                assert_eq!(
+                    highlighted_cells(&buffer, theme.focus),
+                    9,
+                    "{theme_name:?} reduced_motion={reduced_motion}: token span"
+                );
+                let text = rendered_text(&buffer);
+                assert!(
+                    text.contains(Trigger::GLYPH),
+                    "{theme_name:?} reduced_motion={reduced_motion}: glyph badge"
+                );
+                assert!(
+                    text.contains("DELEGATE"),
+                    "{theme_name:?} reduced_motion={reduced_motion}: label badge"
+                );
+                frames.push(buffer);
+            }
+            assert_eq!(
+                frames[0], frames[1],
+                "{theme_name:?}: reduced motion altered the trigger highlight"
+            );
         }
     }
 

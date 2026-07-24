@@ -20,7 +20,7 @@ ship-log entries are part of finishing an issue.*
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
-| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
+| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | 👀 | issue-9-trigger-grammar |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
@@ -122,6 +122,25 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-24 — Trigger words light up inside conductor panes, issue #9 (code-puppy)
+When the conductor (the brain pane) prints one of the three spell words at the
+start of a line — `delegate:`, `orchestrate:`, or `deliberate:` — pi-orchestra
+now lights that word up in the pane, ultrathink-style: the token is drawn in the
+theme accent as a bold, reverse-video block, and the pane's title grows a small
+badge (a diamond glyph plus the word, e.g. "DELEGATE") so you can tell at a
+glance the conductor is casting a spell. It is deliberately strict and only
+fires on a real trigger: `redelegate:` and a bare `delegate` with no colon stay
+plain, matching is case-sensitive, and a worker pane that merely echoes the word
+never lights up — only the conductor asserts intent. Because the highlight is a
+bold reverse-video block plus a spelled-out badge, it still reads with color
+turned off (NO_COLOR / mono terminals) and looks identical whether reduced
+motion is on or off. I did NOT make the highlight *do* anything yet — typing
+`delegate:` shows the affordance but does not itself dispatch a worker (routing
+is #6/#8), and I did NOT touch standalone harnesses like Claude Code or Codex
+(that's #10). The trigger grammar now lives as a reusable, tested primitive
+(`orc_pty::trigger`) that #8's `orch_*` control surface can call to actually
+route a spell to a procedure.
 
 ### 2026-07-24 — Every delegated task carries a contract, issue #5 (code-puppy)
 pi-orchestra tasks can now carry a full "contract": the objective, the exact

@@ -630,3 +630,46 @@
   bottlenecks (#4, #5) cleared. Next: #6 (universal worker adapter) then #8.
   Two follow-ups seeded for #6/#8: wire the brief into `dispatch send`, and
   add a headless `session create`.
+
+## Session — 2026-07-24 (code-puppy): #9 trigger grammar in hosted panes
+- Worked issue #9 (V1-7) on `issue-9-trigger-grammar` from fresh `main`. The
+  issue's `## Objective` is truncated at source (`... [truncated]`); rebuilt
+  intent from the V1 spec's "Trigger words & terminal highlighting" section and
+  the four acceptance checks, which are complete.
+- Grammar as a single source of truth: new `orc-pty/src/trigger.rs` — `Trigger`
+  enum (`Delegate`/`Orchestrate`/`Deliberate`), `TriggerMatch` (char offsets),
+  and pure `scan_line()`. Line-anchored + case-sensitive: fires only when a
+  keyword is the first non-whitespace token and is immediately followed by `:`.
+  `redelegate:`, a colon-less `delegate`, mid-sentence `orchestrate:`, and
+  `Delegate:` all stay quiet. Put here (not orc-app) so the daemon (already an
+  `orc-pty` dependent) and #8's `orch_*` routing can reuse one definition.
+- Added `orc_pty::cells_from_stream(rows, cols, bytes)` — runs the same vt100
+  parser headlessly to turn a recorded fixture stream into the exact
+  `TerminalCell` grid a snapshot carries, so AC1 tests real VT streams rather
+  than hand-placed cells. Reuses the existing `terminal_cell` conversion (DRY).
+- Highlight in the renderer: `orc-app` now depends on `orc-pty`. `render_pane`
+  detects triggers in the conductor pane only (`role == "brain"` — the objective
+  says conductor-pane output; a worker echoing the word must not light up),
+  maps the grammar's char offsets to terminal columns (`scan_pane_row`), draws
+  the token in `theme.focus` (brain accent) as a BOLD+REVERSED block, and adds
+  a `◆ LABEL` title badge. BOLD+REVERSED+glyph+label = the affordance survives
+  NO_COLOR/mono and is color-independent (AC3).
+- Added `ThemeName::ALL` so snapshot coverage auto-tracks the palette set;
+  today it is [Ember, Phosphor] and will pick up nocturne when #13 lands.
+- Tests: 8 grammar unit tests + 2 `cells_from_stream` tests in orc-pty; in
+  orc-app: `conductor_trigger_grammar_highlights_each_spell_in_every_theme`
+  (AC1), `conductor_pane_does_not_highlight_non_triggers` (AC2),
+  `worker_pane_never_highlights_a_trigger`, and
+  `trigger_highlight_is_reduced_motion_and_color_safe` (AC3, asserts the two
+  reduced-motion frames are byte-identical).
+- All five gates green from `rust/`: fmt --check, clippy -D warnings, test
+  --workspace (0 failed), rustdoc -D warnings, and `build --release --locked`
+  (Cargo.lock gained only the orc-app→orc-pty edge; no new external crate).
+- Deviations, all noted on the issue: (1) AC1 says "all three themes" but only
+  ember+phosphor exist pre-#13 — tests iterate `ThemeName::ALL`, so nocturne is
+  covered automatically on merge, no theme improvised into #13's scope; (2) no
+  `orc-daemon` event plumbing — it is an allowed path but no acceptance check
+  or consumer needs it yet (YAGNI); the grammar is left reusable for #8;
+  (3) no `NO_COLOR` env detection exists anywhere yet (that's #13's degradation
+  tiers) — AC3 is met by design (non-color affordances), not env plumbing.
+- Next: Claude review of the branch against the #9 contract.
