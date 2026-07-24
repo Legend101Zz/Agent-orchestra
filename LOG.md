@@ -23,7 +23,7 @@ ship-log entries are part of finishing an issue.*
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
-| [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
+| [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | 👀 | issue-7-quota-guard-v2 |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
@@ -127,6 +127,28 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-24 — Never rate-limit your own subscriptions, issue #7 (code-puppy)
+pi-orchestra now protects the paid subscriptions you delegate to from being
+hammered. Every tool gets a cap on how many workers may run **at the same time**
+— a sensible per-tool default (e.g. 3 for pi/Hermes, 2 for the frontier coding
+CLIs) that you can change with `pio harness cap <tool> <n>` — and that cap is
+honored across every session and every pi-orchestra process on the machine, not
+just within one run. When a tool's slots are all busy, the next hand-off is
+**queued** instead of spawned: it's recorded and visible in `pio dispatch list`,
+no extra worker is started, and `pio dispatch drain` runs the waiting work the
+moment a slot frees. Separately, if a worker's output shows a provider
+rate-limit (an HTTP 429, "too many requests", "overloaded", and the like),
+pi-orchestra now **backs off and retries** with growing, jittered delays instead
+of pounding the provider, printing a plain `ORC WARNING: … rate-limited; backing
+off …s before retry` each time (and surfacing any "retry-after" the tool asked
+for); if the tool keeps refusing after the retry budget, the dispatch fails
+honestly as `rate_limited` rather than hanging or lying. I did NOT add
+cost/budget-based routing between tools (that's the V1.5 budget router), and I
+did not change how a single worker runs once it holds a slot. This is the last
+of the "quota guard" work and rounds out safe delegation; it composes cleanly
+with #8's `orch_*`/MCP surface (which can now delegate without fear of a
+rate-limit storm) and #11's per-task worktrees.
 
 ### 2026-07-24 — Any capable CLI can be a worker, not just pi/Hermes, issue #6 (code-puppy)
 pi-orchestra can now hand a task to **any** installed coding CLI it has actually

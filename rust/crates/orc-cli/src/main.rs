@@ -6,7 +6,7 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
-use orc_core::bench::load_harness_registry;
+use orc_core::bench::{load_harness_registry, write_harness_registry};
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::discovery;
@@ -467,6 +467,13 @@ enum DispatchCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Re-attempt queued dispatches whose harness now has a free slot.
+    Drain {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show one durable dispatch record.
     Show {
         id: String,
@@ -490,6 +497,22 @@ enum AdapterCommand {
 enum HarnessCommand {
     /// Scan PATH for known harnesses, persist discovery, and list all of them.
     List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set (or clear) a harness's concurrent-worker cap in the registry.
+    ///
+    /// The cap bounds how many workers of this harness run at once, protecting
+    /// the provider's rate/seat limits across every session (issue #7). Pass
+    /// `--clear` to remove the override and fall back to the adapter default.
+    Cap {
+        /// Harness registry key, e.g. `hermes`.
+        harness: String,
+        /// Maximum concurrent workers (omit with --clear to reset).
+        max: Option<usize>,
+        /// Remove the override and use the adapter default instead.
+        #[arg(long)]
+        clear: bool,
         #[arg(long)]
         json: bool,
     },
@@ -754,7 +777,12 @@ fn dispatch_dispatch(command: DispatchCommand) -> Result<i32> {
                 timeout_sec: timeout,
             })?;
             print_dispatch(&record, json)?;
-            Ok(if record.is_confirmed() { 0 } else { 1 })
+            // ORC WARNING channel: rate-limit backoff and concurrency-cap
+            // notices surface on stderr (issue #7), matching the quota guard.
+            for warning in &record.warnings {
+                eprintln!("{warning}");
+            }
+            Ok(dispatch_exit(&record))
         }
         DispatchCommand::List { session, json } => {
             let session = dispatch_session(session)?;
@@ -778,6 +806,35 @@ fn dispatch_dispatch(command: DispatchCommand) -> Result<i32> {
             print_dispatch(&record, json)?;
             Ok(if record.is_confirmed() { 0 } else { 1 })
         }
+        DispatchCommand::Drain { session, json } => {
+            let session = dispatch_session(session)?;
+            let drained = orc_core::dispatch::drain_queued(&session)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&drained)?);
+            } else if drained.is_empty() {
+                println!("no queued dispatches ready to run");
+            } else {
+                for record in &drained {
+                    print_dispatch(record, false)?;
+                    for warning in &record.warnings {
+                        eprintln!("{warning}");
+                    }
+                }
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// Exit code for one `dispatch send`: 0 confirmed, 75 queued (EX_TEMPFAIL —
+/// recorded but not spawned, drain when a slot frees), 1 otherwise.
+fn dispatch_exit(record: &orc_core::dispatch::DispatchRecord) -> i32 {
+    if record.is_confirmed() {
+        0
+    } else if record.is_queued() {
+        75
+    } else {
+        1
     }
 }
 
@@ -828,6 +885,50 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
                     } else {
                         println!("{:<10} NOT ON PATH · unavailable", harness.name);
                     }
+                }
+            }
+            Ok(0)
+        }
+        HarnessCommand::Cap {
+            harness,
+            max,
+            clear,
+            json,
+        } => {
+            let mut registry = load_harness_registry()?;
+            if !registry.harnesses.contains_key(&harness) {
+                anyhow::bail!("unknown harness: {harness}");
+            }
+            if clear {
+                registry.concurrency.remove(&harness);
+            } else {
+                let max = max.ok_or_else(|| {
+                    anyhow!("provide a max (e.g. `pio harness cap {harness} 2`) or --clear")
+                })?;
+                if max == 0 {
+                    anyhow::bail!(
+                        "concurrency cap must be at least 1; use --clear for the default"
+                    );
+                }
+                registry.concurrency.insert(harness.clone(), max);
+            }
+            write_harness_registry(&registry)?;
+            let effective = orc_core::spawn_guard::effective_cap(&registry, &harness);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "harness": harness,
+                        "override": registry.concurrency.get(&harness),
+                        "effective_cap": effective,
+                    }))?
+                );
+            } else {
+                match registry.concurrency.get(&harness) {
+                    Some(cap) => println!("{harness} concurrency cap set to {cap}"),
+                    None => println!(
+                        "{harness} concurrency override cleared; using adapter default {effective}"
+                    ),
                 }
             }
             Ok(0)

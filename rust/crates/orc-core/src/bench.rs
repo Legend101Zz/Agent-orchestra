@@ -132,6 +132,16 @@ pub struct HarnessRegistry {
     pub default_workers: Vec<String>,
     /// Upper bound for concurrently launched workers.
     pub max_parallel_workers: usize,
+    /// Per-harness concurrent-worker caps that override the adapter defaults.
+    ///
+    /// Keyed by harness registry key. An entry is a user override consulted by
+    /// [`crate::spawn_guard::effective_cap`]; a harness with no entry falls back
+    /// to its adapter's conservative default. Additive and independent of
+    /// [`Self::max_parallel_workers`] (a per-session pool bound): this caps how
+    /// many workers of one harness run at once, protecting the provider's
+    /// rate/seat limits across every session (issue #7).
+    #[serde(default)]
+    pub concurrency: BTreeMap<String, usize>,
     /// Client behavior and theme.
     pub app: BenchAppConfig,
     /// PATH-discovered harness executables keyed by harness name.
@@ -214,6 +224,7 @@ impl Default for HarnessRegistry {
             ]),
             default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
             max_parallel_workers: 3,
+            concurrency: BTreeMap::new(),
             app: BenchAppConfig::default(),
             discovered: BTreeMap::new(),
             extra: BTreeMap::new(),

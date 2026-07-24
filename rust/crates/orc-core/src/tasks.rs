@@ -875,6 +875,27 @@ pub fn record_delivery(
     Ok(task)
 }
 
+/// Record that a dispatch was held back at a harness's concurrency cap.
+///
+/// Appends a `delivery_queued` event to the task history without changing the
+/// task's status or `assignee_run` — no worker received the brief yet, but the
+/// deferral is visible on the board (issue #7).
+pub fn record_queued(session: &str, id: &str, actor: TaskActor, detail: String) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    append_history(
+        &mut task,
+        actor,
+        "delivery_queued",
+        None,
+        None,
+        Some(detail),
+    );
+    write_task(&task)?;
+    Ok(task)
+}
+
 /// Move a running task to review.
 pub fn review_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
     move_task(session, id, TaskStatus::Review, actor)

@@ -828,3 +828,76 @@
 - V1 status: #16, #17, #3, #4, #5, #9, #6 merged. Ready set: #7, #8, #11, #12,
   #13. Next up: **#7** (V1-5 rate-limit-aware spawning / quota guard v2 +
   concurrency caps; depends on #4, satisfied) — owner starting it next.
+
+## Session — 2026-07-24 (code-puppy): #7 built — quota guard v2 (rate-limit-aware spawning)
+- Branch `issue-7-quota-guard-v2` off `main`. Dependency #4 (V1-2) confirmed
+  CLOSED/merged (probe.rs present). Allowed paths: orc-core/, orc-cli/.
+- Binding #16 decision honored (issue comment + decision record §4): retry
+  driver is `backon` v1.6.0, BLOCKING path (`BlockingRetryable` + default
+  `StdSleeper`, no async runtime). Disabled backon default features (they pull
+  `tokio` via `tokio-sleep`) → `default-features = false, features = ["std",
+  "std-blocking-sleep"]`, so backon drags in only `fastrand` — truest to the
+  decision's "avoid tokio in orc-core" intent. Blocking builder has no
+  `.adjust()` (async-only), so a parsed retry-after is SURFACED in the warning
+  but the sleep follows the exponential schedule (documented in ratelimit.rs).
+- NEW `orc-core/src/spawn_guard.rs` — per-harness concurrency cap + durable slot
+  leasing. `effective_cap` = user override (registry.concurrency[key]) else
+  conservative per-adapter default (pi/hermes 3, claude/codex/opencode 2, unknown
+  1), floored at 1. Slots are lease files under `~/.orchestra/slots/<harness>/`
+  keyed by HARNESS not session → cap spans every session/process (AC3). RAII
+  `SlotLease` deletes its file on drop/release; `acquire_slot` locks the harness
+  dir (create_new .slots.lock, like tasks BoardLock), prunes leases whose pid is
+  dead (registry::pid_alive) or whose TTL (f64 secs) elapsed, counts live, and
+  only writes a new lease if under cap else returns Ok(None).
+- NEW `orc-core/src/ratelimit.rs` — per-adapter rate-limit signal table (the #16
+  "detection is ours, next to the adapter templates" mandate; common set + per
+  adapter extras; case-insensitive substring), retry-after parser, `BackoffPolicy`
+  {production 2s..60s x2 jitter 4 retries / fast ms-scale for tests}, and generic
+  `run_with_backoff` wrapping backon's blocking exponential retry with when()+
+  notify().
+- `bench.rs`: additive `HarnessRegistry.concurrency: BTreeMap<String,usize>`
+  (#[serde(default)], updated Default impl). Chosen over a HarnessConfig field
+  because orc-daemon (OUT of allowed paths) has fully-explicit HarnessConfig
+  literals that a new field would break; HarnessRegistry literals there use
+  `..default()` spread, so the map is safe. Additive round-trip test added
+  (`tests/bench.rs`): pre-#7 file with no concurrency key loads empty + unknown
+  siblings survive read->write.
+- `dispatch.rs`: refactored one-shot `dispatch()` into `deliver(request, policy,
+  reuse)` with thin `dispatch()`/`dispatch_with_policy()` wrappers. Added
+  `DeliveryStatus::Queued` (additive string), `DispatchFailureKind::RateLimited`,
+  additive `DispatchRecord.warnings: Vec<String>` + `is_queued()`. `invoke_harness`
+  now returns `Invoked{exit_code,stdout,stderr,success}` (captures output even on
+  non-zero exit) so `invoke_with_backoff` can scan for rate-limit signals and
+  retry. Slot gate sits after resolve+locate: no slot → `persist_queued` (visible
+  record, task `delivery_queued` event, ORC WARNING, NO spawn = AC1); slot held
+  across the backed-off invoke then released. Lease TTL = timeout*(retries+1) +
+  max_delay*(retries+1), min DEFAULT_LEASE_TTL, so a long dispatch is never pruned
+  mid-flight. `drain_queued[_with_policy]` re-delivers queued records oldest-first
+  reusing id+created_at (one record, queue->run), per-record errors leave it
+  queued. Consolidated the 3 pre-invocation failure params into `FailureSpec` to
+  stay under clippy's 7-arg limit (no #[allow]).
+- `tasks.rs`: `record_queued` appends a `delivery_queued` history event without
+  changing status/assignee_run (no worker got the brief yet, but it's visible).
+- `orc-cli/src/main.rs`: `dispatch send` prints `record.warnings` to stderr (ORC
+  WARNING channel) and exits 0 confirmed / 75 (EX_TEMPFAIL) queued / 1 failed
+  (`dispatch_exit`). NEW `dispatch drain` runs the queue. NEW `harness cap
+  <harness> [max] [--clear] [--json]` sets/clears the per-harness override and
+  prints the effective cap.
+- Tests (all failing-first where behavioral): spawn_guard lib (2) + integration
+  (3: cap-of-N queues the next, per-harness pools independent, abandoned lease
+  pruned); ratelimit lib (5: signal detection, retry-after shapes, backoff
+  recover/exhaust/non-retryable); orc-core `tests/quota_guard.rs` (4: AC1 queue+
+  drain+no-spawn sentinel, AC2 recover-with-warning + retry-after, AC2 exhaust ->
+  rate_limited, AC3 cross-session cap); orc-cli `tests/quota_guard.rs` (2: CLI
+  queued exit 75 + ORC WARNING on stderr + drain runs same record; cap --clear ->
+  adapter default); bench additive (1). +17 tests, all green.
+- Gates (Rust 1.97, from rust/): fmt --check clean; clippy --workspace
+  --all-targets -D warnings clean; test --workspace 0 failed; doc -D warnings
+  clean; build --release --locked clean. crates.io DNS was down; fetched backon
+  via HTTPS_PROXY=sysproxy.wal-mart.com:8080 (github.com direct).
+- Deviations (flagged on the issue): (1) `rust/Cargo.toml` + `rust/Cargo.lock`
+  touched (outside the two listed crate paths) — unavoidable + mandated: adding
+  the #16-required backon dep necessarily edits the workspace manifest + lockfile
+  (same situation #5 had with schemars, accepted then). (2) queued exit code 75
+  (EX_TEMPFAIL) is a new convention, documented. (3) retry-after honored only in
+  the warning, not the sleep (blocking backon has no adjust()).

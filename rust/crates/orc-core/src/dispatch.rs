@@ -14,6 +14,7 @@
 //! command. The harness record declares whether stdin or argv should carry
 //! the prompt and the bounded timeout for one invocation.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -34,8 +35,10 @@ use crate::bench::{
 };
 use crate::invocation::{Invocation, resolve_worker_invocation};
 use crate::probe::probed_from;
+use crate::ratelimit::{self, BackoffPolicy};
 use crate::registry::{atomic_write_json, home, now_iso};
-use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery};
+use crate::spawn_guard;
+use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery, record_queued};
 
 /// Maximum bytes of stdout captured from one dispatch invocation.
 pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
@@ -46,6 +49,10 @@ pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
 pub enum DeliveryStatus {
     /// The dispatch was recorded but the harness invocation has not completed.
     Pending,
+    /// The dispatch is recorded but was held back because the harness is at its
+    /// concurrency cap; no worker was spawned (issue #7). It is drained later by
+    /// [`drain_queued`] when a slot frees.
+    Queued,
     /// The harness exited successfully and produced parseable output.
     Confirmed,
     /// The dispatch could not be delivered or did not return success.
@@ -58,6 +65,7 @@ impl DeliveryStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Queued => "queued",
             Self::Confirmed => "confirmed",
             Self::Failed => "failed",
         }
@@ -67,6 +75,7 @@ impl DeliveryStatus {
     pub fn parse(value: &str) -> Result<Self> {
         match value {
             "pending" => Ok(Self::Pending),
+            "queued" => Ok(Self::Queued),
             "confirmed" => Ok(Self::Confirmed),
             "failed" => Ok(Self::Failed),
             _ => Err(anyhow!("invalid delivery status '{value}'")),
@@ -136,6 +145,9 @@ pub enum DispatchFailureKind {
     MissingExecutable,
     /// The harness invocation exceeded its bounded timeout.
     Timeout,
+    /// The harness kept emitting rate-limit signals after the backoff budget was
+    /// exhausted (issue #7).
+    RateLimited,
     /// The harness exited non-zero or returned a malformed response.
     HarnessError,
 }
@@ -186,6 +198,10 @@ pub struct DispatchRecord {
     /// Plain human-readable failure detail when one is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// User-visible ORC WARNING lines emitted during delivery, e.g. rate-limit
+    /// backoff notices (issue #7). Additive; empty for a clean delivery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// Creation timestamp.
     pub created_at: String,
     /// Last mutation timestamp.
@@ -200,6 +216,12 @@ impl DispatchRecord {
     #[must_use]
     pub fn is_confirmed(&self) -> bool {
         self.status == DeliveryStatus::Confirmed.as_str()
+    }
+
+    /// Whether this record is queued behind a full concurrency cap (issue #7).
+    #[must_use]
+    pub fn is_queued(&self) -> bool {
+        self.status == DeliveryStatus::Queued.as_str()
     }
 }
 
@@ -358,6 +380,17 @@ fn shell_escape(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
+/// Captured result of one bounded harness invocation.
+///
+/// Unlike a plain `Result`, this preserves stdout/stderr even when the harness
+/// exited non-zero, so the backoff layer can scan the output for a rate-limit
+/// signal before deciding whether the failure is retryable (issue #7).
+struct Invoked {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    success: bool,
+}
 
 fn invoke_harness(
     program: &Path,
@@ -365,7 +398,7 @@ fn invoke_harness(
     prompt: &str,
     cwd: Option<&Path>,
     timeout: Duration,
-) -> std::result::Result<(Option<i32>, String, String), DispatchFailureKind> {
+) -> std::result::Result<Invoked, DispatchFailureKind> {
     let mut command = Command::new(program);
     for arg in &invocation.args {
         command.arg(arg);
@@ -409,12 +442,12 @@ fn invoke_harness(
                     .transpose()
                     .map_err(|_| DispatchFailureKind::HarnessError)?
                     .unwrap_or_default();
-                let code = status.code();
-                return if status.success() {
-                    Ok((code, stdout, stderr))
-                } else {
-                    Err(DispatchFailureKind::HarnessError)
-                };
+                return Ok(Invoked {
+                    exit_code: status.code(),
+                    stdout,
+                    stderr,
+                    success: status.success(),
+                });
             }
             Ok(None) => {
                 if started.elapsed() >= timeout {
@@ -441,14 +474,124 @@ fn failure_message(kind: &DispatchFailureKind, harness: &str) -> String {
             format!("MISSING EXECUTABLE: {harness} command not found on PATH")
         }
         DispatchFailureKind::Timeout => "DISPATCH TIMEOUT".to_owned(),
+        DispatchFailureKind::RateLimited => {
+            format!("RATE LIMITED: {harness} kept signaling rate limits after backoff")
+        }
         DispatchFailureKind::HarnessError => "HARNESS ERROR".to_owned(),
     }
 }
 
+/// Retryable failure of one backoff attempt.
+///
+/// Only [`Self::RateLimited`] is retried; everything else is terminal and
+/// returned to the caller unchanged after the first attempt.
+enum AttemptError {
+    /// The harness signaled a rate limit; the last output is kept for the record.
+    RateLimited(Invoked),
+    /// A terminal failure kind, with any captured output when one exists.
+    Terminal(DispatchFailureKind, Option<Invoked>),
+}
+
+/// Terminal outcome of a backed-off delivery, plus the warnings it emitted.
+struct BackedOff {
+    /// Confirmed run, or a failure kind with the last captured output.
+    result: std::result::Result<Invoked, (DispatchFailureKind, Option<Invoked>)>,
+    /// User-visible ORC WARNING lines emitted during backoff.
+    warnings: Vec<String>,
+}
+
+/// Invoke one worker under rate-limit-aware exponential backoff (issue #7).
+///
+/// Each attempt spawns the worker and scans its captured stdout+stderr for a
+/// rate-limit signal ([`crate::ratelimit`]); a signal makes the attempt
+/// retryable and emits an ORC WARNING (with any parsed retry-after hint) before
+/// `backon` sleeps. A clean run, a non-rate-limit failure, or an exhausted
+/// backoff budget ends the loop.
+fn invoke_with_backoff(
+    program: &Path,
+    invocation: &Invocation,
+    prompt: &str,
+    cwd: Option<&Path>,
+    timeout: Duration,
+    adapter: &str,
+    policy: &BackoffPolicy,
+) -> BackedOff {
+    let warnings = RefCell::new(Vec::new());
+    let attempt = || -> std::result::Result<Invoked, AttemptError> {
+        match invoke_harness(program, invocation, prompt, cwd, timeout) {
+            Ok(invoked) => {
+                let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
+                if ratelimit::is_rate_limited(adapter, &combined) {
+                    Err(AttemptError::RateLimited(invoked))
+                } else if invoked.success {
+                    Ok(invoked)
+                } else {
+                    Err(AttemptError::Terminal(
+                        DispatchFailureKind::HarnessError,
+                        Some(invoked),
+                    ))
+                }
+            }
+            Err(kind) => Err(AttemptError::Terminal(kind, None)),
+        }
+    };
+    let is_retryable = |error: &AttemptError| matches!(error, AttemptError::RateLimited(_));
+    let notify = |error: &AttemptError, delay: Duration| {
+        if let AttemptError::RateLimited(invoked) = error {
+            let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
+            let hint = ratelimit::detect(adapter, &combined)
+                .and_then(|signal| signal.retry_after)
+                .map_or_else(String::new, |seconds| {
+                    format!(" (harness asked for ~{seconds}s)")
+                });
+            warnings.borrow_mut().push(format!(
+                "ORC WARNING: {adapter} worker rate-limited{hint}; backing off {:.1}s before retry",
+                delay.as_secs_f64()
+            ));
+        }
+    };
+    let result = ratelimit::run_with_backoff(policy, attempt, is_retryable, notify);
+    let result = match result {
+        Ok(invoked) => Ok(invoked),
+        Err(AttemptError::RateLimited(invoked)) => {
+            Err((DispatchFailureKind::RateLimited, Some(invoked)))
+        }
+        Err(AttemptError::Terminal(kind, invoked)) => Err((kind, invoked)),
+    };
+    BackedOff {
+        result,
+        warnings: warnings.into_inner(),
+    }
+}
+
+/// Identity to reuse when re-delivering a previously queued record (issue #7).
+struct Reuse {
+    id: String,
+    created_at: String,
+}
+
 /// Record and dispatch one bounded command through the configured worker harness.
 ///
-/// Returns the durable [`DispatchRecord`] describing the delivery state.
+/// Uses the production backoff schedule. Returns the durable [`DispatchRecord`]
+/// describing the delivery state — which may be `queued` when the harness is at
+/// its concurrency cap (issue #7), in which case no worker was spawned.
 pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
+    deliver(request, &BackoffPolicy::production(), None)
+}
+
+/// Dispatch with an explicit backoff schedule (tests inject a fast policy).
+pub fn dispatch_with_policy(
+    request: &DispatchRequest,
+    policy: &BackoffPolicy,
+) -> Result<DispatchRecord> {
+    deliver(request, policy, None)
+}
+
+fn deliver(
+    request: &DispatchRequest,
+    policy: &BackoffPolicy,
+    reuse: Option<Reuse>,
+) -> Result<DispatchRecord> {
     if request.session.trim().is_empty() {
         bail!("dispatch session is required")
     }
@@ -514,17 +657,22 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
             return persist_failure(
                 request,
                 &resolved_key,
-                kind,
-                detail,
-                placeholder_command(&registry, &resolved_key),
+                FailureSpec {
+                    kind,
+                    detail,
+                    command_line: placeholder_command(&registry, &resolved_key),
+                    default_reason: "worker capability unavailable",
+                },
                 cwd,
-                "worker capability unavailable",
+                reuse.as_ref(),
             );
         }
     };
 
     // The adapter chooses the invocation style from the probe results (issue #6);
     // an honest refusal names the missing capability instead of guessing one.
+    let adapter = config.adapter.clone();
+    let cap = spawn_guard::effective_cap(&registry, &resolved_key);
     let probed = probed_from(&registry, &config.adapter);
     let invocation = match resolve_worker_invocation(config, &probed, cwd.as_deref().map(Path::new))
     {
@@ -533,11 +681,14 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
             return persist_failure(
                 request,
                 &resolved_key,
-                DispatchFailureKind::CapabilityUnavailable,
-                error.message(&resolved_key),
-                placeholder_command(&registry, &resolved_key),
+                FailureSpec {
+                    kind: DispatchFailureKind::CapabilityUnavailable,
+                    detail: error.message(&resolved_key),
+                    command_line: placeholder_command(&registry, &resolved_key),
+                    default_reason: "worker capability unavailable",
+                },
                 cwd,
-                "worker capability unavailable",
+                reuse.as_ref(),
             );
         }
     };
@@ -553,11 +704,14 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
             return persist_failure(
                 request,
                 &resolved_key,
-                DispatchFailureKind::MissingExecutable,
-                failure_message(&DispatchFailureKind::MissingExecutable, &resolved_key),
-                command_line,
+                FailureSpec {
+                    kind: DispatchFailureKind::MissingExecutable,
+                    detail: failure_message(&DispatchFailureKind::MissingExecutable, &resolved_key),
+                    command_line,
+                    default_reason: "worker executable unavailable",
+                },
                 cwd,
-                "worker executable unavailable",
+                reuse.as_ref(),
             );
         }
     };
@@ -566,28 +720,69 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
             .timeout_sec
             .unwrap_or_else(|| dispatch_timeout_for(config)),
     );
-    let mut record = new_record(request, &resolved_key, &command_line, cwd.clone());
-    match invoke_harness(
+
+    // Quota guard v2: never exceed this harness's concurrent-worker cap. When
+    // every slot is taken we record a *queued* dispatch (visible state) and DO
+    // NOT spawn a worker (issue #7, AC1); `drain_queued` runs it once a slot
+    // frees. The lease TTL bounds the whole backoff budget so a legitimately
+    // long dispatch is never pruned out from under itself.
+    let attempts = u32::try_from(policy.max_retries)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let lease_ttl = timeout
+        .saturating_mul(attempts)
+        .saturating_add(policy.max_delay.saturating_mul(attempts))
+        .max(spawn_guard::DEFAULT_LEASE_TTL);
+    let Some(lease) = spawn_guard::acquire_slot(&resolved_key, cap, lease_ttl, None)? else {
+        return persist_queued(
+            request,
+            &resolved_key,
+            &command_line,
+            cwd,
+            cap,
+            reuse.as_ref(),
+        );
+    };
+
+    let mut record = new_record(
+        request,
+        &resolved_key,
+        &command_line,
+        cwd.clone(),
+        reuse.as_ref(),
+    );
+    let backed_off = invoke_with_backoff(
         &program,
         &invocation,
         &request.prompt,
         cwd.as_deref().map(Path::new),
         timeout,
-    ) {
-        Ok((exit_code, stdout, stderr)) => {
+        &adapter,
+        policy,
+    );
+    record.warnings = backed_off.warnings;
+    match backed_off.result {
+        Ok(invoked) => {
             record.status = DeliveryStatus::Confirmed.as_str().to_owned();
-            record.exit_code = exit_code;
-            record.stdout = stdout;
-            record.stderr = stderr;
+            record.exit_code = invoked.exit_code;
+            record.stdout = invoked.stdout;
+            record.stderr = invoked.stderr;
             record.updated_at = now_iso();
         }
-        Err(kind) => {
+        Err((kind, invoked)) => {
             record.status = DeliveryStatus::Failed.as_str().to_owned();
             record.failure_kind = Some(kind_label(&kind).to_owned());
             record.error = Some(failure_message(&kind, &resolved_key));
+            if let Some(invoked) = invoked {
+                record.exit_code = invoked.exit_code;
+                record.stdout = invoked.stdout;
+                record.stderr = invoked.stderr;
+            }
             record.updated_at = now_iso();
         }
     }
+    // Release the concurrency slot the instant the bounded invocation ends.
+    lease.release();
     write_dispatch(&record)?;
     let task_actor = TaskActor::from(request.actor);
     if record.is_confirmed() {
@@ -627,6 +822,7 @@ fn kind_label(kind: &DispatchFailureKind) -> &'static str {
         DispatchFailureKind::CapabilityUnavailable => "capability_unavailable",
         DispatchFailureKind::MissingExecutable => "missing_executable",
         DispatchFailureKind::Timeout => "timeout",
+        DispatchFailureKind::RateLimited => "rate_limited",
         DispatchFailureKind::HarnessError => "harness_error",
     }
 }
@@ -636,10 +832,17 @@ fn new_record(
     harness: &str,
     command_line: &str,
     cwd: Option<String>,
+    reuse: Option<&Reuse>,
 ) -> DispatchRecord {
     let now = now_iso();
+    // Re-delivering a queued record keeps its stable id and original creation
+    // time so the queue-then-run history is one record, not two (issue #7).
+    let (id, created_at) = match reuse {
+        Some(reuse) => (reuse.id.clone(), reuse.created_at.clone()),
+        None => (dispatch_id(harness, &request.session), now.clone()),
+    };
     DispatchRecord {
-        id: dispatch_id(harness, &request.session),
+        id,
         session: request.session.clone(),
         task: request.task.clone(),
         actor: request.actor.as_str().to_owned(),
@@ -655,10 +858,21 @@ fn new_record(
         stderr: String::new(),
         failure_kind: None,
         error: None,
-        created_at: now.clone(),
+        warnings: Vec::new(),
+        created_at,
         updated_at: now,
         extra: BTreeMap::new(),
     }
+}
+
+/// The four things a pre-invocation refusal needs to record, bundled so the
+/// failure path stays a single small call (issue #6 consolidation, kept DRY as
+/// the reuse arg was added in #7).
+struct FailureSpec {
+    kind: DispatchFailureKind,
+    detail: String,
+    command_line: String,
+    default_reason: &'static str,
 }
 
 /// Build, persist, and record delivery for one pre-invocation failure.
@@ -669,16 +883,14 @@ fn new_record(
 fn persist_failure(
     request: &DispatchRequest,
     harness: &str,
-    kind: DispatchFailureKind,
-    detail: String,
-    command_line: String,
+    spec: FailureSpec,
     cwd: Option<String>,
-    default_reason: &str,
+    reuse: Option<&Reuse>,
 ) -> Result<DispatchRecord> {
-    let mut record = new_record(request, harness, &command_line, cwd);
+    let mut record = new_record(request, harness, &spec.command_line, cwd, reuse);
     record.status = DeliveryStatus::Failed.as_str().to_owned();
-    record.failure_kind = Some(kind_label(&kind).to_owned());
-    record.error = Some(detail);
+    record.failure_kind = Some(kind_label(&spec.kind).to_owned());
+    record.error = Some(spec.detail);
     record.updated_at = now_iso();
     write_dispatch(&record)?;
     record_delivery(
@@ -689,8 +901,38 @@ fn persist_failure(
         format!(
             "dispatch {} failed: {}",
             record.id,
-            record.error.as_deref().unwrap_or(default_reason)
+            record.error.as_deref().unwrap_or(spec.default_reason)
         ),
+    )?;
+    Ok(record)
+}
+
+/// Build and persist one *queued* dispatch: the harness is at its concurrency
+/// cap, so no worker was spawned (issue #7, AC1). The record is durable and
+/// visible via `pio dispatch list`; the task history gains a `delivery_queued`
+/// event without changing the task's status or claiming a worker received it.
+fn persist_queued(
+    request: &DispatchRequest,
+    harness: &str,
+    command_line: &str,
+    cwd: Option<String>,
+    cap: usize,
+    reuse: Option<&Reuse>,
+) -> Result<DispatchRecord> {
+    let mut record = new_record(request, harness, command_line, cwd, reuse);
+    record.status = DeliveryStatus::Queued.as_str().to_owned();
+    let note = format!(
+        "ORC WARNING: {harness} at concurrency cap {cap}; queued dispatch {} (no worker spawned)",
+        record.id
+    );
+    record.warnings.push(note.clone());
+    record.updated_at = now_iso();
+    write_dispatch(&record)?;
+    record_queued(
+        &request.session,
+        &request.task,
+        TaskActor::from(request.actor),
+        note,
     )?;
     Ok(record)
 }
@@ -739,6 +981,62 @@ pub fn read_dispatch(session: &str, id: &str) -> Result<DispatchRecord> {
     let path = dispatch_path(session, id);
     serde_json::from_slice(&fs::read(&path)?)
         .with_context(|| format!("parse dispatch {}", path.display()))
+}
+
+/// Re-attempt every queued dispatch for a session, oldest first (issue #7).
+///
+/// Uses the production backoff schedule. A queued record that now wins a
+/// concurrency slot is delivered and the *same* record becomes `confirmed` or
+/// `failed`; one still at the cap stays `queued`. Per-record errors (e.g. the
+/// task moved out of `running`) leave that record queued and do not abort the
+/// sweep. Returns the records that were re-attempted (no longer queued).
+pub fn drain_queued(session: &str) -> Result<Vec<DispatchRecord>> {
+    drain_queued_with_policy(session, &BackoffPolicy::production())
+}
+
+/// [`drain_queued`] with an explicit backoff schedule (tests inject a fast one).
+pub fn drain_queued_with_policy(
+    session: &str,
+    policy: &BackoffPolicy,
+) -> Result<Vec<DispatchRecord>> {
+    if session.trim().is_empty() {
+        bail!("dispatch session is required")
+    }
+    let mut queued = list_dispatches(session)?
+        .into_iter()
+        .filter(DispatchRecord::is_queued)
+        .collect::<Vec<_>>();
+    // Oldest first: honor arrival order as slots free.
+    queued.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut drained = Vec::new();
+    for record in queued {
+        let request = DispatchRequest {
+            session: record.session.clone(),
+            task: record.task.clone(),
+            actor: DispatchActor::parse(&record.actor).unwrap_or(DispatchActor::Brain),
+            harness: record.harness.clone(),
+            pane_id: record.pane_id.clone(),
+            run: record.run.clone(),
+            prompt: record.prompt.clone(),
+            timeout_sec: None,
+        };
+        let reuse = Reuse {
+            id: record.id.clone(),
+            created_at: record.created_at.clone(),
+        };
+        // A per-record failure (task no longer running, missing session, …)
+        // leaves the record queued and visible rather than aborting the sweep.
+        if let Ok(updated) = deliver(&request, policy, Some(reuse))
+            && !updated.is_queued()
+        {
+            drained.push(updated);
+        }
+    }
+    Ok(drained)
 }
 
 #[cfg(test)]
