@@ -501,10 +501,10 @@ mod tests {
             .expect("parse fixture stream");
         let first_row: String = cells[..40].iter().map(|cell| cell.text.as_str()).collect();
         assert!(first_row.starts_with("delegate: add OAuth login"));
-        let matched = super::trigger::scan_line(first_row.trim_end())
-            .expect("grammar finds the streamed trigger");
-        assert_eq!(matched.trigger, super::trigger::Trigger::Delegate);
-        assert_eq!(matched.char_start, 0);
+        let matches = super::trigger::scan_line(first_row.trim_end());
+        assert_eq!(matches.len(), 1, "grammar finds the streamed trigger");
+        assert_eq!(matches[0].trigger, super::trigger::Trigger::Delegate);
+        assert_eq!(matches[0].char_start, 0);
     }
 
     #[test]

@@ -7,31 +7,29 @@
 //! policy dependency, so the renderer (`orc-app`) and any future control-plane
 //! routing (`orc-daemon`) share one definition instead of re-deriving it.
 //!
-//! The grammar is line-anchored: a trigger fires only when a keyword is the
-//! first meaningful token on a line and is immediately followed by a colon.
-//! `redelegate:` and a mid-sentence `delegate` without a colon never fire, and
-//! matching is case-sensitive so prose that opens with `Delegate:` stays quiet.
+//! # Grammar (ultrathink-style)
 //!
-//! # Prompt tolerance
+//! A trigger fires wherever a keyword appears **at a word boundary** and is
+//! immediately followed by a colon — like Claude Code's `ultrathink` highlight,
+//! it lights up anywhere on the line, not only at the start, and it can match
+//! more than once per line (`delegate: a … delegate: b` lights both). A word
+//! boundary is the start of the line or any non-alphanumeric character, so a
+//! keyword welded into a larger word never fires: `redelegate:` and
+//! `predelegate:` stay quiet because a letter precedes the keyword.
 //!
-//! Real hosted panes prefix the input line with a shell/agent prompt marker:
-//! Claude Code renders an angle prompt (U+276F) then a space, shells render
-//! `> ` / `$ ` / `% ` / `# `, and other agents use a bullet or arrow glyph. A
-//! trigger the user types therefore lands *after* the marker, not at the first
-//! non-whitespace column. So before the
-//! keyword the scanner tolerates one optional prompt marker: a bounded run of
-//! up to [`MAX_PROMPT_MARKER_RUN`] non-alphanumeric, non-whitespace glyphs
-//! followed by at least one space. The reported [`TriggerMatch::char_start`]
-//! stays on the keyword, so only the keyword+colon is highlighted, never the
-//! prompt glyph.
+//! Two rules keep prose calm while still matching mid-sentence intent:
 //!
-//! Policy (deliberate): the marker is a *shape* rule ("skip a short run of
-//! sigils"), not a fixed allowlist of glyphs. The harm is asymmetric — a missed
-//! highlight behind an unlisted prompt glyph is the exact bug this guards
-//! against, whereas a spurious highlight is cosmetic (nothing is dispatched;
-//! routing lives elsewhere). The trade-off is that a prompt containing embedded
-//! alphanumerics (git-branch powerline prompts, `[1]` job markers) is not
-//! tolerated — only a pure-sigil prompt run is.
+//! - **The colon is required.** `delegate:` is the explicit spell; a bare
+//!   `delegate` in "please delegate this" is ordinary prose and stays plain.
+//! - **Matching is case-sensitive.** `Delegate:` at the start of a sentence and
+//!   `DELEGATE:` shouting stay quiet; only the lowercase spell fires.
+//!
+//! Because the boundary rule treats a prompt glyph like any other
+//! non-alphanumeric character, a trigger typed after a shell/agent prompt
+//! (`\u{276f} delegate:`, `> delegate:`, `$ delegate:`) is matched with no
+//! special-casing: the space after the prompt is the boundary, and the reported
+//! [`TriggerMatch::char_start`] lands on the keyword, so only the keyword+colon
+//! is highlighted, never the prompt glyph.
 
 /// One conductor spell recognized in hosted-pane output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,56 +91,28 @@ pub struct TriggerMatch {
     pub char_len: usize,
 }
 
-/// The longest run of prompt-marker glyphs the scanner will skip before a
-/// keyword. Three covers a REPL prompt like `>>> ` while rejecting decorative
-/// rules (`==== `, `#### `) that are not prompts.
-pub const MAX_PROMPT_MARKER_RUN: usize = 3;
-
-/// Scan one already-decoded line for a line-anchored trigger.
+/// Scan one already-decoded line for **every** trigger occurrence.
 ///
-/// A trigger fires when a keyword is the first meaningful token on the line and
-/// is immediately followed by a colon. Leading whitespace is allowed, and one
-/// optional prompt marker (see the module docs) may precede the keyword; the
-/// returned [`TriggerMatch::char_start`] always points at the keyword, never
-/// the prompt glyph. Matching is case-sensitive.
+/// A trigger is a keyword at a word boundary (line start or after a
+/// non-alphanumeric character) immediately followed by a colon. Matches are
+/// returned left-to-right; the list is empty when the line holds no spell.
+/// Matching is case-sensitive and, by design, fires mid-line and more than once
+/// (ultrathink-style). See the module docs for the full grammar.
 #[must_use]
-pub fn scan_line(line: &str) -> Option<TriggerMatch> {
+pub fn scan_line(line: &str) -> Vec<TriggerMatch> {
     let chars: Vec<char> = line.chars().collect();
-    let start = chars.iter().position(|ch| !ch.is_whitespace())?;
-    // Try the keyword at the first non-whitespace column, then again after a
-    // single tolerated prompt marker (a short run of sigils + whitespace).
-    match_keyword_at(&chars, start).or_else(|| {
-        let after_prompt = skip_prompt_marker(&chars, start)?;
-        match_keyword_at(&chars, after_prompt)
-    })
-}
-
-/// If a prompt marker begins at `index`, return the index of the first keyword
-/// character after it; otherwise `None`.
-///
-/// A prompt marker is 1..=[`MAX_PROMPT_MARKER_RUN`] non-alphanumeric,
-/// non-whitespace glyphs followed by at least one whitespace character. The
-/// trailing whitespace is required so `:delegate:` (a sigil with no gap) is not
-/// read as a prompt.
-fn skip_prompt_marker(chars: &[char], index: usize) -> Option<usize> {
-    let mut run = 0;
-    let mut cursor = index;
-    while cursor < chars.len() && !chars[cursor].is_alphanumeric() && !chars[cursor].is_whitespace()
-    {
-        run += 1;
-        cursor += 1;
-        if run > MAX_PROMPT_MARKER_RUN {
-            return None;
+    let mut matches = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let at_boundary = index == 0 || !chars[index - 1].is_alphanumeric();
+        if at_boundary && let Some(matched) = match_keyword_at(&chars, index) {
+            index += matched.char_len; // skip past the keyword and its colon
+            matches.push(matched);
+            continue;
         }
+        index += 1;
     }
-    if run == 0 || cursor >= chars.len() || !chars[cursor].is_whitespace() {
-        return None;
-    }
-    // Skip the whitespace gap to the next token.
-    while cursor < chars.len() && chars[cursor].is_whitespace() {
-        cursor += 1;
-    }
-    (cursor < chars.len()).then_some(cursor)
+    matches
 }
 
 /// Match a bare keyword immediately followed by a colon, starting exactly at
@@ -173,112 +143,106 @@ mod tests {
     fn each_trigger_fires_when_line_anchored_with_a_colon() {
         for trigger in Trigger::ALL {
             let line = format!("{}: do the thing", trigger.keyword());
-            let matched = scan_line(&line).expect("trigger should fire");
-            assert_eq!(matched.trigger, trigger);
-            assert_eq!(matched.char_start, 0);
+            let matches = scan_line(&line);
+            assert_eq!(matches.len(), 1, "one match for {trigger:?}");
+            assert_eq!(matches[0].trigger, trigger);
+            assert_eq!(matches[0].char_start, 0);
             // keyword + colon
-            assert_eq!(matched.char_len, trigger.keyword().chars().count() + 1);
+            assert_eq!(matches[0].char_len, trigger.keyword().chars().count() + 1);
         }
     }
 
     #[test]
     fn leading_whitespace_is_allowed_and_reported_in_offset() {
-        let matched = scan_line("    delegate: indented brief").expect("indented trigger fires");
-        assert_eq!(matched.trigger, Trigger::Delegate);
-        assert_eq!(matched.char_start, 4);
-        assert_eq!(matched.char_len, 9);
+        let matches = scan_line("    delegate: indented brief");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].trigger, Trigger::Delegate);
+        assert_eq!(matches[0].char_start, 4);
+        assert_eq!(matches[0].char_len, 9);
+    }
+
+    #[test]
+    fn a_trigger_fires_mid_line_not_only_at_the_start() {
+        // Ultrathink-style: the spell lights up wherever it appears, colon and
+        // all, even when prose precedes it.
+        let matches = scan_line("first orchestrate: later");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].trigger, Trigger::Orchestrate);
+        let expected_start = "first ".chars().count();
+        assert_eq!(matches[0].char_start, expected_start);
+    }
+
+    #[test]
+    fn every_occurrence_on_a_line_is_reported_left_to_right() {
+        let line = "delegate: this work , delegate: a and orchestrate: b";
+        let matches = scan_line(line);
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].trigger, Trigger::Delegate);
+        assert_eq!(matches[0].char_start, 0);
+        assert_eq!(matches[1].trigger, Trigger::Delegate);
+        assert_eq!(
+            matches[1].char_start,
+            line.find("delegate: a").expect("second delegate present")
+        );
+        assert_eq!(matches[2].trigger, Trigger::Orchestrate);
+        // Matches stay in strict left-to-right order.
+        assert!(matches[0].char_start < matches[1].char_start);
+        assert!(matches[1].char_start < matches[2].char_start);
     }
 
     #[test]
     fn prompt_marker_prefixes_fire_with_char_start_on_the_keyword() {
         // Real hosted panes prefix the typed line with a prompt glyph, so the
-        // trigger lands after the marker. `\u{276f}` is Claude Code's prompt,
-        // `\u{279c}` is oh-my-zsh; the rest are shell sigils and a REPL prompt.
+        // trigger lands after the marker. The word-boundary rule matches it with
+        // no special-casing (the space after the glyph is the boundary), and the
+        // span starts on the keyword `d`, never on the prompt glyph.
         for prompt in ["\u{276f} ", "> ", "$ ", "% ", "# ", "\u{279c} ", ">>> "] {
             let line = format!("{prompt}delegate: some web research to the workers");
-            let matched =
-                scan_line(&line).unwrap_or_else(|| panic!("prompt {prompt:?} should fire"));
-            assert_eq!(matched.trigger, Trigger::Delegate, "prompt {prompt:?}");
-            // The span starts on the keyword `d`, never on the prompt glyph.
+            let matches = scan_line(&line);
+            assert_eq!(matches.len(), 1, "prompt {prompt:?} should fire once");
+            assert_eq!(matches[0].trigger, Trigger::Delegate, "prompt {prompt:?}");
             let expected_start = line
                 .chars()
                 .position(|c| c == 'd')
                 .expect("keyword present");
-            assert_eq!(matched.char_start, expected_start, "prompt {prompt:?}");
-            assert_eq!(matched.char_len, 9, "prompt {prompt:?}"); // delegate:
+            assert_eq!(matches[0].char_start, expected_start, "prompt {prompt:?}");
+            assert_eq!(matches[0].char_len, 9, "prompt {prompt:?}"); // delegate:
         }
     }
 
     #[test]
-    fn indentation_before_a_prompt_marker_is_tolerated() {
-        let line = "  \u{276f}  orchestrate: the plan";
-        let matched = scan_line(line).expect("indented prompt fires");
-        assert_eq!(matched.trigger, Trigger::Orchestrate);
-        let expected_start = line
-            .chars()
-            .position(|c| c == 'o')
-            .expect("keyword present");
-        assert_eq!(matched.char_start, expected_start);
+    fn a_keyword_welded_into_a_larger_word_does_not_fire() {
+        // A letter before the keyword means it is part of another word.
+        assert!(scan_line("redelegate: nope").is_empty());
+        assert!(scan_line("predelegate: nope").is_empty());
+        assert!(scan_line("\u{276f} redelegate: nope").is_empty());
     }
 
     #[test]
-    fn prompt_prefix_does_not_weaken_false_positive_guarantees() {
-        // The broadened anchor must not create new false positives (AC2 with a
-        // prompt present): wrong word, no colon, and wrong case all stay quiet.
-        assert!(scan_line("\u{276f} redelegate: nope").is_none());
-        assert!(scan_line("\u{276f} please delegate this").is_none());
-        assert!(scan_line("\u{276f} Delegate: capitalized").is_none());
-        assert!(scan_line("> delegated: past tense").is_none());
-    }
-
-    #[test]
-    fn a_long_sigil_run_is_decoration_not_a_prompt() {
-        // More than MAX_PROMPT_MARKER_RUN sigils is a banner, not a prompt.
-        assert!(scan_line("===== delegate: banner").is_none());
-        assert!(scan_line("#### orchestrate: heading").is_none());
-    }
-
-    #[test]
-    fn a_sigil_without_a_whitespace_gap_is_not_a_prompt() {
-        // A prompt marker requires a trailing space; these are not prompts.
-        assert!(scan_line(":delegate: x").is_none());
-        assert!(scan_line(">delegate: x").is_none());
-    }
-
-    #[test]
-    fn redelegate_does_not_trigger() {
-        // The keyword must start the token; `redelegate:` is a different word.
-        assert!(scan_line("redelegate: nope").is_none());
-    }
-
-    #[test]
-    fn keyword_without_a_colon_does_not_trigger() {
-        assert!(scan_line("please delegate this task").is_none());
-        assert!(scan_line("delegate the work to a worker").is_none());
-    }
-
-    #[test]
-    fn mid_sentence_keyword_with_a_colon_does_not_trigger() {
-        // Line-anchored: something precedes the keyword, so it must not fire.
-        assert!(scan_line("first orchestrate: later").is_none());
+    fn a_keyword_without_a_colon_does_not_fire() {
+        assert!(scan_line("please delegate this task").is_empty());
+        assert!(scan_line("delegate the work to a worker").is_empty());
+        assert!(scan_line("\u{276f} can you delegate this").is_empty());
     }
 
     #[test]
     fn matching_is_case_sensitive() {
-        assert!(scan_line("Delegate: capitalized prose").is_none());
-        assert!(scan_line("ORCHESTRATE: shout").is_none());
+        assert!(scan_line("Delegate: capitalized prose").is_empty());
+        assert!(scan_line("ORCHESTRATE: shout").is_empty());
+        assert!(scan_line("\u{276f} Delegate: capitalized").is_empty());
     }
 
     #[test]
-    fn a_suffixed_keyword_does_not_trigger() {
-        // `delegated:` and `delegatex:` are not the bare keyword.
-        assert!(scan_line("delegated: past tense").is_none());
-        assert!(scan_line("delegatex: typo").is_none());
+    fn a_suffixed_keyword_does_not_fire() {
+        // `delegated:` and `delegatex:` are not the bare keyword + colon.
+        assert!(scan_line("delegated: past tense").is_empty());
+        assert!(scan_line("delegatex: typo").is_empty());
+        assert!(scan_line("> delegated: past tense").is_empty());
     }
 
     #[test]
     fn blank_and_whitespace_only_lines_are_quiet() {
-        assert!(scan_line("").is_none());
-        assert!(scan_line("      ").is_none());
+        assert!(scan_line("").is_empty());
+        assert!(scan_line("      ").is_empty());
     }
 }

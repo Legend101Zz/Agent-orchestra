@@ -2603,9 +2603,9 @@ struct TriggerSpan {
     len: u16,
 }
 
-/// Scan one grid row of a hosted pane for a line-anchored trigger, mapping the
+/// Scan one grid row of a hosted pane for **every** trigger token, mapping the
 /// grammar's character offsets back onto terminal columns.
-fn scan_pane_row(pane: &PaneSnapshot, row: u16) -> Option<(TriggerSpan, Trigger)> {
+fn scan_pane_row(pane: &PaneSnapshot, row: u16) -> Vec<(TriggerSpan, Trigger)> {
     let cols = pane.cols;
     let mut line = String::new();
     // char index -> source column, so a token can be located even when earlier
@@ -2624,17 +2624,21 @@ fn scan_pane_row(pane: &PaneSnapshot, row: u16) -> Option<(TriggerSpan, Trigger)
             }
         }
     }
-    let matched = scan_line(&line)?;
-    let start_col = *columns.get(matched.char_start)?;
-    let end_col = *columns.get(matched.char_start + matched.char_len - 1)?;
-    Some((
-        TriggerSpan {
-            row,
-            col: start_col,
-            len: end_col - start_col + 1,
-        },
-        matched.trigger,
-    ))
+    scan_line(&line)
+        .into_iter()
+        .filter_map(|matched| {
+            let start_col = *columns.get(matched.char_start)?;
+            let end_col = *columns.get(matched.char_start + matched.char_len - 1)?;
+            Some((
+                TriggerSpan {
+                    row,
+                    col: start_col,
+                    len: end_col - start_col + 1,
+                },
+                matched.trigger,
+            ))
+        })
+        .collect()
 }
 
 /// Detect every trigger token in a conductor pane's current screen.
@@ -2650,7 +2654,7 @@ fn conductor_triggers(pane: &PaneSnapshot) -> (Vec<TriggerSpan>, Vec<Trigger>) {
     let mut spans = Vec::new();
     let mut seen: Vec<Trigger> = Vec::new();
     for row in 0..pane.rows {
-        if let Some((span, trigger)) = scan_pane_row(pane, row) {
+        for (span, trigger) in scan_pane_row(pane, row) {
             if !seen.contains(&trigger) {
                 seen.push(trigger);
             }
@@ -3117,6 +3121,41 @@ mod tests {
                         "{trigger:?} prompt={prompt:?} in {theme_name:?}: missing label badge"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn conductor_highlights_every_occurrence_including_mid_line() {
+        // Ultrathink-style: a spell lights up wherever it appears, so a line with
+        // the trigger twice highlights both, and a trigger that starts mid-line
+        // (after prose) still lights. `highlighted_symbols` concatenates every
+        // accent cell in row-major order, so two spans read as two tokens.
+        for (stream, expected) in [
+            (
+                b"delegate: a and delegate: b\r\n".as_slice(),
+                "delegate:delegate:",
+            ),
+            (b"please delegate: this now\r\n".as_slice(), "delegate:"),
+        ] {
+            for theme_name in ThemeName::ALL {
+                let backend = TestBackend::new(120, 40);
+                let mut terminal = Terminal::new(backend).expect("test terminal");
+                let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
+                terminal
+                    .draw(|frame| render_stage(frame, &mut state))
+                    .expect("render stage");
+                let theme: Theme = theme_name.into();
+                let buffer = terminal.backend().buffer();
+                assert_eq!(
+                    highlighted_symbols(buffer, theme.focus),
+                    expected,
+                    "{stream:?} in {theme_name:?}: highlighted spans"
+                );
+                assert!(
+                    rendered_text(buffer).contains(Trigger::GLYPH),
+                    "{stream:?} in {theme_name:?}: missing glyph badge"
+                );
             }
         }
     }
