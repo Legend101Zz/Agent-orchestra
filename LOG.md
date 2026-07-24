@@ -19,22 +19,25 @@ ship-log entries are part of finishing an issue.*
 | [#17](https://github.com/Legend101Zz/Agent-orchestra/issues/17) | Rename the command `orc` → `pio` everywhere users see it | ✅ | merged (PR #19) |
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
-| [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | 🧪 | issue-5-task-contract-v2 |
+| [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
-| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *needs #5* | — |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *needs #5* | — |
+| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *needs #6* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#4 merged (2026-07-24, PR #21) — capability probes + honest `pio doctor`
-are in, so #6/#7/#12 are now unblocked. Next up: #5 (task contracts) — the
-other bottleneck, gates #8/#11. #6 (universal worker adapter) is the natural
-follow-on to #4 and can run in a parallel terminal. #9/#13 anytime; start #13
-before more TUI churn lands to avoid merge pain.**
+**#5 merged (2026-07-24, PR #22) — task contract v2 + `pio task brief` are
+in, so #8/#11 are now unblocked. Both bottlenecks (#4, #5) are cleared:
+the ready set is #6 (universal worker adapter, follow-on to #4), #8 (`orch_*`
++ MCP, reuses the #5 schema), #11 (worktree isolation, builds on #5), plus
+#7/#9/#13 anytime. Recommended next: #6 then #8. Known follow-up seeded by
+#5's review: the contract brief isn't yet wired into `dispatch send`
+(`render_brief` is `pub`), and there's no headless `session create` — fold
+both into #6/#8. Start #13 before more TUI churn lands to avoid merge pain.**
 
 ## Prompts you run
 

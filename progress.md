@@ -604,3 +604,29 @@
 - Next: Claude adversarial review of the branch (prompt 2). #5 landing unblocks
   #8 (orch_* control surface + MCP, reuses this schema) and #11 (worktree
   isolation + review).
+
+## Session — 2026-07-24 (Claude reviewer): #5 review → ACCEPT, then merged
+- Adversarial review of `issue-5-task-contract-v2` (a5630a1) against the #5
+  contract. All 5 gates re-run green on MSRV 1.91.1, including the offline
+  `cargo build --release --locked` — the key risk with the new `schemars 1.2.1`
+  dep, which resolves from cache. Reproduced AC1/AC2/AC3 independently:
+  pre-v2 records load with no spurious `contract` key + unknown fields survive
+  at top/contract/nested-limits layers; `task add`→`show`→`brief` round-trips
+  every field; brief reproduces each section verbatim and marks unset ones
+  `(none specified)`.
+- Two deviations judged justified: (1) `rust/Cargo.toml`/`Cargo.lock` for the
+  schemars dep — mandated by #16 decision record §5 ("schemars v1.2.1 derives
+  on contract v2"), MIT, exact version, workspace-inherited; (2) SCORE-card
+  fields deferred because their data (`TaskSummary`) lives in the *forbidden*
+  `orc-proto`/`orc-daemon`. Non-blocking note surfaced: brief not yet wired
+  into `dispatch send` (`render_brief` is `pub`). Verdict ACCEPT on PR #22 +
+  issue #5, LOG.md → 🧪, pushed c232f85.
+- Mrigesh tested locally (fixed a wrong-branch install, then daemon build
+  mismatch → `pio daemon restart`) and hand-verified all four ACs, including
+  the honest-degradation edges (bare task → every brief header `(none
+  specified)`, JSON has no `contract` key; objective-without-`--check` errors).
+  Merged issue-5 → main @ 7aed68d; issue #5 closed. LOG.md #5 → ✅ (merged
+  cluster), #8/#11 unblocked; task_plan.md row + order note updated. Both
+  bottlenecks (#4, #5) cleared. Next: #6 (universal worker adapter) then #8.
+  Two follow-ups seeded for #6/#8: wire the brief into `dispatch send`, and
+  add a headless `session create`.
