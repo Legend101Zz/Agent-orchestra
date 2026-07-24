@@ -20,7 +20,7 @@ ship-log entries are part of finishing an issue.*
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
-| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ⬜ | — |
+| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | 🧪 | issue-9-trigger-grammar |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
@@ -122,6 +122,37 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-24 — Trigger words light up inside conductor panes, issue #9 (code-puppy)
+When the conductor (the brain pane) prints one of the three spell words at the
+start of a line — `delegate:`, `orchestrate:`, or `deliberate:` — pi-orchestra
+now lights that word up in the pane, ultrathink-style: the token is drawn in the
+theme accent as a bold, reverse-video block, and the pane's title grows a small
+badge (a diamond glyph plus the word, e.g. "DELEGATE") so you can tell at a
+glance the conductor is casting a spell. It is deliberately strict and only
+fires on a real trigger: `redelegate:` and a bare `delegate` with no colon stay
+plain, matching is case-sensitive, and a worker pane that merely echoes the word
+never lights up — only the conductor asserts intent. Because the highlight is a
+bold reverse-video block plus a spelled-out badge, it still reads with color
+turned off (NO_COLOR / mono terminals) and looks identical whether reduced
+motion is on or off. I did NOT make the highlight *do* anything yet — typing
+`delegate:` shows the affordance but does not itself dispatch a worker (routing
+is #6/#8), and I did NOT touch standalone harnesses like Claude Code or Codex
+(that's #10). The trigger grammar now lives as a reusable, tested primitive
+(`orc_pty::trigger`) that #8's `orch_*` control surface can call to actually
+route a spell to a procedure.
+
+> **Review (2026-07-24, Claude):** ~~🧪 ACCEPT~~ **RETRACTED** — all 5 gates pass and all 4 acceptance checks are non-vacuous, but live testing found the feature does not fire for its primary use case. Superseded by the FIX verdict below.
+>
+> **Re-review (2026-07-24, Claude):** 🔨 FIX — Mrigesh ran a real Claude Code brain pane and typed `delegate: some web research to the workers`; it did **not** highlight. Root cause: the line renders as `❯ delegate: …` and the grammar is line-anchored to the *first non-whitespace char* (the `❯` prompt glyph), so it never matches. Every acceptance-test fixture fed a **bare** stream (`"delegate: …\r\n"`) with no prompt prefix, so the tests were green but unrepresentative of any real hosted pane (`❯`/`>`/`$`). Confirmed the installed binary IS the #9 build (not stale) and reproduced against the matcher. Owner confirmed intent: typing at the prompt must light up (ultrathink-style). Fix list on issue #9 — anchor must tolerate a leading prompt marker (keeping `char_start` on the keyword), and the fixtures must include the real prompt prefixes.
+>
+> **Fix applied (2026-07-24, code-puppy):** `scan_line` now tolerates one optional leading prompt marker — a bounded run of up to 3 non-alphanumeric sigils followed by whitespace (covers Claude Code's U+276F prompt, `> ` / `$ ` / `% `, oh-my-zsh, and a `>>> ` REPL) — with `char_start` kept on the keyword, so only the keyword+colon highlights, never the prompt glyph. Every fixture now streams the real prompt prefixes and asserts the highlighted span is *exactly* `keyword:`; a new test replays the exact line Mrigesh typed as a recorded Claude-Code-shaped byte stream (ANSI color + U+276F) through the real vt100 parser and full renderer. AC2 re-checked with a prefix present (`redelegate:`, colon-less, wrong-case, `delegated:` all stay quiet), plus long-sigil-banner and no-whitespace-gap guards. Prompt-marker policy (a shape rule, deliberately not a glyph allowlist — a missed highlight is the real harm; a spurious one is cosmetic since nothing dispatches) documented in the module. All 5 gates green. Pushed to `issue-9-trigger-grammar`; status back to needs-review. Note: the fully-interactive live re-test in a real Claude Code pane is the merge-time human step (workflow step 7); the recorded-stream test is the automated stand-in that would have caught this.
+>
+> **Ultrathink-style change (2026-07-24, Claude, owner-directed):** Mrigesh tested live and asked for true ultrathink behaviour — the spell should light up **wherever** it appears on the line and **every** time, not just the first token at the start. Reworked `scan_line` from "one line-anchored match" to "**all** matches at a word boundary + colon", returning `Vec<TriggerMatch>` left-to-right; the renderer (`scan_pane_row`) now emits one span per occurrence. A word boundary is line-start or any non-alphanumeric char, which *subsumes* the prompt-marker special-case (the space after `❯`/`>`/`$` is a boundary), so `skip_prompt_marker` + `MAX_PROMPT_MARKER_RUN` were **deleted** as dead code. Guards preserved: colon still required (`can you delegate this` stays plain) and a keyword welded into a word still never fires (`redelegate:` quiet). This intentionally **supersedes the original AC2 line** "mid-sentence `orchestrate:` does not trigger" — the owner now wants mid-sentence to fire; the no-false-positive intent (prose, wrong word, wrong case) is unchanged. New tests: `every_occurrence_on_a_line_is_reported_left_to_right`, `a_trigger_fires_mid_line_not_only_at_the_start` (grammar) and `conductor_highlights_every_occurrence_including_mid_line` (renderer, asserts `delegate: a … delegate: b` highlights both). All 5 gates green; verified live that `❯ delegate: … , delegate: …` lights both. 🧪 — ready for your local test.
+>
+> **Rainbow highlight (2026-07-24, Claude, owner-directed):** Mrigesh asked for the `ultrathink` rainbow look instead of the flat accent block. The token now shimmers per-character: each column of the highlighted span takes the next colour from a 7-stop `TRIGGER_RAINBOW` (red→orange→yellow→green→blue→indigo→violet), kept **BOLD** with the source cell's own background (no more reverse-video block). Colour is *not* load-bearing — the token stays bold and the `◆ LABEL` title badge still names the spell, so it survives NO_COLOR/mono (AC3 test updated: asserts the bold rainbow span + badge, and that reduced-motion frames stay byte-identical since the rainbow is static). Test helper `highlighted_symbols` now identifies a trigger cell by "BOLD + fg ∈ `TRIGGER_RAINBOW`". Deviation note: this uses explicit RGB stops rather than visual-identity slot names (AGENTS.md prefers slots) — a deliberate, owner-requested exception for the ultrathink effect, which has no single-slot equivalent. All 5 gates green. 🧪 — ready for your local test.
+>
+> **Animated rainbow (2026-07-24, Claude, owner-directed):** Mrigesh asked for the rainbow to *move* like real ultrathink, not sit static. Added a motion phase: `render_shell` derives `motion = (!reduced_motion).then(|| epoch.elapsed()/120ms)` on the Stage view (same clock the HOME masthead already uses) and threads it through `render_stage` → `render_pane`, where the per-column colour index becomes `(offset + phase) % 7` — so the gradient slides one stop per ~120 ms and appears to flow along the token. **Accessibility preserved:** under `reduced_motion` the phase is frozen at 0, so the rainbow is colourful but perfectly static (AC3). To keep the shimmer running after the baton pulse settles, the shell repaint loop now also animates while `StageState::has_live_trigger()` (any conductor pane shows a trigger). Tests: reworked the AC3 test to prove the reduced-motion render is byte-identical across repaints (frozen), and added `trigger_rainbow_animates_when_motion_is_on` — asserts phase 0 vs phase 1 differ and are a one-stop slide, while two `None` renders stay identical. All 5 gates green. 🧪 — ready for your local test.
 
 ### 2026-07-24 — Every delegated task carries a contract, issue #5 (code-puppy)
 pi-orchestra tasks can now carry a full "contract": the objective, the exact

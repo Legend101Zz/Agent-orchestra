@@ -1308,6 +1308,7 @@ dependencies = [
  "notify",
  "orc-core",
  "orc-proto",
+ "orc-pty",
  "orc-tui",
  "ratatui",
  "serde_json",

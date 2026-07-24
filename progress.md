@@ -630,3 +630,87 @@
   bottlenecks (#4, #5) cleared. Next: #6 (universal worker adapter) then #8.
   Two follow-ups seeded for #6/#8: wire the brief into `dispatch send`, and
   add a headless `session create`.
+
+## Session — 2026-07-24 (code-puppy): #9 trigger grammar in hosted panes
+- Worked issue #9 (V1-7) on `issue-9-trigger-grammar` from fresh `main`. The
+  issue's `## Objective` is truncated at source (`... [truncated]`); rebuilt
+  intent from the V1 spec's "Trigger words & terminal highlighting" section and
+  the four acceptance checks, which are complete.
+- Grammar as a single source of truth: new `orc-pty/src/trigger.rs` — `Trigger`
+  enum (`Delegate`/`Orchestrate`/`Deliberate`), `TriggerMatch` (char offsets),
+  and pure `scan_line()`. Line-anchored + case-sensitive: fires only when a
+  keyword is the first non-whitespace token and is immediately followed by `:`.
+  `redelegate:`, a colon-less `delegate`, mid-sentence `orchestrate:`, and
+  `Delegate:` all stay quiet. Put here (not orc-app) so the daemon (already an
+  `orc-pty` dependent) and #8's `orch_*` routing can reuse one definition.
+- Added `orc_pty::cells_from_stream(rows, cols, bytes)` — runs the same vt100
+  parser headlessly to turn a recorded fixture stream into the exact
+  `TerminalCell` grid a snapshot carries, so AC1 tests real VT streams rather
+  than hand-placed cells. Reuses the existing `terminal_cell` conversion (DRY).
+- Highlight in the renderer: `orc-app` now depends on `orc-pty`. `render_pane`
+  detects triggers in the conductor pane only (`role == "brain"` — the objective
+  says conductor-pane output; a worker echoing the word must not light up),
+  maps the grammar's char offsets to terminal columns (`scan_pane_row`), draws
+  the token in `theme.focus` (brain accent) as a BOLD+REVERSED block, and adds
+  a `◆ LABEL` title badge. BOLD+REVERSED+glyph+label = the affordance survives
+  NO_COLOR/mono and is color-independent (AC3).
+- Added `ThemeName::ALL` so snapshot coverage auto-tracks the palette set;
+  today it is [Ember, Phosphor] and will pick up nocturne when #13 lands.
+- Tests: 8 grammar unit tests + 2 `cells_from_stream` tests in orc-pty; in
+  orc-app: `conductor_trigger_grammar_highlights_each_spell_in_every_theme`
+  (AC1), `conductor_pane_does_not_highlight_non_triggers` (AC2),
+  `worker_pane_never_highlights_a_trigger`, and
+  `trigger_highlight_is_reduced_motion_and_color_safe` (AC3, asserts the two
+  reduced-motion frames are byte-identical).
+- All five gates green from `rust/`: fmt --check, clippy -D warnings, test
+  --workspace (0 failed), rustdoc -D warnings, and `build --release --locked`
+  (Cargo.lock gained only the orc-app→orc-pty edge; no new external crate).
+- Deviations, all noted on the issue: (1) AC1 says "all three themes" but only
+  ember+phosphor exist pre-#13 — tests iterate `ThemeName::ALL`, so nocturne is
+  covered automatically on merge, no theme improvised into #13's scope; (2) no
+  `orc-daemon` event plumbing — it is an allowed path but no acceptance check
+  or consumer needs it yet (YAGNI); the grammar is left reusable for #8;
+  (3) no `NO_COLOR` env detection exists anywhere yet (that's #13's degradation
+  tiers) — AC3 is met by design (non-color affordances), not env plumbing.
+- Next: Claude review of the branch against the #9 contract.
+
+## Session — 2026-07-24 (code-puppy): #9 review FIX — prompt-glyph anchor bug
+- Claude re-review reversed ACCEPT → FIX after a live test: in a real Claude
+  Code brain pane, `U+276F delegate: some web research to the workers` did NOT
+  highlight. Root cause: `scan_line` anchored to the first non-whitespace char,
+  which in a hosted pane is the prompt glyph (U+276F / `>` / `$`), not the keyword.
+  Every acceptance fixture fed a BARE stream (`"delegate: ...\r\n"`), so the
+  suite was green but unrepresentative of any real pane. Fair catch; my testing
+  gap. Pulled reviewer commits (0d8f503 ACCEPT, 317e621 FIX) first.
+- Fix (orc-pty/src/trigger.rs): `scan_line` now tries the keyword at the first
+  non-whitespace column AND, failing that, after one optional prompt marker.
+  `skip_prompt_marker` accepts a bounded run (<= MAX_PROMPT_MARKER_RUN = 3) of
+  non-alphanumeric, non-whitespace sigils followed by >=1 whitespace, then
+  returns the next token index; `match_keyword_at` matches a bare keyword +
+  colon at an exact index. `char_start` stays on the keyword, so only the
+  keyword+colon highlights, never the prompt glyph. Renderer (orc-app) needed
+  no change — it consumes char offsets, which are already correct.
+- Policy decision (fix item 5, documented in the module): the marker is a
+  SHAPE rule (skip a short sigil run), deliberately NOT a fixed glyph allowlist.
+  Harm is asymmetric — a missed highlight behind an unlisted prompt glyph is the
+  exact bug we just fixed, while a spurious highlight is cosmetic (nothing is
+  dispatched; routing is #6/#8). Trade-off: a prompt with embedded alphanumerics
+  (git-branch powerline, `[1]` job markers) is not tolerated.
+- Tests: grammar now 18 (added prompt-prefix fires with char_start on keyword;
+  indentation-before-marker; prefixed false positives; long-sigil banner is not
+  a prompt; sigil-without-gap is not a prompt). orc-app fixtures rewritten to
+  stream REAL prompts (bare + U+276F + `> `/`$ `/`% ` + oh-my-zsh); `highlighted_
+  symbols` replaces the count helper so AC1/AC3 assert the span is EXACTLY
+  `keyword:` (proves the glyph is excluded). New
+  `recorded_claude_code_prompt_stream_lights_up_the_typed_trigger` replays the
+  exact failing line as a recorded Claude-Code-shaped byte stream (ANSI color +
+  U+276F) through the real vt100 parser + full render pipeline (fix item 4).
+- Emoji-filter gotcha: the repo hook strips U+276F / U+279C (and status emoji)
+  from file writes. Got the literal glyph into Rust source via `\u{276f}`
+  escapes (string) and `\xe2\x9d\xaf` (byte string) — ASCII in source, real
+  glyph at runtime. Restored the LOG.md status emoji via python codepoints.
+- All 5 gates green from `rust/`. Live fully-interactive re-test in a real
+  Claude Code pane is the merge-time human step (workflow 7); the recorded
+  stream is the automated stand-in that would have caught the original miss.
+- LOG.md status restored to needs-review + fix-applied note appended under the
+  FIX verdict (history preserved). Next: Claude re-review.

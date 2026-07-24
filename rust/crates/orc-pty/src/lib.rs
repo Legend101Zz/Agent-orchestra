@@ -14,6 +14,8 @@ use orc_proto::{PaneMetrics, PaneSnapshot, TerminalCell, TerminalColor};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use thiserror::Error;
 
+pub mod trigger;
+
 const SCROLLBACK_ROWS: usize = 2_000;
 const MAX_ROWS: u16 = 200;
 const MAX_COLS: u16 = 400;
@@ -339,6 +341,30 @@ const fn terminal_color(color: vt100::Color) -> TerminalColor {
     }
 }
 
+/// Parse a raw terminal byte stream into a bounded, styled cell grid.
+///
+/// This runs the same vt parser the live reader uses, but headlessly: it is the
+/// dependable way to turn a recorded fixture (or any replayed stream) into the
+/// exact `TerminalCell` grid a pane snapshot would carry, without spawning a
+/// child. The returned vector is row-major and always `rows * cols` long.
+pub fn cells_from_stream(rows: u16, cols: u16, stream: &[u8]) -> Result<Vec<TerminalCell>> {
+    validate_size(rows, cols)?;
+    let mut parser = vt100::Parser::new(rows, cols, SCROLLBACK_ROWS);
+    parser.process(stream);
+    let screen = parser.screen();
+    let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
+    for row in 0..rows {
+        for col in 0..cols {
+            cells.push(
+                screen
+                    .cell(row, col)
+                    .map_or_else(TerminalCell::default, terminal_cell),
+            );
+        }
+    }
+    Ok(cells)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -465,5 +491,24 @@ mod tests {
             normalized.contains(&expected),
             "raw bytes changed: {normalized:?}"
         );
+    }
+
+    #[test]
+    fn cells_from_stream_reconstructs_text_a_trigger_can_be_found_in() {
+        // A recorded conductor stream, parsed headlessly, yields cells whose
+        // first row carries the trigger the grammar module then detects.
+        let cells = super::cells_from_stream(6, 40, b"delegate: add OAuth login\r\n")
+            .expect("parse fixture stream");
+        let first_row: String = cells[..40].iter().map(|cell| cell.text.as_str()).collect();
+        assert!(first_row.starts_with("delegate: add OAuth login"));
+        let matches = super::trigger::scan_line(first_row.trim_end());
+        assert_eq!(matches.len(), 1, "grammar finds the streamed trigger");
+        assert_eq!(matches[0].trigger, super::trigger::Trigger::Delegate);
+        assert_eq!(matches[0].char_start, 0);
+    }
+
+    #[test]
+    fn cells_from_stream_rejects_an_unbounded_grid() {
+        assert!(super::cells_from_stream(0, 40, b"x").is_err());
     }
 }
