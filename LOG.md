@@ -22,22 +22,24 @@ ship-log entries are part of finishing an issue.*
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
-| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | 🧪 | issue-6-universal-worker-adapter ([PR #24](https://github.com/Legend101Zz/Agent-orchestra/pull/24)) — reviewed; codex fix applied in-branch, real-CLI verified |
+| [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *needs #6* | — |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#9 merged (2026-07-24, PR #23) — trigger grammar + ultrathink-style
-highlight shipped: `delegate:` / `orchestrate:` / `deliberate:` light up
-wherever they appear on a conductor pane line, in an animated per-character
-rainbow that freezes static under reduced-motion. Remaining ready set: #6
-(universal worker adapter, follow-on to #4), #8 (`orch_*` + MCP, reuses the
-#5 schema), #11 (worktree isolation, builds on #5), plus #7/#13 anytime.
-**Next: #8** (`orch_*` + MCP, reuses the #5 schema), then #11. #6 (universal
-worker adapter) is now pushed and awaiting review. Known follow-up seeded by
+**#6 merged (2026-07-24, PR #24) — universal probe-driven worker adapter
+shipped: any harness the `pio doctor` probe shows can run non-interactively is
+now a worker (claude/codex/opencode + hermes/pi), the adapter builds each
+one's command line from the probe results, and an unprobed capability is
+refused by name. Adversarial review went past the fixtures to real CLIs: found
+and fixed a codex launch bug in-branch (`--skip-git-repo-check`, verified live),
+and confirmed the probe itself is sound. Unblocks #12 (single-harness honest
+mode). Remaining ready set: #7 (rate limiting), #8 (`orch_*` + MCP, reuses the
+#5 schema), #11 (worktree isolation, builds on #5), #12, plus #13 anytime.
+**Next: #7** (subscription rate-limit guard), then #8. Known follow-up seeded by
 #5's review: the contract brief isn't yet wired into `dispatch send`
 (`render_brief` is `pub`), and there's no headless `session create` — fold
 both into #8. Start #13 before more TUI churn lands to avoid merge pain.**

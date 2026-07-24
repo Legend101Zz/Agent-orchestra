@@ -819,3 +819,12 @@
   invocation template, not the probe) in `findings.md` and the `probe/profiles.rs`
   module header. Unattended permission mapping for codex/claude on real coding
   tasks (approval prompts) is #16's open question, out of scope for #6's ACs.
+
+## Session — 2026-07-24 (owner): #6 MERGED (PR #24)
+- Mrigesh merged PR #24 into `main` (merge commit `9968839`); #6 closed.
+- Dashboard bookkeeping on `main`: LOG.md #6 → ✅ merged, #12 → unblocked, new
+  "#6 merged" headline + Next pointer → #7; task_plan.md #6 marked merged and the
+  order/ready-set narrative advanced (Next: #7, then #8; #6 now unblocks #12).
+- V1 status: #16, #17, #3, #4, #5, #9, #6 merged. Ready set: #7, #8, #11, #12,
+  #13. Next up: **#7** (V1-5 rate-limit-aware spawning / quota guard v2 +
+  concurrency caps; depends on #4, satisfied) — owner starting it next.
