@@ -745,3 +745,77 @@
 - Mrigesh tested and merged to `main` (PR #23, merge 2d64a42). Updated LOG.md
   (#9 → ✅, next-up → #6) and task_plan.md (#9 merged, order block). Next: #6
   (universal worker adapter).
+
+## Session — 2026-07-24 (code-puppy): #6 universal worker adapter (pushed)
+- Implemented issue #6 (V1-4) on `issue-6-universal-worker-adapter` from fresh
+  `main`. Dependency V1-2 (#4, capability probes) confirmed CLOSED/merged
+  (commit 7fbe493, PR #21) before starting.
+- New `orc-core/src/invocation.rs`: probe-driven worker invocation. Two paths —
+  (1) explicit override: a non-empty `dispatch_args` is trusted verbatim (keeps
+  the pre-#6 hermes `-z` / pi `-p` defaults and every existing dispatch test
+  passing = AC3); (2) probe-driven: a per-adapter `InvocationTemplate` (from the
+  #16 §2 ground-truth table) is synthesized, adding structured-output flags iff
+  `StructuredOutput` was probed and an explicit `--dir`/`-C` flag iff
+  `WorkingDir` was probed. A required-but-unprobed capability refuses via
+  `InvocationError`, message prefixed `CAPABILITY UNAVAILABLE:` naming the slug.
+- Design call (documented in the module): cwd control is ORCHESTRATOR-provided —
+  every worker is spawned with `Command::current_dir` = the task's effective cwd
+  (worktree.path when isolated, else session.cwd), mirroring how probe.rs
+  *derives* `cancellation`. So the single probe-GATED requirement is
+  `NonInteractive`; that's why hermes/pi (no cwd flag) stay first-class workers.
+- `dispatch.rs` rewired: `select_available_worker` → `select_worker` (role check
+  only; deleted the dead `default_workers` fallback — dispatch always passes an
+  explicit harness); `invoke_harness` now takes a resolved program + `Invocation`
+  + cwd; 3 duplicated pre-invocation failure blocks consolidated into one
+  `persist_failure`; additive `DispatchRecord.cwd` field records where the worker
+  ran (evidence of cwd control). `probe::probed_from(&registry, adapter)` reads
+  capabilities from the already-loaded registry (no second disk read).
+- Fixtures: `tools/fixtures/harness-styles/{flag-style.sh,subcommand-style.sh,
+  README.md}` — one fake worker per invocation style, each echoes argv+brief+cwd
+  and exits 0.
+- Tests: 7 unit tests in `invocation.rs`; new `tests/invocation_dispatch.rs`
+  (AC1: flag + subcommand workers return confirmed receipts; probe toggles
+  optional flags; AC2: unprobed-capability refusal names it); new CLI test in
+  `orc-cli/tests/dispatch.rs` (AC2 at the CLI: exits 1, error names
+  `non_interactive`).
+- All 5 gates green from `rust/`: fmt --check, clippy -D warnings, test
+  --workspace (0 failed), doc -D warnings (fixed one private intra-doc link),
+  build --release --locked. Stayed strictly inside allowed paths (orc-core/,
+  orc-cli/, tools/fixtures/). Out-of-scope respected: no rate limiting (#7), no
+  MCP (#8), no session-id resume capture (deferred with #16 open-Q; resume
+  dispatch isn't in this issue's ACs). Next: push + issue comment; then review.
+
+## Session — 2026-07-24 (Claude review of #6: real-CLI test → FIX applied in-branch)
+- Adversarial review of PR #24 / #6. All 5 gates re-run green; all 4 fixture-based
+  ACs independently re-verified and mutation-tested (removing the capability gate
+  or the structured-output probe-gate makes the tests fail, as they should).
+- Went beyond the fixtures and dispatched to the **real** installed CLIs (isolated
+  ORC_HOME, empty non-git sandbox cwd, trivial prompt). `claude` worked end-to-end
+  (`claude -p --output-format stream-json --verbose …` → confirmed, returned PONG).
+  **`codex` failed**: `codex exec --json -C <dir>` exits 1 with "Not inside a
+  trusted directory and --skip-git-repo-check was not specified." A worker cwd is
+  orchestrator-assigned and not guaranteed to be a git repo, so codex could never
+  run as a probe-driven worker. Root cause confirmed by reproducing the exact
+  invocation (with the flag → works and returns PONG; without → exit 1).
+- **Fix (in-branch, orc-core only):** added a `fixed: &'static [&'static str]`
+  field to `InvocationTemplate` for mandatory adapter-specific flags applied after
+  `style`, independent of any probe. codex now carries `--skip-git-repo-check`
+  (permissive only — NOT a sandbox/approval skip, per #16's rule against dangerous
+  defaults). Other templates set `fixed: &[]`. Added two unit tests (exact codex
+  argv incl. the flag even when optional probes are absent) written failing-first,
+  plus an integration assertion that `--skip-git-repo-check` reaches `command_line`.
+- Re-tested against real codex + claude: **both confirmed, exit 0, returned PONG**;
+  codex ran in the non-git sandbox via `codex exec --skip-git-repo-check --json -C`.
+  All 5 gates green again. opencode's template matches its 1.18.4 `run --format
+  json --dir` interface; hermes/pi keep the override path.
+- Probe follow-up — investigated and CLOSED here (no code fix needed): my first
+  note that "`pio doctor` reports an identical capability set for all five" was
+  wrong — a bug in my inspection script (sorted the `{cap: bool}` report map's
+  keys instead of filtering by `value == true`). Re-probed correctly: the probe
+  is honest and per-harness — Hermes probes `structured_output` and `working_dir`
+  **false** (its profile has empty proof tokens), the full agent CLIs probe all
+  eight true. Documented the real lesson (help-token probe proves *advertisement*
+  not *runtime*; runtime quirks like codex's `--skip-git-repo-check` live in the
+  invocation template, not the probe) in `findings.md` and the `probe/profiles.rs`
+  module header. Unattended permission mapping for codex/claude on real coding
+  tasks (approval prompts) is #16's open question, out of scope for #6's ACs.

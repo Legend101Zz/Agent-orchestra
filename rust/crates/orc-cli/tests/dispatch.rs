@@ -14,8 +14,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{
-    HarnessConfig, HarnessRegistry, SessionPaneRecord, create_session, write_harness_registry,
-    write_session,
+    HarnessConfig, HarnessRegistry, SessionPaneRecord, create_session, load_harness_registry,
+    write_harness_registry, write_session,
 };
 use serde_json::Value;
 
@@ -244,6 +244,55 @@ fn cli_dispatch_send_list_and_show_record_actor_session_and_pane_linkage() {
     let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown");
     assert_eq!(shown["id"], dispatch_id);
     assert_eq!(shown["status"], "confirmed");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cli_dispatch_to_a_harness_lacking_a_probed_capability_exits_nonzero_naming_it() {
+    let _guard = lock();
+    let (root, home, session) = setup("uncapable");
+    // A probe-driven worker (empty dispatch_args) whose adapter was never probed
+    // as non-interactive — the honest refusal must name that capability.
+    let mut registry = load_harness_registry().expect("load registry");
+    registry.harnesses.insert(
+        "uncapable".to_owned(),
+        HarnessConfig {
+            command: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            resume_args: Vec::new(),
+            roles: vec!["worker".to_owned()],
+            adapter: "claude".to_owned(),
+            dispatch_args: Vec::new(),
+            dispatch_uses_stdin: false,
+            dispatch_timeout_sec: 30,
+            extra: Default::default(),
+        },
+    );
+    write_harness_registry(&registry).expect("persist uncapable worker");
+    let task = add_running_task(&root, &home, &session, "cli dispatch missing capability");
+
+    let sent = orc(
+        &root,
+        &home,
+        &[
+            "dispatch",
+            "send",
+            &task,
+            "uncapable",
+            "noop",
+            "--session",
+            &session,
+            "--json",
+        ],
+    );
+    assert_eq!(sent.status.code(), Some(1));
+    let record: Value = serde_json::from_slice(&sent.stdout).expect("parse dispatched");
+    assert_eq!(record["status"], "failed");
+    let error = record["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("CAPABILITY UNAVAILABLE") && error.contains("non_interactive"),
+        "missing-capability refusal must name the capability; got {error:?}"
+    );
     let _ = fs::remove_dir_all(root);
 }
 

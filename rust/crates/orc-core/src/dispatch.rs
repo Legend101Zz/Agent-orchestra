@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -29,10 +29,13 @@ use serde_json::Value;
 
 use crate::adapter::locate_executable;
 use crate::bench::{
-    HarnessConfig, HarnessRegistry, dispatch_timeout_for, load_harness_registry, read_session,
+    BenchSession, HarnessConfig, HarnessRegistry, dispatch_timeout_for, load_harness_registry,
+    read_session,
 };
+use crate::invocation::{Invocation, resolve_worker_invocation};
+use crate::probe::probed_from;
 use crate::registry::{atomic_write_json, home, now_iso};
-use crate::tasks::{TaskActor, TaskStatus, read_task, record_delivery};
+use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery};
 
 /// Maximum bytes of stdout captured from one dispatch invocation.
 pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
@@ -158,6 +161,12 @@ pub struct DispatchRecord {
     pub run: Option<String>,
     /// Effective command line that was launched.
     pub command_line: String,
+    /// Worker working directory the dispatch was spawned in, when one was set.
+    ///
+    /// Evidence of orchestrator-provided cwd control (issue #6): the worktree
+    /// path for an isolated task, else the session cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// Persisted prompt body that was delivered.
     pub prompt: String,
     /// Delivery state after the bounded invocation.
@@ -263,43 +272,47 @@ fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn select_available_worker<'a>(
-    registry: &'a HarnessRegistry,
-    requested: Option<&str>,
-) -> Result<&'a HarnessConfig> {
-    if let Some(key) = requested {
-        let config = registry
-            .harnesses
-            .get(key)
-            .ok_or_else(|| anyhow!("unknown harness: {key}"))?;
-        if !config.roles.iter().any(|role| role == "worker") {
-            bail!("harness {key} cannot be a worker");
-        }
-        if config.dispatch_args.is_empty() {
-            bail!("CAPABILITY UNAVAILABLE: {key} has no non-interactive dispatch_args");
-        }
-        return Ok(config);
-    }
-    for key in &registry.default_workers {
-        if let Some(config) = registry.harnesses.get(key)
-            && config.roles.iter().any(|role| role == "worker")
-            && !config.dispatch_args.is_empty()
-        {
-            return Ok(config);
-        }
-    }
-    let fallback = registry
+/// Look up the requested worker harness, requiring only the `worker` role.
+///
+/// Whether it can actually run non-interactively is decided downstream by
+/// [`resolve_worker_invocation`] from the probe results, so an honest refusal
+/// can name the missing capability instead of a generic "no dispatch_args".
+fn select_worker<'a>(registry: &'a HarnessRegistry, key: &str) -> Result<&'a HarnessConfig> {
+    let config = registry
         .harnesses
-        .iter()
-        .find(|(_, config)| {
-            config.roles.iter().any(|role| role == "worker") && !config.dispatch_args.is_empty()
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "CAPABILITY UNAVAILABLE: no worker harness declares a non-interactive dispatch_args"
-            )
-        })?;
-    Ok(fallback.1)
+        .get(key)
+        .ok_or_else(|| anyhow!("unknown harness: {key}"))?;
+    if !config.roles.iter().any(|role| role == "worker") {
+        bail!("harness {key} cannot be a worker");
+    }
+    Ok(config)
+}
+
+/// The task's effective working directory: the materialized worktree when the
+/// task is isolated, otherwise the session cwd. Returns the first that exists on
+/// disk so a stale path never masquerades as a missing executable at spawn.
+fn effective_cwd(session: &BenchSession, task: &Task) -> Option<String> {
+    let worktree = task
+        .worktree
+        .as_ref()
+        .and_then(|worktree| worktree.path.clone());
+    [worktree, Some(session.cwd.clone())]
+        .into_iter()
+        .flatten()
+        .find(|dir| Path::new(dir).is_dir())
+}
+
+/// Placeholder command line for a pre-invocation failure record.
+fn placeholder_command(registry: &HarnessRegistry, key: &str) -> String {
+    match registry.harnesses.get(key) {
+        Some(config) => {
+            let mut parts = vec![config.command.clone()];
+            parts.extend(config.args.iter().cloned());
+            parts.extend(config.dispatch_args.iter().cloned());
+            parts.join(" ")
+        }
+        None => key.to_owned(),
+    }
 }
 
 fn bounded_capture<R: Read>(mut reader: R, max: usize) -> Result<String> {
@@ -347,29 +360,31 @@ fn shell_escape(value: &str) -> String {
 }
 
 fn invoke_harness(
-    config: &HarnessConfig,
+    program: &Path,
+    invocation: &Invocation,
     prompt: &str,
+    cwd: Option<&Path>,
     timeout: Duration,
 ) -> std::result::Result<(Option<i32>, String, String), DispatchFailureKind> {
-    let program =
-        locate_executable(&config.command).ok_or(DispatchFailureKind::MissingExecutable)?;
-    let mut command = Command::new(&program);
-    for arg in &config.args {
+    let mut command = Command::new(program);
+    for arg in &invocation.args {
         command.arg(arg);
     }
-    for arg in &config.dispatch_args {
-        command.arg(arg);
-    }
-    if config.dispatch_uses_stdin {
+    if invocation.uses_stdin() {
         command.stdin(Stdio::piped());
     } else {
         command.arg(prompt).stdin(Stdio::null());
+    }
+    // Orchestrator-provided cwd control: the worker runs in the task's effective
+    // working directory (issue #6), independent of any per-adapter --dir flag.
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|_| DispatchFailureKind::MissingExecutable)?;
-    if config.dispatch_uses_stdin
+    if invocation.uses_stdin()
         && let Some(mut stdin) = child.stdin.take()
     {
         let _ = stdin.write_all(prompt.as_bytes());
@@ -480,97 +495,85 @@ pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
     };
     let registry = load_harness_registry()?;
     let resolved_key = request.harness.clone();
-    let config = match select_available_worker(&registry, Some(&resolved_key)) {
+    let cwd = effective_cwd(&session, &task);
+    let config = match select_worker(&registry, &resolved_key) {
         Ok(config) => config,
         Err(error) => {
             let known = registry.harnesses.contains_key(&resolved_key);
-            let kind = if !known {
-                DispatchFailureKind::UnknownHarness
+            let (kind, detail) = if known {
+                (
+                    DispatchFailureKind::CapabilityUnavailable,
+                    error.to_string(),
+                )
             } else {
-                DispatchFailureKind::CapabilityUnavailable
+                (
+                    DispatchFailureKind::UnknownHarness,
+                    format!("UNKNOWN HARNESS: {resolved_key}"),
+                )
             };
-            let detail = if matches!(kind, DispatchFailureKind::UnknownHarness) {
-                format!("UNKNOWN HARNESS: {resolved_key}")
-            } else {
-                error.to_string()
-            };
-            let placeholder = format!(
-                "{harness} {args}",
-                harness = resolved_key,
-                args = registry
-                    .harnesses
-                    .get(&resolved_key)
-                    .map(|c| {
-                        let mut all = c.args.clone();
-                        all.extend(c.dispatch_args.iter().cloned());
-                        all.join(" ")
-                    })
-                    .unwrap_or_default(),
+            return persist_failure(
+                request,
+                &resolved_key,
+                kind,
+                detail,
+                placeholder_command(&registry, &resolved_key),
+                cwd,
+                "worker capability unavailable",
             );
-            let record = build_failed_record(request, &resolved_key, kind, detail, placeholder)?;
-            write_dispatch(&record)?;
-            record_delivery(
-                &request.session,
-                &request.task,
-                TaskActor::from(request.actor),
-                None,
-                format!(
-                    "dispatch {} failed: {}",
-                    record.id,
-                    record
-                        .error
-                        .as_deref()
-                        .unwrap_or("worker capability unavailable")
-                ),
-            )?;
-            return Ok(record);
         }
     };
-    if locate_executable(&config.command).is_none() {
-        let record = build_failed_record(
-            request,
-            &resolved_key,
-            DispatchFailureKind::MissingExecutable,
-            failure_message(&DispatchFailureKind::MissingExecutable, &resolved_key),
-            render_command_line(
-                &config.command,
-                &config.dispatch_args,
-                &request.prompt,
-                config.dispatch_uses_stdin,
-            ),
-        )?;
-        write_dispatch(&record)?;
-        record_delivery(
-            &request.session,
-            &request.task,
-            TaskActor::from(request.actor),
-            None,
-            format!(
-                "dispatch {} failed: {}",
-                record.id,
-                record
-                    .error
-                    .as_deref()
-                    .unwrap_or("worker executable unavailable")
-            ),
-        )?;
-        return Ok(record);
-    }
+
+    // The adapter chooses the invocation style from the probe results (issue #6);
+    // an honest refusal names the missing capability instead of guessing one.
+    let probed = probed_from(&registry, &config.adapter);
+    let invocation = match resolve_worker_invocation(config, &probed, cwd.as_deref().map(Path::new))
+    {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            return persist_failure(
+                request,
+                &resolved_key,
+                DispatchFailureKind::CapabilityUnavailable,
+                error.message(&resolved_key),
+                placeholder_command(&registry, &resolved_key),
+                cwd,
+                "worker capability unavailable",
+            );
+        }
+    };
+    let command_line = render_command_line(
+        &config.command,
+        &invocation.args,
+        &request.prompt,
+        invocation.uses_stdin(),
+    );
+    let program = match locate_executable(&config.command) {
+        Some(program) => program,
+        None => {
+            return persist_failure(
+                request,
+                &resolved_key,
+                DispatchFailureKind::MissingExecutable,
+                failure_message(&DispatchFailureKind::MissingExecutable, &resolved_key),
+                command_line,
+                cwd,
+                "worker executable unavailable",
+            );
+        }
+    };
     let timeout = Duration::from_secs(
         request
             .timeout_sec
             .unwrap_or_else(|| dispatch_timeout_for(config)),
     );
-    let mut argv = config.args.clone();
-    argv.extend(config.dispatch_args.iter().cloned());
-    let command_line = render_command_line(
-        &config.command,
-        &argv,
+    let mut record = new_record(request, &resolved_key, &command_line, cwd.clone());
+    match invoke_harness(
+        &program,
+        &invocation,
         &request.prompt,
-        config.dispatch_uses_stdin,
-    );
-    let mut record = new_record(request, &resolved_key, &command_line);
-    match invoke_harness(config, &request.prompt, timeout) {
+        cwd.as_deref().map(Path::new),
+        timeout,
+    ) {
         Ok((exit_code, stdout, stderr)) => {
             record.status = DeliveryStatus::Confirmed.as_str().to_owned();
             record.exit_code = exit_code;
@@ -628,7 +631,12 @@ fn kind_label(kind: &DispatchFailureKind) -> &'static str {
     }
 }
 
-fn new_record(request: &DispatchRequest, harness: &str, command_line: &str) -> DispatchRecord {
+fn new_record(
+    request: &DispatchRequest,
+    harness: &str,
+    command_line: &str,
+    cwd: Option<String>,
+) -> DispatchRecord {
     let now = now_iso();
     DispatchRecord {
         id: dispatch_id(harness, &request.session),
@@ -639,6 +647,7 @@ fn new_record(request: &DispatchRequest, harness: &str, command_line: &str) -> D
         pane_id: request.pane_id.clone(),
         run: request.run.clone(),
         command_line: command_line.to_owned(),
+        cwd,
         prompt: request.prompt.clone(),
         status: DeliveryStatus::Pending.as_str().to_owned(),
         exit_code: None,
@@ -652,18 +661,37 @@ fn new_record(request: &DispatchRequest, harness: &str, command_line: &str) -> D
     }
 }
 
-fn build_failed_record(
+/// Build, persist, and record delivery for one pre-invocation failure.
+///
+/// Consolidates the unknown-harness, capability-unavailable, and
+/// missing-executable failure paths so every refusal is durable and shows up on
+/// the task's delivery history identically.
+fn persist_failure(
     request: &DispatchRequest,
     harness: &str,
     kind: DispatchFailureKind,
     detail: String,
     command_line: String,
+    cwd: Option<String>,
+    default_reason: &str,
 ) -> Result<DispatchRecord> {
-    let mut record = new_record(request, harness, &command_line);
+    let mut record = new_record(request, harness, &command_line, cwd);
     record.status = DeliveryStatus::Failed.as_str().to_owned();
     record.failure_kind = Some(kind_label(&kind).to_owned());
     record.error = Some(detail);
     record.updated_at = now_iso();
+    write_dispatch(&record)?;
+    record_delivery(
+        &request.session,
+        &request.task,
+        TaskActor::from(request.actor),
+        None,
+        format!(
+            "dispatch {} failed: {}",
+            record.id,
+            record.error.as_deref().unwrap_or(default_reason)
+        ),
+    )?;
     Ok(record)
 }
 

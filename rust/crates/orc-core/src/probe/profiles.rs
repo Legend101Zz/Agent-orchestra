@@ -11,6 +11,24 @@
 //! Adding support for a new harness is a one-file edit here plus adding its name
 //! to [`KNOWN_HARNESSES`](crate::discovery::KNOWN_HARNESSES). The probe *engine*
 //! — spawning, detection, caching, and reporting — lives in the parent module.
+//!
+//! ## What a positive probe proves — and what it does not
+//!
+//! A capability here is detected by finding its proof token in the harness's
+//! own `--help` corpus, so a positive result proves the flag is **advertised**,
+//! not that the one-shot invocation actually **runs** on this host. Those are
+//! different guarantees: e.g. codex advertises `exec`, `--json`, and `-C`
+//! (so `non_interactive`/`structured_output`/`working_dir` all probe true), yet
+//! `codex exec` still refuses to start in a directory that is not a trusted git
+//! repo unless `--skip-git-repo-check` is also passed — something no help token
+//! can tell us. Runtime quirks like that are **not** modeled as capabilities;
+//! they belong in the per-adapter invocation recipe in [`crate::invocation`]
+//! (codex's `fixed` flags), which is where the actual argv is assembled. Keep
+//! this file about *what a harness advertises*; keep "what it takes to actually
+//! launch it" in the invocation templates. (Verified 2026-07-24: the probe is
+//! correctly per-harness — Hermes, whose profile has empty structured-output and
+//! working-dir tokens, probes those two false while the full agent CLIs probe
+//! all eight true.)
 
 use super::Capability;
 
