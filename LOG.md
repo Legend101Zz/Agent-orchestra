@@ -20,7 +20,7 @@ ship-log entries are part of finishing an issue.*
 | [#3](https://github.com/Legend101Zz/Agent-orchestra/issues/3) | Find every AI CLI installed on the machine and remember them | ✅ | merged (PR #20) |
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
-| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | 👀 | issue-9-trigger-grammar |
+| [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | 🧪 | issue-9-trigger-grammar |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ⬜ *unblocked* | — |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ⬜ *unblocked* | — |
@@ -141,6 +141,8 @@ is #6/#8), and I did NOT touch standalone harnesses like Claude Code or Codex
 (that's #10). The trigger grammar now lives as a reusable, tested primitive
 (`orc_pty::trigger`) that #8's `orch_*` control surface can call to actually
 route a spell to a procedure.
+
+> **Review (2026-07-24, Claude):** 🧪 ACCEPT — all 5 gates pass on a clean checkout; all 4 acceptance checks (+ worker-scoping) verified by re-running, and mutation-tested non-vacuous (neutering the grammar, dropping the colon rule, and removing the `brain`-role guard each make the matching test fail). Diff stays inside allowed paths; only internal edge added to `Cargo.lock`, no new external crate; no dead code. The three deviations (nocturne deferred to #13, no `orc-daemon` plumbing, no `NO_COLOR` env path) are honest — I confirmed nocturne and `NO_COLOR` genuinely don't exist workspace-wide yet.
 
 ### 2026-07-24 — Every delegated task carries a contract, issue #5 (code-puppy)
 pi-orchestra tasks can now carry a full "contract": the objective, the exact
