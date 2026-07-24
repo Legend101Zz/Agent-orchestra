@@ -641,6 +641,15 @@ impl StageState {
             self.pulse = EffectTimer::from_ms(baton_profile(kind).0, Interpolation::CubicOut);
         }
     }
+
+    /// Whether any conductor pane currently shows a trigger. The shell keeps
+    /// repainting while this holds so the trigger rainbow keeps flowing after
+    /// the baton pulse has settled.
+    fn has_live_trigger(&self) -> bool {
+        self.panes
+            .iter()
+            .any(|pane| !conductor_triggers(pane).0.is_empty())
+    }
 }
 
 enum UiEvent {
@@ -1393,8 +1402,10 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
             render_home(frame, &shell.home, shell.theme, motion, &shell.leader.label);
         }
         ShellView::Stage => {
+            let motion =
+                (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
             if let Some(stage) = shell.stage.as_mut() {
-                render_stage(frame, stage);
+                render_stage(frame, stage, motion);
             }
         }
         ShellView::Score => {
@@ -1556,7 +1567,9 @@ fn run_shell_loop(
             stage.advance();
         }
         let animating = shell.stage.as_ref().is_some_and(|stage| {
-            !shell.reduced_motion && shell.view == ShellView::Stage && !stage.pulse.done()
+            !shell.reduced_motion
+                && shell.view == ShellView::Stage
+                && (!stage.pulse.done() || stage.has_live_trigger())
         });
         let home_ambient = !shell.reduced_motion && !shell.help && shell.view == ShellView::Home;
         // The RUNS embed repaints on a modest tick so quota/history updates
@@ -2392,8 +2405,11 @@ fn send_focused(commands: &mut BenchClient, state: &StageState, bytes: Vec<u8>) 
     Ok(())
 }
 
-fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
+fn render_stage(frame: &mut Frame<'_>, state: &mut StageState, motion: Option<usize>) {
     let area = frame.area();
+    // The trigger rainbow steps one colour per motion tick; `None` (reduced
+    // motion) freezes the gradient at phase 0 so it stays colourful but still.
+    let phase = motion.unwrap_or(0);
     frame.render_widget(
         Block::new().style(Style::default().bg(state.theme.stage)),
         area,
@@ -2421,6 +2437,7 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
                 true,
                 state.confirmed_panes.contains(&pane.id),
                 state.theme,
+                phase,
             );
         }
     } else {
@@ -2433,6 +2450,7 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState) {
                 index == state.focus,
                 state.confirmed_panes.contains(&pane.id),
                 state.theme,
+                phase,
             );
         }
     }
@@ -2686,6 +2704,7 @@ fn render_pane(
     focus: bool,
     confirmed: bool,
     theme: Theme,
+    phase: usize,
 ) {
     let (trigger_spans, triggers) = conductor_triggers(pane);
     // A glyph + label badge so the trigger is legible without color.
@@ -2770,15 +2789,16 @@ fn render_pane(
                 style = style.add_modifier(Modifier::REVERSED);
             }
             // A detected conductor trigger shimmers like `ultrathink`: each
-            // column of the token takes the next colour in TRIGGER_RAINBOW,
-            // kept BOLD so the span still reads when colour is stripped (the
+            // column of the token takes the next colour in TRIGGER_RAINBOW, and
+            // `phase` slides the gradient one stop per motion tick so it flows.
+            // Kept BOLD so the span still reads when colour is stripped (the
             // `◆ LABEL` title badge names it too — never colour alone).
             if let Some(span) = trigger_spans
                 .iter()
                 .find(|span| span.row == row && col >= span.col && col < span.col + span.len)
             {
                 let offset = usize::from(col - span.col);
-                let colour = TRIGGER_RAINBOW[offset % TRIGGER_RAINBOW.len()];
+                let colour = TRIGGER_RAINBOW[(offset + phase) % TRIGGER_RAINBOW.len()];
                 style = style
                     .fg(colour)
                     .add_modifier(Modifier::BOLD)
@@ -3041,7 +3061,7 @@ mod tests {
                 let mut state = StageState::new(panes(), theme);
                 state.confirmed_panes.insert("pane-1".to_owned());
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state))
+                    .draw(|frame| render_stage(frame, &mut state, None))
                     .expect("render stage");
                 let text = terminal
                     .backend()
@@ -3119,7 +3139,7 @@ mod tests {
                     let mut state =
                         StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
                     terminal
-                        .draw(|frame| render_stage(frame, &mut state))
+                        .draw(|frame| render_stage(frame, &mut state, None))
                         .expect("render stage");
                     let buffer = terminal.backend().buffer();
                     assert_eq!(
@@ -3159,7 +3179,7 @@ mod tests {
                 let mut terminal = Terminal::new(backend).expect("test terminal");
                 let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state))
+                    .draw(|frame| render_stage(frame, &mut state, None))
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -3195,7 +3215,7 @@ mod tests {
                 let mut state =
                     StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state))
+                    .draw(|frame| render_stage(frame, &mut state, None))
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -3222,7 +3242,7 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("test terminal");
             let mut state = StageState::new(vec![pane.clone()], theme_name);
             terminal
-                .draw(|frame| render_stage(frame, &mut state))
+                .draw(|frame| render_stage(frame, &mut state, None))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             assert_eq!(
@@ -3274,19 +3294,18 @@ mod tests {
 
     #[test]
     fn trigger_highlight_is_reduced_motion_and_color_safe() {
-        // AC3: with reduced motion on or off the highlight is identical (it is
-        // static — a fixed rainbow, not an animation), and the affordance
-        // survives color removal because the token stays BOLD and a glyph +
+        // AC3: under reduced motion the rainbow is frozen at phase 0, so two
+        // renders are byte-identical (no animation), and the affordance still
+        // survives colour removal because the token stays BOLD and a glyph +
         // label badge names it. Uses a real Claude Code prompt prefix (U+276F,
         // as UTF-8 bytes) so the fixture matches a live pane, not a bare stream.
         let stream = b"\xe2\x9d\xaf delegate: add OAuth login\r\n";
         for theme_name in ThemeName::ALL {
             let mut frames = Vec::new();
-            for reduced_motion in [false, true] {
+            for _ in 0..2 {
                 let backend = TestBackend::new(120, 40);
                 let mut terminal = Terminal::new(backend).expect("test terminal");
-                let mut shell =
-                    stage_shell(vec![conductor_pane(stream)], theme_name, reduced_motion);
+                let mut shell = stage_shell(vec![conductor_pane(stream)], theme_name, true);
                 terminal
                     .draw(|frame| render_shell(frame, &mut shell))
                     .expect("render shell");
@@ -3294,24 +3313,68 @@ mod tests {
                 assert_eq!(
                     highlighted_symbols(&buffer),
                     "delegate:",
-                    "{theme_name:?} reduced_motion={reduced_motion}: token span"
+                    "{theme_name:?} reduced motion: token span"
                 );
                 let text = rendered_text(&buffer);
                 assert!(
                     text.contains(Trigger::GLYPH),
-                    "{theme_name:?} reduced_motion={reduced_motion}: glyph badge"
+                    "{theme_name:?} reduced motion: glyph badge"
                 );
                 assert!(
                     text.contains("DELEGATE"),
-                    "{theme_name:?} reduced_motion={reduced_motion}: label badge"
+                    "{theme_name:?} reduced motion: label badge"
                 );
                 frames.push(buffer);
             }
             assert_eq!(
                 frames[0], frames[1],
-                "{theme_name:?}: reduced motion altered the trigger highlight"
+                "{theme_name:?}: reduced-motion rainbow is not static"
             );
         }
+    }
+
+    #[test]
+    fn trigger_rainbow_animates_when_motion_is_on() {
+        // With motion on, the gradient slides one colour stop per tick, so the
+        // same token renders with different colours at different phases -- the
+        // ultrathink shimmer -- while motion off (`None`) stays frozen.
+        let render = |motion: Option<usize>| {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            let mut state =
+                StageState::new(vec![conductor_pane(b"delegate: go\r\n")], ThemeName::Ember);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, motion))
+                .expect("render stage");
+            terminal.backend().buffer().clone()
+        };
+        // The highlighted token's per-cell colours, left to right.
+        let token_colours = |buffer: &ratatui::buffer::Buffer| -> Vec<super::Color> {
+            buffer
+                .content()
+                .iter()
+                .filter(|cell| {
+                    cell.modifier.contains(Modifier::BOLD)
+                        && super::TRIGGER_RAINBOW.contains(&cell.fg)
+                })
+                .map(|cell| cell.fg)
+                .collect()
+        };
+        let phase0 = token_colours(&render(Some(0)));
+        let phase1 = token_colours(&render(Some(1)));
+        assert_eq!(phase0.len(), 9, "delegate: is nine cells"); // keyword + colon
+        assert_eq!(phase1.len(), 9);
+        assert_ne!(phase0, phase1, "rainbow did not move between phases");
+        // A one-stop slide: colour at phase 1 position i == phase 0 position i+1.
+        for i in 0..8 {
+            assert_eq!(
+                phase1[i],
+                phase0[i + 1],
+                "phase shift is not a one-stop slide at {i}"
+            );
+        }
+        // Motion off is frozen: two `None` renders are identical.
+        assert_eq!(render(None), render(None), "reduced-motion rainbow moved");
     }
 
     #[test]
@@ -3328,7 +3391,7 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("test terminal");
             let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
             terminal
-                .draw(|frame| render_stage(frame, &mut state))
+                .draw(|frame| render_stage(frame, &mut state, None))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             // Only the keyword+colon lights up -- never the colored prompt glyph.
