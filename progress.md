@@ -943,3 +943,25 @@
   -D warnings clean; test --workspace 0 failed (+2 tests: quota_guard 5,
   spawn_guard 4, ratelimit unit expanded); doc -D warnings clean; build
   --release --locked clean.
+
+## Session — 2026-07-25 (Claude re-review + owner): #7 MERGED (PR #25)
+- Re-review (Claude/Fable) of fix round 0aa7503: verified ONLY the numbered
+  fix list and confirmed no regressions/creep vs the reviewed commit.
+  - Fix 1 re-checked with a harsher independent probe than the shipped
+    regression — an exit-0 worker whose ENTIRE output is a bare "HTTP 429" ->
+    confirmed on attempt 1; an exit-1 "429" -> still failed/rate_limited after
+    the full 4-attempt budget, so AC2 is intact (detection now gates on a
+    non-zero exit).
+  - Fix 2 rename-steal confirmed race-safe (create_new stays the mutex, one
+    winner, a live-held lock is never stolen); dead-holder reclaim test passes.
+  - Fix 3 unit-aware retry-after (warning-only) confirmed.
+  - All 5 gates green on my own run; diff since the reviewed commit stays in
+    orc-core/ (+ LOG.md/progress.md), Cargo.toml/Cargo.lock unchanged, no new
+    deps. Verdict: ACCEPT (LOG.md status -> 🧪, verdict blockquote appended).
+- Owner tested locally (pio dispatch drain / pio harness cap) and MERGED PR #25
+  into main (merge commit 3e30dc9); issue #7 CLOSED, epic #15 #7 box ticked.
+  Post-merge docs: LOG.md #7 row -> ✅ (PR #25) + status narrative advanced to
+  "Next: #8"; task_plan.md #7 row -> merged + order line advanced. This
+  completes the "quota guard" work (v1 token budget + v2 concurrency/backoff).
+  Ready set now: #8 (orch_* + MCP), #11 (worktree isolation), #12
+  (single-harness mode), #13 (visual identity).
