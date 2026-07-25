@@ -67,3 +67,44 @@ fn registry_default_has_only_ember_phosphor_compatible_theme() {
     assert_eq!(registry.app.theme, "ember");
     assert_eq!(registry.app.leader_key, "ctrl-g");
 }
+
+#[test]
+fn per_harness_concurrency_cap_is_additive_and_round_trips() {
+    let _guard = lock();
+    let home = std::env::temp_dir().join(format!("orc-bench-cap-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    // SAFETY: this test serializes process-wide environment mutation.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+
+    // A pre-#7 registry file has no `concurrency` key at all; it must still load
+    // (empty map) and preserve any unknown sibling field on round-trip.
+    let legacy = json!({
+        "harnesses": {},
+        "default_workers": ["hermes"],
+        "max_parallel_workers": 3,
+        "app": {"leader_key": "ctrl-g", "reduced_motion": false, "theme": "ember"},
+        "future_top_level": {"kept": true}
+    });
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("harnesses.json"),
+        serde_json::to_vec_pretty(&legacy).unwrap(),
+    )
+    .unwrap();
+
+    let mut registry = load_harness_registry().unwrap();
+    assert!(
+        registry.concurrency.is_empty(),
+        "a registry without a concurrency key loads as an empty override map"
+    );
+    assert_eq!(registry.extra["future_top_level"], json!({"kept": true}));
+
+    // Setting a per-harness cap round-trips through the additive JSON.
+    registry.concurrency.insert("hermes".to_owned(), 2);
+    write_harness_registry(&registry).unwrap();
+    let reloaded = load_harness_registry().unwrap();
+    assert_eq!(reloaded.concurrency.get("hermes"), Some(&2));
+    // The unknown sibling field is still preserved alongside the new field.
+    assert_eq!(reloaded.extra["future_top_level"], json!({"kept": true}));
+    let _ = fs::remove_dir_all(home);
+}

@@ -11,9 +11,11 @@ pub mod model;
 pub mod notification;
 pub mod probe;
 pub mod quota;
+pub mod ratelimit;
 pub mod registry;
 pub mod runner;
 pub mod search;
+pub mod spawn_guard;
 pub mod tasks;
 
 pub use model::{Config, RunMeta, Tokens};
