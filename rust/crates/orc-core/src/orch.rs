@@ -315,11 +315,50 @@ pub fn plan(request: PlanRequest) -> Result<OrchOutcome> {
     Ok(OrchOutcome::task_only(Verb::Plan, task))
 }
 
+/// Explain a delivery that did not confirm, for [`OrchOutcome::note`].
+///
+/// The CLI signals a non-confirmed delegation through its exit code (1 for a
+/// failure, 75 for a queued dispatch). MCP has no such channel, so the same
+/// news has to travel in the outcome itself or a conductor reading only the
+/// top-level result would take a failed delegation for a successful one. The
+/// task is deliberately left in the status the delegation moved it to — that
+/// matches `dispatch send`, whose failed delivery is likewise recorded as
+/// history rather than rolled back — so the note says so explicitly.
+fn delivery_note(record: &DispatchRecord, task: &Task) -> Option<String> {
+    if record.is_confirmed() {
+        return None;
+    }
+    if record.is_queued() {
+        // Queued is not a failure: the brief is still going to be delivered, so
+        // the advice is to wait, never to clean up.
+        return Some(format!(
+            "dispatch {} is queued behind {}'s concurrency cap; no worker has the brief yet. Task {} is {}; call orch_await to wait for a free slot.",
+            record.id, record.harness, task.id, task.status
+        ));
+    }
+    Some(format!(
+        "dispatch {} did not confirm ({}): {}. Task {} is left {} — cancel or re-delegate it.",
+        record.id,
+        record.failure_kind.as_deref().unwrap_or("delivery_failed"),
+        record
+            .error
+            .as_deref()
+            .unwrap_or("worker did not confirm delivery"),
+        task.id,
+        task.status
+    ))
+}
+
 /// Delegate a task to a worker harness: assign, start, and dispatch its brief.
 ///
 /// The prompt defaults to the task's rendered contract brief (folding in the
 /// `render_brief` wiring flagged by issue #5's review), so a delegated worker
 /// always receives the acceptance criteria unless the caller overrides it.
+///
+/// A delivery that fails or is queued is not an `Err`: the durable records are
+/// returned as usual and [`OrchOutcome::note`] carries the reason, so both
+/// surfaces report the same news — the CLI through its exit code, MCP through
+/// the note.
 pub fn delegate(request: DelegateRequest) -> Result<OrchOutcome> {
     if request.harness.trim().is_empty() {
         bail!("orch_delegate requires a worker harness")
@@ -391,11 +430,12 @@ pub fn delegate(request: DelegateRequest) -> Result<OrchOutcome> {
 
     // Re-read so the outcome reflects the delivery history and any assignee_run.
     let task = tasks::read_task(&session, &task.id)?;
+    let note = delivery_note(&record, &task);
     Ok(OrchOutcome {
         verb: Verb::Delegate.tool_name().to_owned(),
         tasks: vec![task],
         dispatches: vec![record],
-        note: None,
+        note,
     })
 }
 
@@ -504,6 +544,13 @@ pub fn finish(request: TaskRef) -> Result<OrchOutcome> {
 /// Dropping is the durable action; if the task links a real background run we
 /// also request its termination. A linkage that is not a run (for example a
 /// hosted pane id) is left alone — the daemon owns pane teardown.
+///
+/// In practice the termination half only fires for a task linked to a real
+/// background run (`pio run`, or an explicit `--run`). A task delegated through
+/// [`delegate`] gets its `assignee_run` set to the *dispatch* id, and a
+/// dispatch is a bounded synchronous invocation that has already exited by the
+/// time anyone can cancel it — so there is nothing left to kill. That is why
+/// the verb promises "best-effort" and not "stops the worker".
 pub fn cancel(request: TaskRef) -> Result<OrchOutcome> {
     let task = tasks::drop_task(&request.session, &request.task, request.actor.into())?;
     let mut note = None;
@@ -593,6 +640,54 @@ mod tests {
         assert!(toml.contains("[mcp_servers.pi-orchestra]"));
         assert!(toml.contains("command = \"/opt/pio-mcp\""));
         assert!(toml.trim_end().ends_with("args = []"));
+    }
+
+    #[test]
+    fn delivery_note_speaks_only_when_the_delivery_did_not_confirm() {
+        // Built through serde so the durable records stay free of a `Default`
+        // impl they do not otherwise need.
+        let task: Task = serde_json::from_value(serde_json::json!({
+            "id": "T0007", "session": "s", "title": "t", "status": "running",
+            "created_at": "now", "updated_at": "now",
+        }))
+        .unwrap();
+        let mut record: DispatchRecord = serde_json::from_value(serde_json::json!({
+            "id": "D-1", "session": "s", "task": "T0007", "actor": "brain",
+            "harness": "hermes", "command_line": "hermes", "prompt": "p",
+            "status": DeliveryStatus::Confirmed.as_str(),
+            "created_at": "now", "updated_at": "now",
+        }))
+        .unwrap();
+        assert!(
+            delivery_note(&record, &task).is_none(),
+            "a confirmed delivery is quiet"
+        );
+
+        record.status = DeliveryStatus::Failed.as_str().to_owned();
+        record.failure_kind = Some("unknown_harness".to_owned());
+        record.error = Some("UNKNOWN HARNESS: hermes".to_owned());
+        let failed = delivery_note(&record, &task).expect("a failed delivery speaks");
+        assert!(failed.contains("did not confirm"), "{failed}");
+        assert!(failed.contains("unknown_harness"), "{failed}");
+        assert!(
+            failed.contains("T0007") && failed.contains("running"),
+            "{failed}"
+        );
+
+        record.status = DeliveryStatus::Queued.as_str().to_owned();
+        record.failure_kind = None;
+        record.error = None;
+        let queued = delivery_note(&record, &task).expect("a queued delivery speaks");
+        assert!(
+            queued.contains("queued") && queued.contains("orch_await"),
+            "{queued}"
+        );
+        // Queued work is still coming; it must not be described as a failure or
+        // sent for cleanup.
+        assert!(
+            !queued.contains("did not confirm") && !queued.contains("cancel"),
+            "a queued delivery must not read as a failure: {queued}"
+        );
     }
 
     #[test]

@@ -122,8 +122,15 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
         "{}",
         String::from_utf8_lossy(&uninstall.stderr)
     );
-    for name in ["pio", "piod", "pi-orchestra"] {
-        assert!(!local_bin.join(name).exists(), "{name} link removed");
+    for name in ["pio", "piod", "pi-orchestra", "pio-mcp"] {
+        assert!(
+            !local_bin.join(name).exists(),
+            "{name} link removed by uninstall"
+        );
+        assert!(
+            fs::symlink_metadata(local_bin.join(name)).is_err(),
+            "{name} must not survive as a dangling symlink"
+        );
     }
     // Uninstall removes our shims and restores the commands we backed up.
     for (old, _) in [("orc", "pio"), ("orcd", "piod")] {

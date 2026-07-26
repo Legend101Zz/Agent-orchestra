@@ -1004,3 +1004,59 @@
   (45 suites); doc -D warnings clean; build --release --locked clean.
 - Pushing `issue-8-orch-control-surface` and commenting per-AC evidence on the
   issue; LOG.md #8 -> eyes + branch and a ship-log entry added in this branch.
+
+## 2026-07-26 — Claude (Fable), issue #8 review fix round
+
+Applied the fixes from my own adversarial review (verdict comment on #8) on the
+same branch, since Mrigesh asked this session to close them out rather than
+hand back to the implementer.
+
+- **Fix 1 (blocker): `uninstall.sh` left a dangling `pio-mcp` symlink.** This
+  branch links `pio-mcp` in `install.sh` but never unlinked it, so an
+  install→uninstall cycle left a broken link in `~/.local/bin` pointing into a
+  build directory. Added `remove_link pio-mcp`. The out-of-allowed-path edit is
+  reviewer-authorized: it is the direct consequence of the allowed `install.sh`
+  change. `orc-cli/tests/install.rs` now asserts `pio-mcp` in the *uninstall*
+  loop too (it only had it in the install loop) and uses `symlink_metadata`, so
+  a dangling link can no longer pass `Path::exists()`.
+- **Fix 2: a failed or queued `orch_delegate` reported plain success over MCP.**
+  The CLI signalled it with exit 1 / 75, but MCP has no exit code and
+  `OrchOutcome.note` was left `None`, so a conductor reading the top-level
+  result saw success. New `orch::delivery_note` fills `note` on any
+  non-confirmed delivery: the failure kind and message for a failed delivery,
+  or "call orch_await to wait for a free slot" for a queued one — deliberately
+  not phrased as a failure, since queued work is still coming. A confirmed
+  delivery stays quiet. The task is *not* rolled back out of `running`: that
+  matches `dispatch send`, whose failed delivery is recorded as history rather
+  than reverted, so the note names the task and its status instead.
+- **Fix 3: the CLI half of the parity test only checked one direction.** It
+  asserted every `Verb::ALL` entry is a real subcommand, so an eighth `pio orch`
+  verb with no MCP twin would have passed. It now parses the `Commands:` block
+  of `pio orch --help` and asserts set equality with `Verb::ALL`, matching the
+  MCP side.
+- **Fix 4: `orc-mcp/tests/tools.rs` overclaimed.** Its comment said the worker
+  received the rendered brief but the assertion only checked stdout contained
+  `fake-worker-stdout`, which is unconditionally true. It now asserts the
+  delivered `prompt` contains the objective and the acceptance checks.
+- **Fix 5 (doc): `orch_cancel`'s kill path.** Documented that termination only
+  fires for a task linked to a real background run — a delegated task's
+  `assignee_run` is the dispatch id, and a dispatch has already exited — which
+  is why the verb promises "best-effort".
+- **Left open on purpose:** the seeded follow-up "wire `render_brief` into
+  `dispatch send`" is done for `orch delegate` only; `pio dispatch send` still
+  takes an explicit prompt. `orch` is the canonical delegation path, so this is
+  the right call — but the follow-up is not closed and should not be recorded
+  as such.
+- New tests: `orch::tests::delivery_note_speaks_only_when_the_delivery_did_not_confirm`,
+  `orch_cli.rs::failed_delegation_is_announced_in_the_outcome`,
+  `tools.rs::failed_delegation_over_stdio_carries_a_note`. Each fix was
+  regression-proofed by reverting it and confirming the new test fails.
+- Gates re-run from `rust/` on Rust **1.91.1**: fmt clean; clippy
+  `--workspace --all-targets -D warnings` clean; `test --workspace` 45 suites /
+  **188 passed / 0 failed** (was 185); `RUSTDOCFLAGS="-D warnings" cargo doc`
+  clean; `build --release --locked` clean. Verified live with the release
+  binaries: a scratch install→uninstall now leaves `~/.local/bin` empty with
+  zero dangling links; a failed delegation carries the same note on the CLI and
+  over raw JSON-RPC stdio; a queued delegation says "call orch_await" and doing
+  so returns `confirmed`.
+- Ready for Mrigesh to test locally and merge.

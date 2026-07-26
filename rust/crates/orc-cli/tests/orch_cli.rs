@@ -9,6 +9,7 @@
 //! `orch::*` outcome; here we assert the CLI verb returns that same outcome, so
 //! by the shared core the two surfaces cannot diverge (AC3).
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -126,9 +127,24 @@ fn task_projection(task: &Value) -> Value {
     })
 }
 
-/// AC3 (structural): every `orch` verb is a real `pio orch` subcommand and the
-/// group exposes exactly the seven-verb source of truth — the same set the MCP
-/// router advertises (asserted against `Verb::ALL` there too).
+/// Subcommand names listed under `Commands:` in a clap help screen, minus the
+/// generated `help` entry.
+fn advertised_subcommands(help: &str) -> BTreeSet<String> {
+    help.lines()
+        .skip_while(|line| !line.starts_with("Commands:"))
+        .skip(1)
+        .take_while(|line| line.starts_with("  ") || line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// AC3 (structural): the `pio orch` group exposes **exactly** the seven-verb
+/// source of truth — no verb missing, and no eighth verb that the MCP router
+/// would not also advertise. The set equality is what matters: the MCP side
+/// asserts the same equality against `Verb::ALL`, so neither surface can grow
+/// or lose a verb alone.
 #[test]
 fn cli_orch_verbs_match_the_source_of_truth() {
     let home = fresh_home("verbs");
@@ -143,14 +159,15 @@ fn cli_orch_verbs_match_the_source_of_truth() {
         );
     }
     let help = pio(&home, &["orch", "--help"]);
-    let text = String::from_utf8_lossy(&help.stdout);
-    for verb in Verb::ALL {
-        assert!(
-            text.contains(verb.cli_name()),
-            "orch --help omits {}",
-            verb.cli_name()
-        );
-    }
+    let advertised = advertised_subcommands(&String::from_utf8_lossy(&help.stdout));
+    let expected: BTreeSet<String> = Verb::ALL
+        .iter()
+        .map(|verb| verb.cli_name().to_owned())
+        .collect();
+    assert_eq!(
+        advertised, expected,
+        "pio orch must expose exactly the seven verbs, no more and no fewer"
+    );
     let _ = fs::remove_dir_all(&home);
 }
 
@@ -324,6 +341,77 @@ fn cli_full_lifecycle_over_the_verbs() {
         ],
     );
     assert_eq!(cancelled["tasks"][0]["status"], "dropped");
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// A delegation whose delivery does not confirm must say so in the outcome
+/// itself, not only in the CLI's exit code — the MCP surface has no exit code,
+/// so a silent `note` would let a conductor read a failed delegation as a
+/// successful one (issue #8 review).
+#[test]
+fn failed_delegation_is_announced_in_the_outcome() {
+    let home = fresh_home("failed-delivery");
+    let session;
+    {
+        let _guard = lock();
+        // SAFETY: serialized by `lock()`; used only to write the fixture.
+        unsafe { std::env::set_var("ORC_HOME", &home) };
+        write_fixture_registry(&home);
+        session = write_fixture_session(&home);
+    }
+
+    // An unknown harness cannot deliver, so the dispatch fails.
+    let output = pio(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "no-such-harness",
+            "--session",
+            &session,
+            "--title",
+            "doomed",
+            "--json",
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "the CLI must exit non-zero on a failed delivery"
+    );
+    let outcome: Value = serde_json::from_slice(&output.stdout).expect("delegate emitted JSON");
+    assert_eq!(outcome["dispatches"][0]["status"], "failed");
+    let note = outcome["note"]
+        .as_str()
+        .expect("a non-confirmed delivery must carry a note for the MCP surface");
+    assert!(
+        note.contains("did not confirm") && note.contains("unknown_harness"),
+        "note must name the failure: {note}"
+    );
+    assert!(
+        note.contains(outcome["tasks"][0]["id"].as_str().unwrap()),
+        "note must name the task left behind: {note}"
+    );
+
+    // The happy path stays quiet — a note means "something needs your attention".
+    let confirmed = pio_ok(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "fake-worker",
+            "--session",
+            &session,
+            "--title",
+            "fine",
+            "--json",
+        ],
+    );
+    assert_eq!(confirmed["dispatches"][0]["status"], "confirmed");
+    assert!(
+        confirmed["note"].is_null(),
+        "a confirmed delivery must not carry a note: {confirmed}"
+    );
 
     let _ = fs::remove_dir_all(&home);
 }

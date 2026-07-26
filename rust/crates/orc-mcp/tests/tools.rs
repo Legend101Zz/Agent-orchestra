@@ -243,13 +243,29 @@ async fn delegate_await_status_end_to_end_over_stdio() {
     assert_eq!(delegated["tasks"][0]["status"], "running");
     assert_eq!(delegated["dispatches"][0]["status"], "confirmed");
     assert_eq!(delegated["dispatches"][0]["harness"], "fake-worker");
-    // The worker received the rendered acceptance brief as its prompt.
     assert!(
         delegated["dispatches"][0]["stdout"]
             .as_str()
             .unwrap_or_default()
             .contains("fake-worker-stdout"),
         "worker stdout was not captured: {delegated}"
+    );
+    // The worker really received the rendered acceptance brief as its prompt —
+    // assert on the delivered prompt, not merely on the worker having run.
+    let prompt = delegated["dispatches"][0]["prompt"]
+        .as_str()
+        .expect("dispatch records the delivered prompt");
+    assert!(
+        prompt.contains("## Objective")
+            && prompt.contains("A summary of the diff exists.")
+            && prompt.contains("## Acceptance checks")
+            && prompt.contains("the summary names each changed file"),
+        "delivered prompt is not the rendered contract brief: {prompt}"
+    );
+    // A confirmed delivery is quiet; the note channel is for trouble only.
+    assert!(
+        delegated["note"].is_null(),
+        "a confirmed delegation must not carry a note: {delegated}"
     );
 
     let awaited = call(
@@ -275,6 +291,43 @@ async fn delegate_await_status_end_to_end_over_stdio() {
     assert!(
         observed["tasks"][0]["assignee_run"].is_string(),
         "confirmed delivery must link a run: {observed}"
+    );
+
+    client.cancel().await.expect("shutdown");
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// A delegation that cannot be delivered must announce itself over MCP too.
+///
+/// The CLI signals this with a non-zero exit code; MCP has no such channel, so
+/// the outcome's `note` is the only thing standing between a conductor and
+/// reading a failed delegation as a successful one (issue #8 review).
+#[tokio::test]
+async fn failed_delegation_over_stdio_carries_a_note() {
+    let (home, session) = setup_fixture("failed");
+    let client = connect(&home).await;
+
+    let delegated = call(
+        &client,
+        "orch_delegate",
+        json!({
+            "session": session,
+            "harness": "no-such-harness",
+            "title": "doomed",
+        }),
+    )
+    .await;
+    assert_eq!(delegated["dispatches"][0]["status"], "failed");
+    let note = delegated["note"]
+        .as_str()
+        .expect("a non-confirmed delivery must carry a note");
+    assert!(
+        note.contains("did not confirm") && note.contains("unknown_harness"),
+        "note must name the failure: {note}"
+    );
+    assert!(
+        note.contains(delegated["tasks"][0]["id"].as_str().unwrap()),
+        "note must name the task left behind: {note}"
     );
 
     client.cancel().await.expect("shutdown");
