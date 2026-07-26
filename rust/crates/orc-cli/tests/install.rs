@@ -32,7 +32,7 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
         "user-owned skill must survive\n",
     )
     .unwrap();
-    for name in ["pio", "piod", "pi-orchestra"] {
+    for name in ["pio", "piod", "pi-orchestra", "pio-mcp"] {
         let path = binaries.join(name);
         fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -59,7 +59,7 @@ fn rust_only_install_and_uninstall_are_isolated_and_preserve_data() {
         "{}",
         String::from_utf8_lossy(&install.stderr)
     );
-    for name in ["pio", "piod", "pi-orchestra"] {
+    for name in ["pio", "piod", "pi-orchestra", "pio-mcp"] {
         assert_eq!(
             fs::read_link(local_bin.join(name)).unwrap(),
             binaries.join(name)

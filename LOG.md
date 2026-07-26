@@ -24,7 +24,7 @@ ship-log entries are part of finishing an issue.*
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
-| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ⬜ *unblocked* | — |
+| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | 👀 | issue-8-orch-control-surface |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
@@ -129,6 +129,25 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
+Any conductor — a Claude Code or Codex session, a script, or a person at the
+terminal — can now drive pi-orchestra through the same seven verbs: plan a
+contracted task, delegate it to a worker, check its status, wait for it to
+finish, review it, cancel it, or mark it done. They work two ways from one
+shared engine so the two surfaces can never drift: as `pio orch <verb>` commands
+and as an MCP server (`pio-mcp`) that exposes the same seven tools over stdio, so
+an assistant that speaks MCP delegates work by calling tools instead of guessing
+shell syntax. Registering it is copy-paste — `pio mcp print-config` prints
+ready-to-paste snippets for Claude Code (`.mcp.json`) and Codex (`config.toml`)
+and never edits those protected files itself. Two smaller conveniences came
+along: a headless `pio session create` so you can open a delegation session
+without the TUI, and delegated workers now receive the task's full acceptance
+brief as their prompt by default. What I did NOT do: panel/deliberation tools
+(those are V2), and I left `uninstall.sh` alone because it's outside this issue's
+allowed paths — so it doesn't yet unlink `pio-mcp` on removal (a tiny
+follow-up). This unblocks #10 (Claude Code & Codex reacting to trigger words
+outside pi-orchestra), which builds directly on this tool surface.
 
 ### 2026-07-24 — Never rate-limit your own subscriptions, issue #7 (code-puppy)
 pi-orchestra now protects the paid subscriptions you delegate to from being

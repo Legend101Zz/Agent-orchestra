@@ -70,6 +70,7 @@ echo "==> command links"
 install_link pio
 install_link piod
 install_link pi-orchestra
+install_link pio-mcp
 
 echo "==> retiring old orc/orcd names"
 retire_command orc pio

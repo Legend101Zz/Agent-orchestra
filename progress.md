@@ -965,3 +965,42 @@
   completes the "quota guard" work (v1 token budget + v2 concurrency/backoff).
   Ready set now: #8 (orch_* + MCP), #11 (worktree isolation), #12
   (single-harness mode), #13 (visual identity).
+
+## Session — 2026-07-25 (code-puppy): #8 implemented (orch_* control surface + MCP)
+- Branch `issue-8-orch-control-surface` from fresh `main` (c1b1b9f). Dependency
+  V1-3 (#5, task contract v2) confirmed merged, so #8 was unblocked.
+- Design: one shared *synchronous* surface in orc-core (new `orch.rs`) with the
+  seven operations (plan/delegate/status/await/review/cancel/finish) composed
+  from the existing tasks/dispatch/control primitives. Both user surfaces are
+  thin adapters over it, so they cannot drift (AC3): normalized `pio orch <verb>`
+  verbs in orc-cli, and a new `orc-mcp` crate exposing the same seven as MCP
+  (stdio) tools. `Verb::ALL` is the single source of truth for names/descriptions.
+- MCP: `rmcp` v2.2.0 (features server+macros+transport-io) per the #16 decision
+  record, in the new `orc-mcp` crate with its own `current_thread` tokio runtime;
+  each tool runs the sync `orch` op via `spawn_blocking`, so tokio never leaks
+  into orc-core/orc-daemon. Request structs derive schemars `JsonSchema` and
+  reuse the #5 `TaskContract` schema directly.
+- Deviation from #16's note ("translate MCP calls to the daemon protocol"): the
+  daemon protocol has no task-creation verb, and the CLI already drives task/
+  dispatch ops directly on orc-core, so both surfaces call orc-core directly.
+  Same-operations parity is proven by test instead. Documented on the issue.
+- Folded in the two follow-ups #5's review seeded: `delegate` defaults the worker
+  prompt to `render_brief(task)`, and added headless `pio session create`/`list`.
+- AC4: `pio mcp print-config [--format claude|codex]` emits a Claude `.mcp.json`
+  object and a Codex `config.toml` block pointing at the sibling `pio-mcp`;
+  prints only, never writes protected files. `install.sh` links `pio-mcp`
+  (allowed path). `uninstall.sh` is outside the allowed paths, so unlinking
+  `pio-mcp` on removal is a flagged follow-up.
+- Tests: `orc-mcp/tests/tools.rs` — AC1 (`tools/list` over real stdio = exactly
+  7 tools with input schemas), AC2 (delegate->await->status e2e over stdio
+  against a fixture worker), router==`Verb::ALL` + description parity.
+  `orc-cli/tests/orch_cli.rs` — CLI verbs==`Verb::ALL`, CLI delegate == core
+  `orch::delegate` normalized (AC3 behavioral), full lifecycle, AC4 print-config
+  validity + no protected writes, `session create/list`. orch.rs unit tests
+  (verb/config/schema). Updated `install.rs` for the new link.
+- Network: crates.io reachable only via the Walmart sysproxy; `rmcp` + transitive
+  deps fetched through it. Gates from rust/ (Rust 1.97): fmt clean; clippy
+  --workspace --all-targets -D warnings clean; test --workspace 0 failed
+  (45 suites); doc -D warnings clean; build --release --locked clean.
+- Pushing `issue-8-orch-control-surface` and commenting per-AC evidence on the
+  issue; LOG.md #8 -> eyes + branch and a ship-log entry added in this branch.
