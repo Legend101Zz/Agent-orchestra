@@ -32,6 +32,7 @@ remove_shim() {
 remove_link pio
 remove_link piod
 remove_link pi-orchestra
+remove_link pio-mcp
 remove_shim orc
 remove_shim orcd
 remove_skill() {

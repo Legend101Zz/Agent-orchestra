@@ -6,11 +6,17 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
-use orc_core::bench::{load_harness_registry, write_harness_registry};
+use orc_core::bench::{
+    create_session, list_sessions, load_harness_registry, write_harness_registry,
+};
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::discovery;
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
+use orc_core::orch::{
+    self, AwaitRequest, DelegateRequest, OrchActor, OrchOutcome, PlanRequest, StatusRequest,
+    TaskRef,
+};
 use orc_core::probe::{self, Capability, DoctorOptions};
 use orc_core::quota;
 use orc_core::registry::list_runs;
@@ -216,6 +222,22 @@ enum Commands {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// Normalized conductor control surface: plan, delegate, status, await,
+    /// review, cancel, finish (the same seven tools the MCP server exposes).
+    Orch {
+        #[command(subcommand)]
+        command: OrchCommand,
+    },
+    /// MCP (stdio) server integration: print client config or serve the tools.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    /// Create and list durable headless sessions for delegation.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -234,6 +256,161 @@ enum DaemonCommand {
     Restart {
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum OrchCommand {
+    /// Record a contracted backlog task without delegating it (orch_plan).
+    Plan {
+        title: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        depends_on: Vec<String>,
+        #[arg(long)]
+        isolate: bool,
+        #[command(flatten)]
+        contract: Box<ContractArgs>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delegate a task to a worker: assign, start, dispatch its brief (orch_delegate).
+    ///
+    /// Names an existing --task, or creates one inline from --title plus the
+    /// contract flags. The worker prompt defaults to the rendered task brief.
+    Delegate {
+        /// Worker harness registry key, e.g. `hermes`.
+        harness: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        depends_on: Vec<String>,
+        #[arg(long)]
+        isolate: bool,
+        #[command(flatten)]
+        contract: Box<ContractArgs>,
+        /// Override the delivered prompt (defaults to the rendered brief).
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        pane: Option<String>,
+        #[arg(long)]
+        run: Option<String>,
+        /// Bounded dispatch timeout override in seconds (distinct from the
+        /// contract's --timeout per-attempt limit).
+        #[arg(long = "dispatch-timeout")]
+        dispatch_timeout: Option<u64>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read one task (or the whole board) with its dispatches (orch_status).
+    Status {
+        /// Task id to inspect; omit for the whole board.
+        task: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Block until a task's newest delivery is terminal (orch_await).
+    Await {
+        task: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(long)]
+        poll_interval_ms: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a running task into review (orch_review).
+    Review {
+        task: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a task and stop a linked live worker best-effort (orch_cancel).
+    Cancel {
+        task: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark a reviewed task done (orch_finish).
+    Finish {
+        task: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "brain")]
+        actor: TaskActorArg,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum McpFormat {
+    /// Claude Code `.mcp.json` object.
+    Claude,
+    /// Codex `config.toml` block.
+    Codex,
+}
+
+#[derive(Debug, Subcommand)]
+enum McpCommand {
+    /// Print MCP client registration snippets; never edits protected config.
+    ///
+    /// With no --format, prints both the Claude Code and Codex snippets under
+    /// commented headers. Pass --format to emit a single machine-parseable block.
+    PrintConfig {
+        #[arg(long, value_enum)]
+        format: Option<McpFormat>,
+    },
+    /// Serve the seven orch_* tools over stdio (execs the pio-mcp binary).
+    Serve,
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    /// Create a durable headless session (brain, workers, working directory).
+    Create {
+        /// Brain harness key for the session.
+        #[arg(long, default_value = "claude")]
+        brain: String,
+        /// A worker harness key. Repeat per worker.
+        #[arg(long = "worker")]
+        workers: Vec<String>,
+        /// Session working directory (defaults to the current directory).
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List durable sessions.
+    List {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -983,6 +1160,257 @@ fn dispatch_doctor(json: bool, refresh: bool) -> Result<i32> {
     Ok(0)
 }
 
+fn orch_actor(actor: TaskActorArg) -> OrchActor {
+    OrchActor::from(TaskActor::from(actor))
+}
+
+/// Render one orch outcome: pretty JSON under --json, else a compact summary
+/// pairing each task's id, status, and title with any dispatch and note lines.
+fn print_outcome(outcome: &OrchOutcome, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(outcome)?);
+        return Ok(());
+    }
+    for task in &outcome.tasks {
+        println!("{}  {:<9}  {}", task.id, task.status, task.title);
+    }
+    for record in &outcome.dispatches {
+        println!(
+            "dispatch {}  {:<9}  {}  task={}",
+            record.id, record.status, record.harness, record.task
+        );
+    }
+    if let Some(note) = &outcome.note {
+        println!("note: {note}");
+    }
+    Ok(())
+}
+
+fn dispatch_orch(command: OrchCommand) -> Result<i32> {
+    match command {
+        OrchCommand::Plan {
+            title,
+            session,
+            description,
+            depends_on,
+            isolate,
+            contract,
+            actor,
+            json,
+        } => {
+            let outcome = orch::plan(PlanRequest {
+                session: task_session(session)?,
+                title,
+                description,
+                depends_on,
+                isolate,
+                contract: contract.into_contract(),
+                actor: orch_actor(actor),
+            })?;
+            print_outcome(&outcome, json)?;
+            Ok(0)
+        }
+        OrchCommand::Delegate {
+            harness,
+            session,
+            task,
+            title,
+            description,
+            depends_on,
+            isolate,
+            contract,
+            prompt,
+            pane,
+            run,
+            dispatch_timeout,
+            actor,
+            json,
+        } => {
+            let outcome = orch::delegate(DelegateRequest {
+                session: task_session(session)?,
+                harness,
+                task,
+                title,
+                description,
+                depends_on,
+                isolate,
+                contract: contract.into_contract(),
+                prompt,
+                pane,
+                run,
+                timeout_sec: dispatch_timeout,
+                actor: orch_actor(actor),
+            })?;
+            // Mirror `dispatch send`: the exit code reflects the delivery, and
+            // rate-limit/concurrency notices surface on the ORC WARNING channel.
+            let exit = outcome.dispatches.first().map_or(0, dispatch_exit);
+            print_outcome(&outcome, json)?;
+            for record in &outcome.dispatches {
+                for warning in &record.warnings {
+                    eprintln!("{warning}");
+                }
+            }
+            Ok(exit)
+        }
+        OrchCommand::Status {
+            task,
+            session,
+            json,
+        } => {
+            let outcome = orch::status(StatusRequest {
+                session: task_session(session)?,
+                task,
+            })?;
+            print_outcome(&outcome, json)?;
+            Ok(0)
+        }
+        OrchCommand::Await {
+            task,
+            session,
+            timeout,
+            poll_interval_ms,
+            json,
+        } => {
+            let outcome = orch::await_delegation(AwaitRequest {
+                session: task_session(session)?,
+                task,
+                timeout_sec: timeout,
+                poll_interval_ms,
+            })?;
+            // A note means the wait timed out before a terminal delivery; exit
+            // 75 (EX_TEMPFAIL) so scripts can retry without treating it as fatal.
+            let timed_out = outcome.note.is_some();
+            print_outcome(&outcome, json)?;
+            Ok(if timed_out { 75 } else { 0 })
+        }
+        OrchCommand::Review {
+            task,
+            session,
+            actor,
+            json,
+        } => {
+            let outcome = orch::review(TaskRef {
+                session: task_session(session)?,
+                task,
+                actor: orch_actor(actor),
+            })?;
+            print_outcome(&outcome, json)?;
+            Ok(0)
+        }
+        OrchCommand::Cancel {
+            task,
+            session,
+            actor,
+            json,
+        } => {
+            let outcome = orch::cancel(TaskRef {
+                session: task_session(session)?,
+                task,
+                actor: orch_actor(actor),
+            })?;
+            print_outcome(&outcome, json)?;
+            Ok(0)
+        }
+        OrchCommand::Finish {
+            task,
+            session,
+            actor,
+            json,
+        } => {
+            let outcome = orch::finish(TaskRef {
+                session: task_session(session)?,
+                task,
+                actor: orch_actor(actor),
+            })?;
+            print_outcome(&outcome, json)?;
+            Ok(0)
+        }
+    }
+}
+
+/// Resolve the `pio-mcp` server command: the sibling binary beside this `pio`
+/// when present (an installed pair), else the bare name for a PATH lookup.
+fn mcp_server_command() -> String {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.with_file_name(orch::MCP_SERVER_BIN))
+        .filter(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| orch::MCP_SERVER_BIN.to_owned())
+}
+
+fn dispatch_mcp(command: McpCommand) -> Result<i32> {
+    match command {
+        McpCommand::PrintConfig { format } => {
+            let server = mcp_server_command();
+            match format {
+                Some(McpFormat::Claude) => println!("{}", orch::claude_mcp_json(&server)),
+                Some(McpFormat::Codex) => print!("{}", orch::codex_mcp_toml(&server)),
+                None => {
+                    println!(
+                        "# Claude Code \u{2014} add to .mcp.json (project) or ~/.claude.json:"
+                    );
+                    println!("{}", orch::claude_mcp_json(&server));
+                    println!();
+                    println!("# Codex \u{2014} add to ~/.codex/config.toml:");
+                    print!("{}", orch::codex_mcp_toml(&server));
+                }
+            }
+            Ok(0)
+        }
+        McpCommand::Serve => {
+            let status = Command::new(mcp_server_command())
+                .status()
+                .context("exec pio-mcp")?;
+            Ok(status.code().unwrap_or(1))
+        }
+    }
+}
+
+fn dispatch_session_command(command: SessionCommand) -> Result<i32> {
+    match command {
+        SessionCommand::Create {
+            brain,
+            workers,
+            cwd,
+            json,
+        } => {
+            let cwd = match cwd {
+                Some(cwd) => cwd,
+                None => std::env::current_dir().context("resolve current directory")?,
+            };
+            let session = create_session(&brain, &workers, &cwd)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&session)?);
+            } else {
+                println!("{}", session.id);
+            }
+            Ok(0)
+        }
+        SessionCommand::List { json } => {
+            let sessions = list_sessions()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sessions)?);
+            } else if sessions.is_empty() {
+                println!(
+                    "no sessions yet \u{2014} try: pio session create --brain claude --worker <harness>"
+                );
+            } else {
+                for session in sessions {
+                    println!(
+                        "{}  brain={}  workers={}  {}",
+                        session.id,
+                        session.brain,
+                        session.workers.join(","),
+                        session.cwd
+                    );
+                }
+            }
+            Ok(0)
+        }
+    }
+}
+
 fn dispatch(command: Commands) -> Result<i32> {
     match command {
         Commands::Version => {
@@ -1257,6 +1685,9 @@ fn dispatch(command: Commands) -> Result<i32> {
             DaemonCommand::Status { json } => daemon::status(json),
             DaemonCommand::Restart { force } => daemon::restart(force),
         },
+        Commands::Orch { command } => dispatch_orch(command),
+        Commands::Mcp { command } => dispatch_mcp(command),
+        Commands::Session { command } => dispatch_session_command(command),
     }
 }
 

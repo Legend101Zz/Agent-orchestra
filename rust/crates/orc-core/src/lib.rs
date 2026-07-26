@@ -9,6 +9,7 @@ pub mod invocation;
 pub mod metrics;
 pub mod model;
 pub mod notification;
+pub mod orch;
 pub mod probe;
 pub mod quota;
 pub mod ratelimit;
