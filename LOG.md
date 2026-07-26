@@ -26,7 +26,7 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *unblocked* | — |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | 👀 | issue-10-standalone-integrations |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
@@ -133,6 +133,22 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-26 — Trigger words work outside pi-orchestra too, issue #10 (code-puppy)
+Now you can type `delegate:`, `orchestrate:`, or `deliberate:` in a plain Claude
+Code or Codex session — with no pi-orchestra TUI running — and the harness knows
+to route the work through `pio` instead of doing it all itself. A small Claude
+Code hook watches what you type; the moment you cast one of those spells it
+checks your quota (and passes any warning straight through to you) and hands the
+assistant the exact `pio`/MCP commands to delegate the job. The matching
+skill/AGENTS text was refreshed so Codex and Claude give the same instructions,
+and `deliberate:` is answered honestly — the judged “panel” is a later (V2)
+feature, so it says so and offers a real single-worker or self-review fallback
+instead of faking it. What I did NOT do: wire the hook into your Claude settings
+for you (that stays a one-line, opt-in copy-paste so pi-orchestra never edits
+protected config), and I didn’t build the V2 panel itself. This is the last of
+the standalone-integration work for V1; it leans on the seven `orch_*` tools
+from #8.
 
 ### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
 Any conductor — a Claude Code or Codex session, a script, or a person at the

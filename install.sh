@@ -139,9 +139,29 @@ install_skill() {
   fi
   ln -s "$source" "$destination"
 }
-for skill in pi-delegate orchestrate; do
+for skill in pi-delegate orchestrate deliberate; do
   install_skill "$skill"
 done
+
+echo "==> Claude Code trigger hook"
+# The hook lives in a pi-orchestra-owned dir and is registered by the user in
+# their OWN ~/.claude/settings.json — install.sh never edits protected config,
+# so the checksums below stay identical across runs (issue #10 AC1).
+HOOK_SRC="$ROOT/shell/claude-userpromptsubmit-hook.py"
+HOOK_DIR="$HOME/.claude/pi-orchestra"
+HOOK_LINK="$HOOK_DIR/claude-userpromptsubmit-hook.py"
+if [ -f "$HOOK_SRC" ]; then
+  mkdir -p "$HOOK_DIR"
+  if [ -e "$HOOK_LINK" ] && [ ! -L "$HOOK_LINK" ]; then
+    echo "    kept user file $HOOK_LINK" >&2
+  else
+    ln -sfn "$HOOK_SRC" "$HOOK_LINK"
+    echo "    linked $HOOK_LINK"
+    echo "    enable it by adding to ~/.claude/settings.json (pi-orchestra never edits it):"
+    echo '      "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command",'
+    echo "        \"command\": \"$HOOK_LINK\" } ] } ] }"
+  fi
+fi
 
 echo "==> Codex AGENTS.md block"
 AGENTS="$HOME/.codex/AGENTS.md"

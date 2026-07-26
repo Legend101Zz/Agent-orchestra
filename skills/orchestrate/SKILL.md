@@ -32,6 +32,27 @@ must not activate.
    where present, `~tokens.estimated_total` only as fallback, the `pio stats` receipt,
    and the post-run `pio quota` numbers.
 
+## Normalized control surface (`orch_*`)
+
+The steps above use the free-form `pio run`. For contracted, reviewable work
+prefer the normalized surface from V1-6 — the same seven operations as MCP tools
+(`orch_plan`, `orch_delegate`, `orch_status`, `orch_await`, `orch_review`,
+`orch_cancel`, `orch_finish`) and as `pio orch <verb>` CLI verbs:
+
+    pio session create --brain <you> --worker <harness>        # once per session
+    pio orch plan     "<chunk title>" --session <id> --objective "..." --check "..."
+    pio orch delegate <harness> --session <id> --task <T> --json
+    pio orch status   [<T>] --session <id> --json     # whole board when <T> omitted
+    pio orch await    <T> --session <id> --json
+    pio orch review   <T> --session <id>   # running → review
+    pio orch finish   <T> --session <id>   # reviewed → done
+    pio orch cancel   <T> --session <id>   # drop + best-effort kill of a live worker
+
+Register the MCP tools once with `pio mcp print-config --format claude|codex`
+(it prints a snippet and never edits protected config). Only a `confirmed`
+dispatch means the worker received the brief. This surface is what the standalone
+`orchestrate:` trigger (Claude Code hook / Codex AGENTS block) routes into.
+
 ## Rules
 
 - Relay every `ORC WARNING`/`ORC BLOCKED` line to the user verbatim.

@@ -36,6 +36,33 @@ Streaming (long tasks, shows progress):
 If the shell functions are unavailable, call `pio run "task" --cwd DIR --brain claude`
 directly. Inspect/manage runs: `pio list`, `pio show <id>`, `pio kill <id>`.
 
+## Standalone trigger grammar (`delegate:`)
+
+Outside pi-orchestra, this skill is the standalone route for the `delegate:`
+spell. When the user's line casts it — a bare `delegate:` at a word boundary
+(`redelegate:`, `delegated:`, `Delegate:`, and a colon-less `delegate` do NOT
+count) — do one bounded hand-off to one worker through the normalized surface:
+
+- **MCP (preferred where installed):** call the `orch_delegate` tool with a task
+  contract `{harness, session, title, objective, acceptance_checks}`. Register
+  the tools once with `pio mcp print-config --format claude` (it prints a
+  `.mcp.json` snippet and never edits protected config).
+- **CLI (universal equivalent):**
+
+      pio session create --brain claude --worker <harness>   # once; note the id
+      pio orch delegate <harness> --session <id> \
+        --title "<what>" --objective "<done-when>" \
+        --check "<acceptance check>" [--allowed <path> --forbidden <rule>] --json
+
+Observe the result with `orch_status` / `pio orch status <T>`; block for it with
+`orch_await` / `pio orch await <T>`. The worker prompt defaults to the rendered
+contract brief, so a well-formed contract is the whole instruction. Only a
+`confirmed` dispatch means the worker received the brief.
+
+A Claude Code `UserPromptSubmit` hook (installed to
+`~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py`, registered manually)
+also relays quota and this routing the moment you type `delegate:`.
+
 `pi-orchestra` is also a product-workflow trigger. Before resuming work, read
 `pio task list --session "$ORC_SESSION"` (pass `--session` explicitly when a
 command crosses shells) and `pio list`; preserve completed tasks and durable

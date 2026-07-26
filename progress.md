@@ -1082,3 +1082,43 @@ hand back to the implementer.
 - Next: **#11** (worktree isolation + independent review + receipt), then #10
   (standalone Claude Code/Codex integrations, which #8 just unblocked). Start
   #13 before more TUI churn lands.
+
+## Session — 2026-07-26 (code-puppy): #10 standalone integrations v2 (Claude hook + Codex block v2)
+- Worked issue #10 (V1-8) on `issue-10-standalone-integrations` from fresh `main`
+  (HEAD `0c9908a`, the #8/PR-26 merge) — so the V1-6 dependency is satisfied and
+  #10 was unblocked. Harness-side only; allowed paths `skills/ codex/ shell/
+  install.sh uninstall.sh docs/`. No Rust source touched.
+- New Claude Code `UserPromptSubmit` hook `shell/claude-userpromptsubmit-hook.py`
+  (python3, stdlib only). Per the spec, closed UIs can't be re-colored, so the
+  standalone answer is a hook/acknowledgment: on every prompt it detects the
+  spell grammar, and on a hit it (1) runs a bounded read-only `pio quota` and
+  relays `ORC WARNING/BLOCKED/NOTE` verbatim, and (2) injects the exact
+  `pio orch`/MCP invocation for the verb. Always exits 0 (never eats a prompt).
+- Grammar is a faithful port of `orc_pty::trigger` (word-boundary + required
+  colon, case-sensitive, mid-line, repeatable; `redelegate:`/`delegated:`/
+  `Delegate:`/colon-less `delegate` stay quiet). The Rust crate can't be imported
+  from a hook, so drift is guarded by a built-in `--selftest` (22 checks, all
+  green) — flagged as the one intentional duplication.
+- AC2 text: updated `skills/pi-delegate/SKILL.md` (standalone `delegate:` +
+  `orch_delegate`/`pio orch delegate`), `skills/orchestrate/SKILL.md` (the seven
+  `orch_*` verbs/tools), a new `skills/deliberate/SKILL.md` (honest “panel is
+  V2, not available” fallback), and `codex/AGENTS-block.md` → v2 with a leading
+  Trigger-grammar section covering all three verbs + the normalized surface +
+  `pio mcp print-config`. Single-harness honesty and confirmed-delivery kept.
+- AC1: `install.sh` links the hook into a pi-orchestra-OWNED dir
+  (`~/.claude/pi-orchestra/`) and prints a manual `settings.json` snippet — it
+  never edits protected config; adds `deliberate` to the skill loop.
+  `uninstall.sh` removes the hook (own symlink only) + the dir if empty + the
+  `deliberate` skill. Verified on an isolated HOME: two installs → every marker
+  count == 1 and the three protected-config SHA-256s identical before==after;
+  uninstall leaves protected config byte-identical and no dangling links. The
+  Rust `install.rs` test (outside allowed paths) still passes unchanged.
+- AC3: `docs/notes/2026-07-26-standalone-trigger-hook-manual-test.md` documents
+  registration + a reproducible non-interactive simulation (real captured
+  output; the relayed `MiniMax quota:` line proves the hook invoked `pio`) + the
+  live Claude Code procedure + `--selftest`.
+- AC4 gates from rust/ (Rust 1.97): fmt clean; clippy --workspace
+  --all-targets -D warnings clean; test --workspace 45 suites / 0 failed; doc
+  -D warnings clean; build --release --locked clean.
+- Pushing the branch and commenting per-AC evidence; LOG.md #10 -> eyes + branch
+  and a ship-log entry added in this branch.

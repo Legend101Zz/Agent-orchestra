@@ -1,5 +1,35 @@
 
 <!-- pi-orchestra:begin -->
+## Trigger grammar (`delegate:` / `orchestrate:` / `deliberate:`)
+
+Even outside pi-orchestra, treat these spells as commands when they appear at a
+word boundary immediately followed by a colon (case-sensitive; `redelegate:`,
+`delegated:`, `Delegate:`, and a colon-less `delegate` are ordinary prose and do
+NOT count). Route through `pio` — do not do the heavy work inline:
+
+- `delegate:` — one bounded hand-off to one worker. See **pi-delegate** below.
+- `orchestrate:` — dependency-aware decomposition. See **orchestrate** below.
+- `deliberate:` — a judged parallel **panel** is a **V2** mode and is **not
+  available** in V1. Do not fake a panel or invent judges. Say so, then offer a
+  real fallback: a `delegate:` hand-off, or a sequential plan→implement→review
+  with self-review. Honor single-harness honesty.
+
+**Normalized control surface (V1-6)** — the same seven operations as MCP tools
+and as `pio orch <verb>` CLI verbs:
+
+    orch_plan  orch_delegate  orch_status  orch_await  orch_review  orch_cancel  orch_finish
+
+    pio session create --brain codex --worker <harness>          # once; note the id
+    pio orch delegate <harness> --session <id> --title "..." --objective "..." --check "..." --json
+    pio orch status [<T>] --session <id> --json
+    pio orch await  <T>   --session <id> --json
+    pio orch review <T> --session <id>   # running → review
+    pio orch finish <T> --session <id>   # reviewed → done
+
+Register the MCP tools once with `pio mcp print-config --format codex` (it prints
+a `config.toml` `[mcp_servers.pi-orchestra]` block and never edits protected
+config). Only a `confirmed` dispatch means the worker received the brief.
+
 ## pi-delegate (MiniMax M3 worker)
 
 Offload heavy, long-context, or token-expensive work to `pi` (MiniMax M3, 1M context)
