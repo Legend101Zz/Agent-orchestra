@@ -1279,3 +1279,16 @@ hand back to the implementer.
   0, rather than storing the JSON transport.
 - Final issue gates are green: fmt, clippy with warnings denied, the complete
   workspace test suite, rustdoc with warnings denied, and locked release build.
+
+### Fix round — failed execution must speak over MCP
+
+- Preserved reviewer commit `066a7dc` and fixed its single blocker without
+  changing the background supervisor or dispatch lifecycle. The newest
+  terminal failed/orphaned execution now produces a top-level note for
+  `orch_status` and `orch_await`; an older failed attempt cannot shadow a newer
+  successful retry.
+- Added real MCP stdio coverage with a worker that confirms receipt and then
+  exceeds a one-second execution bound. Both observation tools return the same
+  note naming `failed`, `timeout`, exit 124, and the task; the successful path
+  remains pinned to `note: null`.
+- Re-ran all five required Rust gates after the fix; all pass.

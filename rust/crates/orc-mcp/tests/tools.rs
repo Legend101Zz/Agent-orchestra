@@ -45,15 +45,23 @@ fn fresh_home(label: &str) -> PathBuf {
 /// The fake worker is a shell script that echoes its last argument, so a
 /// dispatch confirms without reaching a real provider.
 fn setup_fixture(label: &str) -> (PathBuf, String) {
+    setup_fixture_with_worker(
+        label,
+        "#!/bin/sh\necho \"fake-worker-stdout ${@: -1}\"\necho fake-worker-stderr 1>&2\nexit 0\n",
+        30,
+    )
+}
+
+fn setup_fixture_with_worker(
+    label: &str,
+    script_body: &str,
+    dispatch_timeout_sec: u64,
+) -> (PathBuf, String) {
     let home = fresh_home(label);
     let bin = home.join("bin");
     fs::create_dir_all(&bin).expect("create bin");
     let script = bin.join("fake-worker.sh");
-    fs::write(
-        &script,
-        "#!/bin/sh\necho \"fake-worker-stdout ${@: -1}\"\necho fake-worker-stderr 1>&2\nexit 0\n",
-    )
-    .expect("write fake worker");
+    fs::write(&script, script_body).expect("write fake worker");
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod fake worker");
 
     let cwd = home.join("cwd");
@@ -74,7 +82,7 @@ fn setup_fixture(label: &str) -> (PathBuf, String) {
             adapter: "fake-worker".to_owned(),
             dispatch_args: vec!["--oneshot".to_owned()],
             dispatch_uses_stdin: false,
-            dispatch_timeout_sec: 30,
+            dispatch_timeout_sec,
             extra: Default::default(),
         },
     );
@@ -306,10 +314,82 @@ async fn delegate_await_status_end_to_end_over_stdio() {
     assert_eq!(observed["tasks"][0]["id"], task_id);
     assert_eq!(observed["tasks"][0]["status"], "running");
     assert_eq!(observed["dispatches"][0]["status"], "confirmed");
+    assert!(
+        observed["note"].is_null(),
+        "successful terminal status should be quiet: {observed}"
+    );
     // Confirmed delivery linked a run to the task (honest completion record).
     assert!(
         observed["tasks"][0]["assignee_run"].is_string(),
         "confirmed delivery must link a run: {observed}"
+    );
+
+    client.cancel().await.expect("shutdown");
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// A worker can fail after its brief was confirmed. CLI callers receive the
+/// worker exit code, but MCP callers do not, so both terminal observation tools
+/// must elevate that execution failure into the top-level note.
+#[tokio::test]
+async fn failed_execution_over_stdio_carries_a_note_from_await_and_status() {
+    let (home, session) = setup_fixture_with_worker(
+        "execution-failed",
+        "#!/bin/sh\necho partial-worker-output\nsleep 5\n",
+        1,
+    );
+    let client = connect(&home).await;
+
+    let delegated = call(
+        &client,
+        "orch_delegate",
+        json!({
+            "session": session,
+            "harness": "fake-worker",
+            "title": "time out after receipt",
+        }),
+    )
+    .await;
+    assert_eq!(delegated["dispatches"][0]["status"], "confirmed");
+    let task_id = delegated["tasks"][0]["id"]
+        .as_str()
+        .expect("delegated task id")
+        .to_owned();
+
+    let awaited = call(
+        &client,
+        "orch_await",
+        json!({ "session": session, "task": task_id, "timeout_sec": 10 }),
+    )
+    .await;
+    assert_eq!(awaited["dispatches"][0]["status"], "confirmed");
+    assert_eq!(awaited["dispatches"][0]["execution_status"], "failed");
+    assert_eq!(awaited["dispatches"][0]["failure_kind"], "timeout");
+    assert_eq!(awaited["dispatches"][0]["exit_code"], 124);
+    let await_note = awaited["note"]
+        .as_str()
+        .expect("failed execution must speak over MCP await");
+    assert!(
+        await_note.contains("worker execution failed")
+            && await_note.contains("timeout")
+            && await_note.contains("exit code 124")
+            && await_note.contains(&task_id),
+        "await note must identify the execution failure: {await_note}"
+    );
+
+    let observed = call(
+        &client,
+        "orch_status",
+        json!({ "session": session, "task": task_id }),
+    )
+    .await;
+    assert_eq!(observed["dispatches"][0]["execution_status"], "failed");
+    let status_note = observed["note"]
+        .as_str()
+        .expect("failed execution must speak over MCP status");
+    assert_eq!(
+        status_note, await_note,
+        "status and await must use one terminal-failure policy"
     );
 
     client.cancel().await.expect("shutdown");
