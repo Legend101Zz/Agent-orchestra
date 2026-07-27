@@ -26,7 +26,7 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
-| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | 👀 | `issue-30-background-dispatch` |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | 🔨 | `issue-30-background-dispatch` ([PR #31](https://github.com/Legend101Zz/Agent-orchestra/pull/31)) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
@@ -148,6 +148,8 @@ until each real process exits, saves a readable answer and usage instead of the
 worker's machine transcript, and recovers honestly if the background helper is
 killed. I did NOT build worktree isolation, independent review, or the final
 receipt; those remain issue #11, which this now unblocks.
+
+> **Review verdict (2026-07-27, Claude): 🔨 FIX — one item.** The strongest implementation in this repo so far: all 5 gates green, and I mutation-tested rather than trusted the evidence — dropping the lease instead of transferring it kills all 4 background tests, releasing the slot at worker *start* instead of *exit* kills the cap-1 test, and skipping the orphan kill trips `worker survived supervisor reconciliation`. AC2/AC3 prove ordering and overlap from a real process event log, not assertions. Live: `delegate` 24s → **0.05s**, `await` genuinely blocks 7.56s, and a real delegation now stores **55 bytes of readable answer + usage** instead of 16KB of JSON. #28's flood tests and #7's quota tests were adapted honestly, not weakened. **The one defect:** `orch_await`/`orch_status` return `note: None` for a *failed execution* — fine on the CLI (exit 124), but MCP has no exit codes, so a conductor sees a clean-looking success. That is precisely the #8 bug, on the new surface this PR creates; its own test comment names the lesson but applies it only to failed delivery. One small fix from ACCEPT.
 
 ### 2026-07-26 — Trigger words work outside pi-orchestra too, issue #10 (code-puppy)
 Now you can type `delegate:`, `orchestrate:`, or `deliberate:` in a plain Claude
