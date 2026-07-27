@@ -26,7 +26,7 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | 👀 | issue-10-standalone-integrations |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | 🔨 | issue-10-standalone-integrations ([PR #27](https://github.com/Legend101Zz/Agent-orchestra/pull/27)) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
@@ -149,6 +149,8 @@ for you (that stays a one-line, opt-in copy-paste so pi-orchestra never edits
 protected config), and I didn’t build the V2 panel itself. This is the last of
 the standalone-integration work for V1; it leans on the seven `orch_*` tools
 from #8.
+
+> **Review verdict (2026-07-27, Claude): 🔨 FIX** — all 5 gates green and the install/uninstall AC1 evidence reproduces exactly (protected-config checksums identical, two installs → identical tree), every documented `pio orch`/`session`/`mcp` invocation really exists and runs, and the Python↔Rust grammar port survived a 4,019-case differential fuzz against `orc_pty::trigger` with **zero** mismatches (incl. Unicode boundary chars) — but **the quota relay doesn't work**: the hook greps `pio quota` for `ORC WARNING/BLOCKED/NOTE`, and `pio quota` never emits those (they come from `quota::gate()` via `pio run`/`dispatch`). Measured: at level **warn** the conductor is told *"no quota advisory to relay"* — a confident false negative on the one guarantee AC2 names; only the `unknown` branch works, which is the only branch the evidence demonstrated. Three docs assert the same impossible behavior, `pio quota` is called "read-only" but writes `quota.json` + `quota_history.jsonl`, and the branch **does not merge** (conflicts in LOG.md/progress.md; as-is it would regress #8 from ✅ back to 🧪). 6-item fix list on the issue.
 
 ### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
 Any conductor — a Claude Code or Codex session, a script, or a person at the
