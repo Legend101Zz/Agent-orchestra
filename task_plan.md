@@ -30,25 +30,36 @@ record. (Issue numbers are filled in as issues are created.)
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | V1-5 Rate-limit-aware spawning (quota guard v2, concurrency caps) | #4 (✅ merged 2026-07-25, PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 (✅ merged 2026-07-27, PR #26) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — (✅ merged 2026-07-24, PR #23) |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 (✅ merged 2026-07-27, PR #27) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
+| [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7 and #8 are merged (#8 on 2026-07-27,
-PR #26 — `orc_core::orch` defines seven verbs once and exposes them twice, as
-`pio orch <verb>` and as `orch_*` MCP tools from the new `pio-mcp` binary;
-tokio stays contained in `orc-mcp` per #16). Every dependency edge in this
-table is now cleared: #4 unblocked #6/#7/#12, #5 unblocked #8/#11, #6 unblocked
-#12, and #8 unblocked #10 — nothing left is waiting on anything. Ready set:
-#11 (worktree isolation, builds on #5), #10 (standalone Claude Code/Codex
-integrations, builds on #8's tool surface), #12 (single-harness mode), #13.
-Next: #11, then #10. Of the two follow-ups #5's review seeded into #8, the
-headless `session create` shipped; wiring `render_brief` into `dispatch send`
-did **not** and stays open by choice (`orch delegate` is the canonical path).
-Parallel-safe now: #11, #10, #12 — each from fresh `main`; start #13 before
-more TUI churn lands to avoid merge conflicts.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10 and #28 are merged.** #10
+(2026-07-27, PR #27) gives the trigger grammar to standalone Claude Code and
+Codex sessions; #28 (2026-07-27, PR #29) fixed the pipe-buffer deadlock that had
+made **every non-trivial delegation fail since #8 merged** — `invoke_harness`
+only drained the worker's pipes after it exited, so a worker past the ~64KB
+buffer blocked in `write()`, never exited, and was killed as a false
+`DISPATCH TIMEOUT`. Found by exercising #10's hook against a real worker;
+regression tests fail on the old code by construction.
+
+**Next: #30, then #11.** #30 carries what #28 deliberately did not attempt: the
+conductor still blocks for the worker's entire run, so `max_parallel_workers`
+is unreachable and the bench is a bench of one, and the record still stores raw
+transport JSON rather than the worker's answer (`runner::extract_text` already
+solves the latter for `pio run`). The blocker there is `spawn_guard::SlotLease`,
+which releases on `Drop` — returning early would silently defeat the #7
+concurrency cap, so lease ownership has to move into a detached supervisor.
+**Do #30 before #11:** both rewrite `dispatch.rs`, and #11's per-check report
+depends on how a dispatch reaches its terminal state.
+
+Still open by choice: `render_brief` is wired into `orch delegate` but not
+`dispatch send` (`orch` is the canonical path). Parallel-safe: #12 and #13 from
+fresh `main`; start #13 before more TUI churn lands to avoid merge conflicts.
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).

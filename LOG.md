@@ -25,31 +25,36 @@ ship-log entries are part of finishing an issue.*
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
-| [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | 👀 | issue-28-dispatch-drain |
+| [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ⬜ *next* | — |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#8 merged (2026-07-27, PR #26) — the control surface is live: seven verbs
-(`plan`, `delegate`, `status`, `await`, `review`, `finish`, `cancel`) defined
-once in `orc_core::orch` and exposed twice — as `pio orch <verb>` and as
-`orch_*` MCP tools over stdio from a new `pio-mcp` binary, so Claude Code,
-Codex or any MCP brain can drive pi-orchestra without a TUI. `pio mcp
-print-config` prints the registration snippet for both. Delegation renders the
-#5 contract into the worker's prompt, and `pio session create` finally makes a
-session headlessly. Tokio stays quarantined in `orc-mcp` per the #16 decision.
-Adversarial review caught (and the fix round closed) a blocker where
-`uninstall.sh` left a dangling `pio-mcp` on PATH, and a worse one where a
-failed or queued delegation returned plain success over MCP while the CLI
-exited 1/75 — `OrchOutcome.note` now carries that news on both surfaces.
-This is what #10 was waiting for. Ready set: **#11** (worktree isolation,
-builds on #5), **#10** (standalone Claude Code/Codex integrations, now
-unblocked), **#12** (single-harness honest mode), plus **#13** anytime.
-**Next: #11**, then #10. Still-open follow-up from #5's review: the contract
-brief is wired into `orch delegate` but *not* `dispatch send` — deliberate
-(`orch` is the canonical path), so do not record it as closed. Start #13
-before more TUI churn lands to avoid merge pain.**
+**#10 + #28 merged (2026-07-27, PRs #27 and #29) — triggers now work outside
+pi-orchestra, and delegation finally delivers.** You can type `delegate:` /
+`orchestrate:` / `deliberate:` in a plain Claude Code or Codex session and the
+harness routes the work through `pio`, relaying your real quota numbers first.
+Testing that live immediately exposed a worse bug underneath: **every
+non-trivial delegation had been failing since #8 merged.** pi-orchestra started
+a worker but only read its output *after* it exited, so any worker that said
+more than ~64KB filled the pipe, blocked mid-sentence, and got killed as a bogus
+"DISPATCH TIMEOUT" — the worker was fine the whole time. Fixed, with regression
+tests that fail on the old code by construction. A second live test caught the
+sequel: the capture kept the *first* 16KB, which for a JSON worker is header and
+thinking, so the answer at the end was thrown away and the brain redid the work
+itself. Now a head+tail window keeps the conclusion.
+
+**Next: #30**, then #11. #30 finishes what #28 deliberately left alone — the
+conductor still blocks for a worker's whole run (so `max_parallel_workers: 3` is
+unreachable and the "bench of workers" is a bench of one), and the record still
+stores raw transport JSON instead of the worker's answer. Do it **before #11**:
+both rewrite `dispatch.rs`, and #11's per-check report depends on how a dispatch
+reaches its terminal state. Also still open by choice: `render_brief` is wired
+into `orch delegate` but not `dispatch send`. Ready set: **#30**, then **#11**,
+**#12** (single-harness honest mode), **#13** anytime — start #13 before more TUI
+churn lands to avoid merge pain.**
 
 ## Prompts you run
 
@@ -170,6 +175,8 @@ did NOT do: let you keep working while a worker runs in the background. That
 needs a bigger change to how worker slots are counted, and rushing it would break
 the limit that stops pi-orchestra from overloading your subscriptions. It stays
 open on the issue.
+
+> **Merged 2026-07-27 (PR #29).** A follow-up commit in the same PR fixed a sequel found in live testing: the capture kept the *first* 16KB, which for a JSON-mode worker is session header and reasoning, so the answer — always last — was discarded and the conductor redid the work itself. Now a 4KB head + 12KB tail window; the new test was verified to fail on the head-only version. Remaining work (non-blocking conductor, answer extraction instead of raw transport) moved to #30.
 
 ### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
 Any conductor — a Claude Code or Codex session, a script, or a person at the

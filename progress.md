@@ -1220,3 +1220,26 @@ hand back to the implementer.
 - Correction to a claim made by the delegating session: `pi-m3` is NOT "marked
   dispatch=false". Its probe reports `non_interactive` + `structured_output`,
   the same capabilities as `codex`. There is no such flag.
+
+## Session — 2026-07-27 (Claude): #10 and #28 merged, dashboards updated
+
+- Mrigesh merged **PR #27** (#10, standalone triggers) and **PR #29** (#28,
+  dispatch drain). `main` is `73729ac`.
+- LOG.md: #10 and #28 → ✅; #30 added as *next*; the headline paragraph now
+  covers both merges and names #30 → #11 as the order, with the reason (both
+  rewrite `dispatch.rs`, and #11's per-check report depends on how a dispatch
+  reaches terminal state). A merged note was appended under the #28 ship-log
+  entry recording the head+tail follow-up.
+- task_plan.md: #10 and #28 marked merged; #28 and #30 added to the issue map;
+  the order paragraph rewritten around "#30 before #11".
+- Renumbered the two new issues: #28 is **V1-13** and #30 is **V1-14**. My
+  original titles said V1-11/V1-12, which already belong to #13 (visual
+  identity) and #14 (README) in task_plan.md — corrected on GitHub before the
+  collision could mislead anyone.
+- #28 closed on GitHub referencing PR #29; epic #15 ticked for #10 and #28.
+- **Next: #30.** Its contract now carries three things worth not re-deriving:
+  the `SlotLease`-releases-on-`Drop` blocker, the `runner.rs:478`
+  `spawn_background` precedent to follow rather than reinvent, and an
+  acceptance check that the record must hold the worker's extracted answer
+  (via `runner::extract_text`, already used by `pio run`) instead of raw
+  transport JSON.
