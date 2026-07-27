@@ -1196,3 +1196,27 @@ hand back to the implementer.
   defeat the #7 cap. Doing it right means moving lease ownership into a detached
   supervisor (the `pio _exec` pattern from `runner.rs:478`) — a real redesign
   that also collides with #11, which rewrites this file. Left open on #28.
+
+### Follow-up the same day — head+tail capture (found by Mrigesh's live test)
+
+- The #28 fix made delegation *complete*, but a live `delegate:` to `pi-m3`
+  showed the conductor still could not *use* the result: the capture kept the
+  first 16KB, and `pi --mode json` spends that on its session header and the
+  model's thinking. The answer lives at the END of the stream and was discarded,
+  so the brain redid the work itself — exactly the "no actual benefit of using
+  pio" failure mode.
+- `Captured` now keeps a head window (4KB) and a tail window (12KB) with the
+  dropped byte count marked in between. Same bound, but the worker's conclusion
+  survives.
+- New test `the_conductor_receives_the_workers_answer_not_just_its_preamble`:
+  the fixture emits 2MB and then its answer as the last line. Verified it FAILS
+  on the head-only implementation (the version first pushed to PR #29) and
+  passes now — not a vacuous test.
+- Live re-run: `confirmed`, exit 0, 16402B captured, and the tail carries
+  MiniMax-M3's actual finding plus its usage/cost block.
+- Noted for #30: the record still holds the raw JSON firehose rather than the
+  extracted answer. `orc_core::runner::extract_text` already parses pi's
+  `text_delta` events for `pio run` — dispatch should reuse it per adapter.
+- Correction to a claim made by the delegating session: `pi-m3` is NOT "marked
+  dispatch=false". Its probe reports `non_interactive` + `structured_output`,
+  the same capabilities as `codex`. There is no such flag.

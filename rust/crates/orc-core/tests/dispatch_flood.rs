@@ -33,6 +33,12 @@ const FLOOD_BYTES: usize = 2 * 1024 * 1024;
 /// a draining implementation finishes in well under a second.
 const FLOOD_TIMEOUT_SEC: u64 = 15;
 
+/// The worker's conclusion, emitted as the very LAST thing it writes. A real
+/// agentic worker buries its answer at the end, after the session header,
+/// reasoning and tool calls — so a capture that keeps only the head throws the
+/// answer away and hands the conductor a useless preamble.
+const ANSWER: &str = "FLOOD-WORKER-FINAL-ANSWER: zero matches found";
+
 fn lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -67,8 +73,10 @@ fn flood_harness(home: &Path, stream: &str) -> HarnessConfig {
             r#"#!/bin/sh
 # Emits {FLOOD_BYTES} bytes, then exits cleanly. awk keeps this fast enough that
 # the test measures the drain strategy, not shell loop overhead.
+# The LAST line is the answer, mirroring a real agentic worker: session header
+# and reasoning first, conclusion last.
 awk 'BEGIN {{ line = sprintf("%1023s", "x"); for (i = 0; i < {lines}; i++) print line }}' {stream}
-echo "flood-worker-done" {stream}
+echo "{ANSWER}" {stream}
 exit 0
 "#
         ),
@@ -225,5 +233,34 @@ fn a_flooded_record_stays_bounded_and_says_it_was_truncated() {
 
     let stored = dispatch::read_dispatch(&session, &record.id).expect("read durable dispatch");
     assert_eq!(stored, record, "the persisted record must round-trip");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_conductor_receives_the_workers_answer_not_just_its_preamble() {
+    let _guard = lock();
+    let home = fresh_home("answer");
+    let session = setup(&home, "answer", "");
+    let task = running_task(&session, "flood then answer");
+
+    let record = dispatch_flood(&session, &task.id);
+    assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
+
+    // The whole point of delegating: the brain must get the worker's
+    // conclusion. Found live on 2026-07-27 — a head-only capture handed the
+    // conductor `pi --mode json`'s session header and thinking, so it redid the
+    // work itself rather than using the delegation.
+    assert!(
+        record.stdout.contains(ANSWER),
+        "the worker's final answer was truncated away; capture ends with {:?}",
+        &record.stdout[record.stdout.len().saturating_sub(160)..]
+    );
+    // Still bounded, and still honest about the gap it dropped.
+    assert!(
+        record.stdout.len() <= MAX_CAPTURED_BYTES + TRUNCATION_MARKER.len() + 64,
+        "capture grew to {} bytes",
+        record.stdout.len()
+    );
+    assert!(record.stdout.contains(TRUNCATION_MARKER));
     let _ = fs::remove_dir_all(&home);
 }

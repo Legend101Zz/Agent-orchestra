@@ -15,7 +15,7 @@
 //! the prompt and the bounded timeout for one invocation.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -342,19 +342,49 @@ fn placeholder_command(registry: &HarnessRegistry, key: &str) -> String {
     }
 }
 
-/// Bytes captured from one worker stream, plus whether more was thrown away.
+/// Bytes kept from the *start* of a capture, for the worker's opening context.
+const HEAD_BYTES: usize = MAX_CAPTURED_BYTES / 4;
+/// Bytes kept from the *end* of a capture — where an agentic worker's actual
+/// answer lives, after its session header, reasoning, and tool calls.
+const TAIL_BYTES: usize = MAX_CAPTURED_BYTES - HEAD_BYTES;
+
+/// A bounded window over one worker stream: its head, its tail, and how much
+/// was dropped in between.
+///
+/// Keeping only the head would be worse than useless for a JSON-mode worker:
+/// `pi --mode json` opens with a session header and the model's thinking, so a
+/// head-only capture hands the conductor a preamble and throws the answer away
+/// — which is exactly what happened in live testing, forcing the brain to redo
+/// the work itself and defeating the point of delegating.
 #[derive(Default)]
 struct Captured {
-    bytes: Vec<u8>,
-    truncated: bool,
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    dropped: usize,
 }
 
 impl Captured {
-    fn render(&self) -> String {
-        let mut rendered = String::from_utf8_lossy(&self.bytes).into_owned();
-        if self.truncated {
-            rendered.push_str(TRUNCATION_MARKER);
+    fn push(&mut self, chunk: &[u8]) {
+        let mut chunk = chunk;
+        if self.head.len() < HEAD_BYTES {
+            let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
+            self.head.extend_from_slice(&chunk[..take]);
+            chunk = &chunk[take..];
         }
+        self.tail.extend(chunk.iter().copied());
+        while self.tail.len() > TAIL_BYTES {
+            self.tail.pop_front();
+            self.dropped += 1;
+        }
+    }
+
+    fn render(&self) -> String {
+        let mut rendered = String::from_utf8_lossy(&self.head).into_owned();
+        if self.dropped > 0 {
+            rendered.push_str(&format!("{TRUNCATION_MARKER} ({} bytes)", self.dropped));
+        }
+        let tail: Vec<u8> = self.tail.iter().copied().collect();
+        rendered.push_str(&String::from_utf8_lossy(&tail));
         rendered
     }
 }
@@ -392,15 +422,15 @@ fn render(captured: &Arc<Mutex<Captured>>) -> String {
     )
 }
 
-/// Drain `reader` to EOF on a background thread, retaining at most `max` bytes.
+/// Drain `reader` to EOF on a background thread, keeping a bounded head+tail window.
 ///
 /// Reading **all the way to EOF is the point** (issue #28): the previous
-/// implementation stopped at `max` and only ran after the child exited, so a
+/// implementation stopped at the cap and only ran after the child exited, so a
 /// worker that filled the ~64 KB pipe buffer blocked in `write()`, could never
 /// exit, and was killed as a bogus `DISPATCH TIMEOUT`. Bytes past `max` are
 /// counted and discarded so the durable record stays bounded while the worker
 /// keeps running freely.
-fn drain_to_eof<R: Read + Send + 'static>(mut reader: R, max: usize) -> Drain {
+fn drain_to_eof<R: Read + Send + 'static>(mut reader: R) -> Drain {
     let captured = Arc::new(Mutex::new(Captured::default()));
     let sink = Arc::clone(&captured);
     let handle = thread::spawn(move || {
@@ -410,14 +440,7 @@ fn drain_to_eof<R: Read + Send + 'static>(mut reader: R, max: usize) -> Drain {
                 Ok(0) => break,
                 Ok(taken) => {
                     let Ok(mut slot) = sink.lock() else { break };
-                    let room = max.saturating_sub(slot.bytes.len());
-                    if room == 0 {
-                        slot.truncated = true;
-                    } else {
-                        let kept = room.min(taken);
-                        slot.bytes.extend_from_slice(&chunk[..kept]);
-                        slot.truncated |= kept < taken;
-                    }
+                    slot.push(&chunk[..taken]);
                 }
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(_) => break,
@@ -492,14 +515,8 @@ fn invoke_harness(
     // Start draining BEFORE anything else can block: the prompt write below and
     // the wait loop both happen while the worker is already free to write as
     // much as it likes (issue #28).
-    let stdout_drain = child
-        .stdout
-        .take()
-        .map(|handle| drain_to_eof(handle, MAX_CAPTURED_BYTES));
-    let stderr_drain = child
-        .stderr
-        .take()
-        .map(|handle| drain_to_eof(handle, MAX_CAPTURED_BYTES));
+    let stdout_drain = child.stdout.take().map(drain_to_eof);
+    let stderr_drain = child.stderr.take().map(drain_to_eof);
     if invocation.uses_stdin()
         && let Some(mut stdin) = child.stdin.take()
     {
