@@ -22,7 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{TaskContract, render_brief};
-use crate::dispatch::{self, DeliveryStatus, DispatchActor, DispatchRecord, DispatchRequest};
+use crate::dispatch::{self, DispatchActor, DispatchRecord, DispatchRequest};
 use crate::registry::find_run;
 use crate::tasks::{self, NewTask, Task, TaskActor, TaskStatus};
 
@@ -109,13 +109,13 @@ impl Verb {
                 "Record a contracted task on the board (backlog) without delegating it yet."
             }
             Self::Delegate => {
-                "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given. Blocks until the worker finishes or the delivery bound elapses; that bound is the harness's dispatch_timeout_sec (120s when unset), NOT the contract's timeout field, which is metadata only. Agentic workers routinely need several minutes."
+                "Delegate a task to a worker harness: assign it, start it, and return as soon as the brief is delivered while the worker continues in the background. Poll with orch_status or block for output and exit code with orch_await. --dispatch-timeout bounds the background worker (harness dispatch_timeout_sec, 120s when unset); the contract's --timeout is metadata only."
             }
             Self::Status => {
                 "Read the durable state of one task (or the whole board) with its dispatch records."
             }
             Self::Await => {
-                "Block until a delegated task's newest delivery reaches a terminal state (confirmed or failed), or the timeout elapses."
+                "Block until a delegated task's newest worker reaches a terminal state, returning its answer, usage, and exit code, or until the await timeout elapses."
             }
             Self::Review => "Move a running task into review.",
             Self::Cancel => {
@@ -326,7 +326,12 @@ pub fn plan(request: PlanRequest) -> Result<OrchOutcome> {
 /// history rather than rolled back — so the note says so explicitly.
 fn delivery_note(record: &DispatchRecord, task: &Task) -> Option<String> {
     if record.is_confirmed() {
-        return None;
+        return record.is_running().then(|| {
+            format!(
+                "dispatch {} delivered; worker is still running. Poll with orch_status or block with orch_await.",
+                record.id
+            )
+        });
     }
     if record.is_queued() {
         // Queued is not a failure: the brief is still going to be delivered, so
@@ -465,7 +470,7 @@ pub fn status(request: StatusRequest) -> Result<OrchOutcome> {
 
 /// Whether a dispatch record has reached a terminal delivery state.
 fn delivery_is_terminal(record: &DispatchRecord) -> bool {
-    record.is_confirmed() || record.status == DeliveryStatus::Failed.as_str()
+    record.is_terminal()
 }
 
 /// The newest dispatch for one task, if any (`list_dispatches` is newest-first).
@@ -496,10 +501,11 @@ pub fn await_delegation(request: AwaitRequest) -> Result<OrchOutcome> {
         let task_status = TaskStatus::parse(&task.status)?;
         let latest = latest_dispatch(&request.session, &request.task)?;
         let terminal = latest.as_ref().is_some_and(delivery_is_terminal)
-            || matches!(
-                task_status,
-                TaskStatus::Review | TaskStatus::Done | TaskStatus::Dropped
-            );
+            || latest.is_none()
+                && matches!(
+                    task_status,
+                    TaskStatus::Review | TaskStatus::Done | TaskStatus::Dropped
+                );
         if terminal {
             return Ok(OrchOutcome {
                 verb: Verb::Await.tool_name().to_owned(),
@@ -599,6 +605,7 @@ pub fn codex_mcp_toml(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::DeliveryStatus;
     use serde_json::Value;
     use std::collections::BTreeSet;
 

@@ -26,7 +26,7 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
-| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ⬜ *next* | — |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | 👀 | `issue-30-background-dispatch` |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
@@ -139,6 +139,15 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-27 — The brain can keep working while workers run, issue #30 (code-puppy)
+Handing off a task now returns as soon as the worker has received it, so the
+brain can start another job, check progress, or wait later for the finished
+answer instead of sitting idle. pi-orchestra keeps the worker limits in force
+until each real process exits, saves a readable answer and usage instead of the
+worker's machine transcript, and recovers honestly if the background helper is
+killed. I did NOT build worktree isolation, independent review, or the final
+receipt; those remain issue #11, which this now unblocks.
 
 ### 2026-07-26 — Trigger words work outside pi-orchestra too, issue #10 (code-puppy)
 Now you can type `delegate:`, `orchestrate:`, or `deliberate:` in a plain Claude

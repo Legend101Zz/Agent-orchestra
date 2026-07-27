@@ -224,9 +224,10 @@ _SINGLE_HARNESS = (
 )
 
 _CONFIRMED = (
-    "Only a `confirmed` dispatch means the worker received the brief; a missing "
-    "executable, absent capability, stopped pane, timeout, or non-zero exit is "
-    "unavailable/failed and must be reported as such."
+    "Only a `confirmed` dispatch means the worker received the brief; "
+    "`confirmed` + `running` is not completion. A missing executable, absent "
+    "capability, or stopped pane is unavailable; report a later timeout or "
+    "non-zero exit as a worker execution failure."
 )
 
 
@@ -243,8 +244,12 @@ def guidance(verbs: list[str]) -> list[str]:
             "    pio orch delegate <harness> --session <id> \\\n"
             "      --title \"<what>\" --objective \"<done-when>\" \\\n"
             "      --check \"<acceptance check>\" --json\n"
-            "  Observe with `orch_status` / `pio orch status <T>`; wait with "
+            "  Delegate returns immediately after delivery while the worker "
+            "continues in the background. Poll with `orch_status` / "
+            "`pio orch status <T>`; block for answer + exit code with "
             "`orch_await` / `pio orch await <T>`.\n"
+            "  `--dispatch-timeout` bounds the background worker; contract "
+            "`--timeout` is metadata only.\n"
             f"  {_CONFIRMED}"
         )
     if "orchestrate" in verbs:
@@ -406,6 +411,18 @@ def _selftest() -> int:
     expect("shout quiet", detect("ORCHESTRATE: loud") == [])
     expect("blank quiet", detect("") == [] and detect("   ") == [])
     expect("prompt+redelegate quiet", detect("\u276f redelegate: nope") == [])
+    delegate_help = "\n".join(guidance(["delegate"]))
+    expect(
+        "delegate guidance teaches background status/await",
+        "returns immediately" in delegate_help
+        and "orch_status" in delegate_help
+        and "orch_await" in delegate_help,
+    )
+    expect(
+        "delegate guidance distinguishes timeout flags",
+        "--dispatch-timeout" in delegate_help
+        and "contract `--timeout` is metadata" in delegate_help,
+    )
 
     _quota_checks(expect)
 

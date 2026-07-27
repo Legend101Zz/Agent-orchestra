@@ -37,11 +37,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::bench::HarnessConfig;
 use crate::probe::Capability;
 
 /// How the bounded prompt reaches the worker process.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PromptDelivery {
     /// Appended as the final command-line argument.
     Argument,
@@ -50,7 +53,7 @@ pub enum PromptDelivery {
 }
 
 /// A fully-resolved, ready-to-spawn worker invocation (prompt excluded).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Invocation {
     /// Every argument placed before the prompt; never contains the prompt.
     pub args: Vec<String>,

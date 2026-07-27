@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{
     HarnessConfig, HarnessRegistry, SessionPaneRecord, create_session, load_harness_registry,
@@ -201,12 +201,6 @@ fn cli_dispatch_send_list_and_show_record_actor_session_and_pane_linkage() {
             .unwrap()
             .contains("summarize diff")
     );
-    assert!(
-        record["stdout"]
-            .as_str()
-            .unwrap()
-            .contains("cli-fake-stdout summarize diff")
-    );
     let dispatch_id = record["id"].as_str().expect("dispatch id").to_owned();
 
     let listed = orc(
@@ -224,26 +218,43 @@ fn cli_dispatch_send_list_and_show_record_actor_session_and_pane_linkage() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["id"], dispatch_id);
 
-    let shown = orc(
-        &root,
-        &home,
-        &[
-            "dispatch",
-            "show",
-            &dispatch_id,
-            "--session",
-            &session,
-            "--json",
-        ],
-    );
-    assert!(
-        shown.status.success(),
-        "{}",
-        String::from_utf8_lossy(&shown.stderr)
-    );
-    let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let shown = loop {
+        let shown = orc(
+            &root,
+            &home,
+            &[
+                "dispatch",
+                "show",
+                &dispatch_id,
+                "--session",
+                &session,
+                "--json",
+            ],
+        );
+        assert!(
+            shown.status.success(),
+            "{}",
+            String::from_utf8_lossy(&shown.stderr)
+        );
+        let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown");
+        if shown["execution_status"] == "succeeded" {
+            break shown;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dispatch did not finish: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(shown["id"], dispatch_id);
     assert_eq!(shown["status"], "confirmed");
+    assert!(
+        shown["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("cli-fake-stdout summarize diff")
+    );
     let _ = fs::remove_dir_all(root);
 }
 

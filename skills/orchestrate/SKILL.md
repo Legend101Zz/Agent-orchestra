@@ -41,9 +41,9 @@ prefer the normalized surface from V1-6 — the same seven operations as MCP too
 
     pio session create --brain <you> --worker <harness>        # once per session
     pio orch plan     "<chunk title>" --session <id> --objective "..." --check "..."
-    pio orch delegate <harness> --session <id> --task <T> --json
-    pio orch status   [<T>] --session <id> --json     # whole board when <T> omitted
-    pio orch await    <T> --session <id> --json
+    pio orch delegate <harness> --session <id> --task <T> --json  # returns after delivery
+    pio orch status   [<T>] --session <id> --json     # poll; whole board when omitted
+    pio orch await    <T> --session <id> --json       # block for answer + exit code
     pio orch review   <T> --session <id>   # running → review
     pio orch finish   <T> --session <id>   # reviewed → done
     pio orch cancel   <T> --session <id>   # drop + best-effort kill of a live worker
@@ -52,6 +52,8 @@ Register the MCP tools once with `pio mcp print-config --format claude|codex`
 (it prints a snippet and never edits protected config). Only a `confirmed`
 dispatch means the worker received the brief. This surface is what the standalone
 `orchestrate:` trigger (Claude Code hook / Codex AGENTS block) routes into.
+`--dispatch-timeout` bounds the background worker; contract `--timeout` is
+metadata only. `confirmed/running` means received and still working, not done.
 
 ## Rules
 

@@ -214,8 +214,8 @@ async fn tools_list_over_stdio_returns_seven_tools_with_schemas() {
 }
 
 /// AC2: end-to-end over stdio — `orch_delegate` against the fixture worker
-/// creates a contracted task and dispatches it; `orch_await` and `orch_status`
-/// then observe the confirmed completion.
+/// creates a contracted task and confirms receipt while execution is running;
+/// `orch_await` and `orch_status` then observe the terminal result.
 #[tokio::test]
 async fn delegate_await_status_end_to_end_over_stdio() {
     let (home, session) = setup_fixture("e2e");
@@ -242,14 +242,14 @@ async fn delegate_await_status_end_to_end_over_stdio() {
         .to_owned();
     assert_eq!(delegated["tasks"][0]["status"], "running");
     assert_eq!(delegated["dispatches"][0]["status"], "confirmed");
-    assert_eq!(delegated["dispatches"][0]["harness"], "fake-worker");
+    let immediate_execution = delegated["dispatches"][0]["execution_status"]
+        .as_str()
+        .expect("delegate reports execution status");
     assert!(
-        delegated["dispatches"][0]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("fake-worker-stdout"),
-        "worker stdout was not captured: {delegated}"
+        matches!(immediate_execution, "running" | "succeeded"),
+        "confirmed receipt must be running or already succeeded: {delegated}"
     );
+    assert_eq!(delegated["dispatches"][0]["harness"], "fake-worker");
     // The worker really received the rendered acceptance brief as its prompt —
     // assert on the delivered prompt, not merely on the worker having run.
     let prompt = delegated["dispatches"][0]["prompt"]
@@ -262,11 +262,21 @@ async fn delegate_await_status_end_to_end_over_stdio() {
             && prompt.contains("the summary names each changed file"),
         "delivered prompt is not the rendered contract brief: {prompt}"
     );
-    // A confirmed delivery is quiet; the note channel is for trouble only.
-    assert!(
-        delegated["note"].is_null(),
-        "a confirmed delegation must not carry a note: {delegated}"
-    );
+    // Receipt is not completion: while still running, the note tells conductors
+    // how to observe it. A tiny worker may already be terminal by serialization.
+    if immediate_execution == "running" {
+        assert!(
+            delegated["note"]
+                .as_str()
+                .is_some_and(|note| note.contains("still running") && note.contains("orch_await")),
+            "a running delegation must explain how to observe completion: {delegated}"
+        );
+    } else {
+        assert!(
+            delegated["note"].is_null(),
+            "a terminal successful delegation should be quiet: {delegated}"
+        );
+    }
 
     let awaited = call(
         &client,
@@ -276,6 +286,15 @@ async fn delegate_await_status_end_to_end_over_stdio() {
     .await;
     assert_eq!(awaited["verb"], "orch_await");
     assert_eq!(awaited["dispatches"][0]["status"], "confirmed");
+    assert_eq!(awaited["dispatches"][0]["execution_status"], "succeeded");
+    assert_eq!(awaited["dispatches"][0]["exit_code"], 0);
+    assert!(
+        awaited["dispatches"][0]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fake-worker-stdout"),
+        "worker stdout was not captured by await: {awaited}"
+    );
     assert!(awaited["note"].is_null(), "await should not have timed out");
 
     let observed = call(

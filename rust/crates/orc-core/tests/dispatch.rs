@@ -12,7 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{
     HarnessConfig, HarnessRegistry, create_session, load_harness_registry, write_harness_registry,
@@ -149,6 +149,21 @@ fn running_task(home: &Path, session: &str, title: &str) -> orc_core::tasks::Tas
     running
 }
 
+fn await_terminal(session: &str, delivered: DispatchRecord) -> DispatchRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record = dispatch::read_dispatch(session, &delivered.id).expect("read dispatch");
+        if record.is_terminal() {
+            return record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dispatch never reached terminal state: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn dispatch_through_a_fake_worker_is_confirmed_records_actor_and_pane_linkage() {
     let _guard = lock();
@@ -178,6 +193,7 @@ fn dispatch_through_a_fake_worker_is_confirmed_records_actor_and_pane_linkage() 
         timeout_sec: Some(30),
     })
     .expect("dispatch must succeed");
+    let record = await_terminal(&session_id, record);
     assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
     assert_eq!(record.actor, "brain");
     assert_eq!(record.harness, "fake-worker");
@@ -479,6 +495,7 @@ fn dispatch_from_a_temporary_git_worktree_runs_with_assigned_runner_and_succeeds
         timeout_sec: Some(30),
     })
     .expect("dispatch must succeed from a git worktree");
+    let record = await_terminal(&session_id, record);
     assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
     assert_eq!(record.run.as_deref(), Some("W-git"));
     assert!(record.command_line.contains("show me diff"));

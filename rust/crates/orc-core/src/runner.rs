@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::inbox::{acknowledge_prompt, has_kill, pending_prompts, read_prompt};
@@ -64,7 +65,7 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
@@ -173,6 +174,24 @@ pub fn extract_usage(value: &Value) -> Option<Usage> {
         });
     }
     best
+}
+
+/// Extract one structured-output event for a worker adapter.
+///
+/// Pi's JSON stream is the same transport consumed by [`execute`], so dispatch
+/// reuses the exact text/usage extractors instead of maintaining a second
+/// parser. Other adapters deliberately return no extraction until their event
+/// shapes are proven; callers then retain the bounded raw capture.
+#[must_use]
+pub fn extract_adapter_event<'a>(
+    adapter: &str,
+    value: &'a Value,
+) -> (Option<&'a str>, Option<Usage>) {
+    if adapter == "pi" {
+        (extract_text(value), extract_usage(value))
+    } else {
+        (None, None)
+    }
 }
 
 fn write_rpc_prompt(stdin: &mut ChildStdin, message: &str) -> Result<()> {

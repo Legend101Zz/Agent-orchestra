@@ -4,6 +4,7 @@ pub mod contract;
 pub mod control;
 pub mod discovery;
 pub mod dispatch;
+pub mod dispatch_supervisor;
 pub mod inbox;
 pub mod invocation;
 pub mod metrics;

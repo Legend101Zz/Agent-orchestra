@@ -20,15 +20,17 @@ and as `pio orch <verb>` CLI verbs:
     orch_plan  orch_delegate  orch_status  orch_await  orch_review  orch_cancel  orch_finish
 
     pio session create --brain codex --worker <harness>          # once; note the id
-    pio orch delegate <harness> --session <id> --title "..." --objective "..." --check "..." --json
-    pio orch status [<T>] --session <id> --json
-    pio orch await  <T>   --session <id> --json
+    pio orch delegate <harness> --session <id> --title "..." --objective "..." --check "..." --json  # returns after delivery
+    pio orch status [<T>] --session <id> --json   # poll; confirmed/running is still working
+    pio orch await  <T>   --session <id> --json   # block for answer, usage, exit code
     pio orch review <T> --session <id>   # running → review
     pio orch finish <T> --session <id>   # reviewed → done
 
 Register the MCP tools once with `pio mcp print-config --format codex` (it prints
 a `config.toml` `[mcp_servers.pi-orchestra]` block and never edits protected
 config). Only a `confirmed` dispatch means the worker received the brief.
+`--dispatch-timeout` bounds the background worker; the contract's `--timeout`
+is metadata only and does not stop it.
 
 ## pi-delegate (MiniMax M3 worker)
 
