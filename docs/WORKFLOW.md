@@ -63,8 +63,20 @@ Hard rules:
 ## Working setup notes
 
 - Canonical remote: `github.com/Legend101Zz/Agent-orchestra` (`main`).
-- Mrigesh's machines may have two checkouts (external SSD + `~/Agent-orchestra`);
-  the remote is the source of truth — always `git fetch` first.
+- **Checkout location (moved 2026-07-27):** the working checkout is
+  `/Volumes/Mrigesh SSD/Agent-orchestra` — the old `~/Agent-orchestra` is gone
+  (freed disk space). The external SSD must be mounted to work on the repo.
+  Note the **space in the path**: quote it in shell commands (`cd "/Volumes/Mrigesh SSD/Agent-orchestra"`).
+  A second, older checkout `/Volumes/Mrigesh SSD/pi-orchestra` also exists —
+  it is NOT this repo; don't work in it.
+- Nothing above is load-bearing for an agent session: the remote is the source
+  of truth, so `git clone` somewhere convenient and `git fetch` first. Never
+  assume a path — `git rev-parse --show-toplevel` if you need one.
+- **After moving the checkout, re-run `./install.sh`.** Everything the installer
+  links (`~/.claude/skills/*`, the `UserPromptSubmit` hook in
+  `~/.claude/pi-orchestra/`, the `~/.zshrc` block) is an absolute symlink into
+  the checkout, so a move leaves them all dangling and the trigger grammar
+  silently stops firing. `install.sh` is idempotent and replaces dead symlinks.
 - code-puppy: model/agent config is user-global (`~/.code_puppy/`); this repo
   provides `AGENTS.md` (root) and `.agents/commands/work-issue.md`. Run it
   with `GH_TOKEN` exported so `gh` works for issue reads/comments.

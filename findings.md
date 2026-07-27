@@ -63,3 +63,33 @@ resolved (v4 Phases 0–6) and preserved in git history and
   one-shot to verify it runs. That would make `pio doctor` incur real model
   calls (cost + latency) on every refresh; the template layer already carries the
   known runtime quirks. Revisit only if per-harness launch quirks proliferate.
+
+## Moving the checkout breaks every installed link (2026-07-27)
+
+`~/Agent-orchestra` was moved to `/Volumes/Mrigesh SSD/Agent-orchestra` to free
+disk space. Everything `install.sh` creates is an **absolute symlink into the
+checkout**, so the move left all of them dangling at once:
+
+```
+DANGLING ~/.claude/skills/{pi-delegate,orchestrate,deliberate}
+DANGLING ~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py
+```
+
+The failure is quiet in the worst way: Claude Code's `UserPromptSubmit` hook
+points at a dead path, so `delegate:` simply stops being detected — no error the
+conductor sees, just the feature silently not happening. The `~/.zshrc` block
+has the same shape.
+
+**Fix: re-run `./install.sh` from the new location.** It is idempotent and
+explicitly replaces dead symlinks (`install_skill` has a dangling-link branch);
+`ln -sfn` re-points the hook. Verify with
+`printf '{"prompt":"delegate: x"}' | ~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py`.
+
+Two related traps:
+- The new path **contains a space** — quote it everywhere (`git -C "/Volumes/Mrigesh SSD/Agent-orchestra"`).
+  Unquoted paths fail in a way that looks like "repo missing", not "bad quoting".
+- `/Volumes/Mrigesh SSD/pi-orchestra` is a **different, older** checkout. The
+  `~/.zshrc` pi-orchestra block currently sources *that* one's `shell/orchestra.zsh`.
+- The binaries are NOT affected: `~/.local/bin/pio` links into
+  `~/.local/share/pi-orchestra/target/release/`, which did not move.
+

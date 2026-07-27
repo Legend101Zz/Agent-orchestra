@@ -62,7 +62,7 @@ churn lands to avoid merge pain.**
 
 ```
 Work GitHub issue #16 of Legend101Zz/Agent-orchestra (clone or use
-~/Agent-orchestra, branch issue-16-research). Read the issue and the V1 spec
+the repo checkout, branch issue-16-research). Read the issue and the V1 spec
 it links, then research each listed area with web search + GitHub: pick the
 best Rust crate/pattern per area, with version, license, maintenance signal,
 and 2+ rejected alternatives each. Mine prior art (claude-squad, opencode,
@@ -88,7 +88,8 @@ then inside code-puppy:
 ### 2. First review of a pushed branch (Claude Code, one session per issue)
 
 ```
-You are the adversarial reviewer for pi-orchestra (~/Agent-orchestra), per
+You are the adversarial reviewer for pi-orchestra (run from the repo
+checkout — see docs/WORKFLOW.md for where it lives), per
 docs/WORKFLOW.md. Review branch issue-<N>-* against the task contract in
 GitHub issue #<N>:
 1. git fetch, check out the branch, run all five gates from AGENTS.md.
@@ -116,7 +117,7 @@ if what-shipped changed.
 ### 4. Re-review (Claude Code — reuse the SAME review session if it's still open)
 
 ```
-Re-review branch issue-<N>-* of ~/Agent-orchestra: verify ONLY the numbered
+Re-review branch issue-<N>-* of this repo: verify ONLY the numbered
 fix list from your previous review comment on issue #<N>, re-run the gates,
 and confirm nothing new broke or crept in (git diff against the previously
 reviewed commit). Verdict ACCEPT or FIX on the issue; update LOG.md status.
@@ -127,7 +128,7 @@ recommend re-scoping the issue instead (docs/ANTI-SLOP.md rule 4).
 ### 5. After YOUR local test passes → merge
 
 ```bash
-cd ~/Agent-orchestra && git fetch origin
+cd "$PIO_REPO" && git fetch origin   # see docs/WORKFLOW.md for the checkout path
 git checkout issue-<N>-<slug> && ./install.sh   # try the feature yourself
 git checkout main && git merge --no-ff issue-<N>-<slug> && git push
 ```
