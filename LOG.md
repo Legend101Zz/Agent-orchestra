@@ -25,8 +25,9 @@ ship-log entries are part of finishing an issue.*
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
+| [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | 👀 | issue-28-dispatch-drain |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | 🧪 | issue-10-standalone-integrations ([PR #27](https://github.com/Legend101Zz/Agent-orchestra/pull/27)) |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
@@ -154,6 +155,21 @@ from #8.
 > **Review verdict (2026-07-27, Claude): 🔨 FIX** — all 5 gates green and the install/uninstall AC1 evidence reproduces exactly (protected-config checksums identical, two installs → identical tree), every documented `pio orch`/`session`/`mcp` invocation really exists and runs, and the Python↔Rust grammar port survived a 4,019-case differential fuzz against `orc_pty::trigger` with **zero** mismatches (incl. Unicode boundary chars) — but **the quota relay doesn't work**: the hook greps `pio quota` for `ORC WARNING/BLOCKED/NOTE`, and `pio quota` never emits those (they come from `quota::gate()` via `pio run`/`dispatch`). Measured: at level **warn** the conductor is told *"no quota advisory to relay"* — a confident false negative on the one guarantee AC2 names; only the `unknown` branch works, which is the only branch the evidence demonstrated. Three docs assert the same impossible behavior, `pio quota` is called "read-only" but writes `quota.json` + `quota_history.jsonl`, and the branch **does not merge** (conflicts in LOG.md/progress.md; as-is it would regress #8 from ✅ back to 🧪). 6-item fix list on the issue.
 
 > **Fix round + re-review (2026-07-27, Claude): 🧪 ACCEPT.** All six items closed and re-verified by me, not by claim. The relay now drives off `pio quota --json` — measured against the real binary at every level: ok → `Quota ok — 5h 80% / weekly 90%`, **warn → `ORC WARNING: … 5h 20% / weekly 90% … Consider pausing delegation.`**, block → `ORC BLOCKED` + "ask the user, do NOT --force", unknown → `ORC NOTE` with the reason; unparseable output falls back to the exit code, never to silence. `--selftest` 22 → **39 checks**, covering every level twice (pure renderer *and* end-to-end through a real subprocess against a stub `pio`). Three false docs corrected, "read-only" dropped (`pio quota` writes `quota.json` + `quota_history.jsonl`). Bonus: the pre-existing install bug where `~/.codex/AGENTS.md` gained a blank line every run is fixed — byte-identical across four consecutive installs. Rebased onto `a0fa88a`, conflicts gone, #8 stays ✅. All five gates green; the 4,019-case grammar fuzz re-run clean after the edits. Ready for your local test + merge.
+### 2026-07-27 — Delegation actually delivers now, issue #28 (Claude)
+Handing work to a worker was broken for anything real, and it looked like the
+worker's fault. pi-orchestra started the worker but then waited for it to finish
+before reading anything it said — and a program that is talking gets stuck when
+nobody listens. So every worker that produced more than a trickle of output froze
+mid-sentence, got killed after two minutes, and was written down as "timed out".
+Your two failed TODO scans were exactly this; the worker was fine and doing the
+job the whole time. pi-orchestra now listens while the worker talks. The same
+delegation that failed twice now comes back correct in 24 seconds. I also made
+the two timeout settings honest about which one actually stops a worker — the one
+that sounds like it does, doesn't, and that is why the runs died at 120s. What I
+did NOT do: let you keep working while a worker runs in the background. That
+needs a bigger change to how worker slots are counted, and rushing it would break
+the limit that stops pi-orchestra from overloading your subscriptions. It stays
+open on the issue.
 
 ### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
 Any conductor — a Claude Code or Codex session, a script, or a person at the

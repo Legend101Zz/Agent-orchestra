@@ -109,7 +109,7 @@ impl Verb {
                 "Record a contracted task on the board (backlog) without delegating it yet."
             }
             Self::Delegate => {
-                "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given."
+                "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given. Blocks until the worker finishes or the delivery bound elapses; that bound is the harness's dispatch_timeout_sec (120s when unset), NOT the contract's timeout field, which is metadata only. Agentic workers routinely need several minutes."
             }
             Self::Status => {
                 "Read the durable state of one task (or the whole board) with its dispatch records."

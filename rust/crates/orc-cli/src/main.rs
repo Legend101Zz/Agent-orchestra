@@ -307,8 +307,12 @@ enum OrchCommand {
         pane: Option<String>,
         #[arg(long)]
         run: Option<String>,
-        /// Bounded dispatch timeout override in seconds (distinct from the
-        /// contract's --timeout per-attempt limit).
+        /// Seconds to wait for the worker to finish before killing it.
+        ///
+        /// THIS is the delivery bound, distinct from the contract's `--timeout`
+        /// (which is metadata only). Defaults to the harness's
+        /// `dispatch_timeout_sec`, or 120s when that is 0. Raise it for agentic
+        /// workers: a real repo-scanning run takes minutes.
         #[arg(long = "dispatch-timeout")]
         dispatch_timeout: Option<u64>,
         #[arg(long, value_enum, default_value = "brain")]
@@ -439,7 +443,12 @@ struct ContractArgs {
     /// Reviewer that will judge the delivered artifact.
     #[arg(long)]
     reviewer: Option<String>,
-    /// Bounded per-attempt timeout in seconds.
+    /// Contract metadata: the per-attempt limit recorded on the task.
+    ///
+    /// This does NOT bound delivery. A worker that runs longer than this is not
+    /// killed by it — pass `--dispatch-timeout` to bound the actual invocation
+    /// (issue #28: `--timeout 300` was mistaken for the delivery bound, and the
+    /// dispatch still used the 120s default).
     #[arg(long)]
     timeout: Option<u64>,
     /// Maximum automatic retries after a failed attempt.
