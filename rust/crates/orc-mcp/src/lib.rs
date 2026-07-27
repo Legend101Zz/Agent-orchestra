@@ -105,7 +105,7 @@ impl OrchServer {
     /// Assign, start, and dispatch a task to a worker harness.
     #[tool(
         name = "orch_delegate",
-        description = "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given."
+        description = "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given. Blocks until the worker finishes or the delivery bound elapses; that bound is the harness's dispatch_timeout_sec (120s when unset), NOT the contract's timeout field, which is metadata only. Agentic workers routinely need several minutes."
     )]
     async fn delegate(
         &self,

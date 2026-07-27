@@ -1160,3 +1160,39 @@ hand back to the implementer.
   #8 stays ✅ merged and both progress entries survive.
 - Next: Mrigesh tests locally (`./install.sh`, register the hook, type
   `delegate: …`) and merges; then #11.
+## Session — 2026-07-27 (Claude): #28 dispatch pipe-buffer deadlock
+
+- Found while reviewing #10: a live `delegate:` trigger routed a real delegation
+  to `pi-m3`, which failed twice with `DISPATCH TIMEOUT` at exactly 120s.
+- **Root cause: a pipe-buffer deadlock in `dispatch.rs::invoke_harness`.** It
+  piped stdout/stderr, polled `try_wait()`, and only drained the pipes *after*
+  the child exited. A worker that fills the ~64KB pipe blocks in `write()`, so it
+  can never exit, so the parent never drains. Every non-trivial delegation was
+  affected — the #8 control surface has never worked for a real task.
+- Proven by A/B on the identical command: poll-then-drain hung with 0 bytes and
+  was killed at 90s; draining concurrently exited 0 in 29.8s with 148KB of
+  stdout. NOT the model — the same task run directly takes 6.3s on both
+  MiniMax-M3 and MiniMax-M2.7-highspeed. `pi --mode json` emits ~4KB for a
+  one-word answer.
+- Fix: `drain_to_eof` spawns a reader thread per stream immediately after
+  `spawn()`, consuming to EOF while retaining at most `MAX_CAPTURED_BYTES` and
+  discarding the overflow. The old `bounded_capture` broke out of its read loop
+  at the cap — deleted, since draining that stops early is the bug.
+- A timed-out dispatch now records the partial output it did capture
+  (`Drain::snapshot`, no join, so a surviving grandchild can't wedge the parent).
+  The old empty stdout+stderr on timeout is exactly what hid this bug.
+- Regression tests (`tests/dispatch_flood.rs`, written before the fix and
+  confirmed failing on `main`): 2MB floods on stdout and on stderr separately,
+  plus a bounded/truncation-marker check. 45.25s of timeouts → 0.30s green.
+- AC5: `--timeout` is contract metadata and does NOT bound delivery; that
+  ambiguity is what made a conductor pass `--timeout 300` and still get the 120s
+  default. Clarified in the clap help for both flags and in `Verb::description()`
+  (the MCP source of truth, mirrored in orc-mcp and pinned by a drift test).
+- AC6 live: the delegation that timed out twice now returns `confirmed`, exit 0,
+  in 24.0s, with the capture bounded at 16410 bytes and marked truncated.
+- **NOT done in this branch: AC3 and AC4** (confirm-on-delivery + non-blocking
+  conductor). `spawn_guard::SlotLease` releases on `Drop`, so returning early
+  while the worker runs would free the concurrency slot immediately and silently
+  defeat the #7 cap. Doing it right means moving lease ownership into a detached
+  supervisor (the `pio _exec` pattern from `runner.rs:478`) — a real redesign
+  that also collides with #11, which rewrites this file. Left open on #28.

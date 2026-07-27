@@ -17,10 +17,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,6 +43,10 @@ use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery, reco
 
 /// Maximum bytes of stdout captured from one dispatch invocation.
 pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
+
+/// Appended to a capture that hit [`MAX_CAPTURED_BYTES`] so a truncated record
+/// never reads as a complete one.
+pub const TRUNCATION_MARKER: &str = "\n… [truncated by pi-orchestra]";
 
 /// Outcome of one recorded dispatch invocation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -337,22 +342,89 @@ fn placeholder_command(registry: &HarnessRegistry, key: &str) -> String {
     }
 }
 
-fn bounded_capture<R: Read>(mut reader: R, max: usize) -> Result<String> {
-    let mut buffer = Vec::with_capacity(max.min(1024));
-    let mut chunk = [0_u8; 1024];
-    loop {
-        let taken = reader.read(&mut chunk)?;
-        if taken == 0 {
-            break;
+/// Bytes captured from one worker stream, plus whether more was thrown away.
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl Captured {
+    fn render(&self) -> String {
+        let mut rendered = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            rendered.push_str(TRUNCATION_MARKER);
         }
-        if buffer.len() + taken > max {
-            let remaining = max.saturating_sub(buffer.len());
-            buffer.extend_from_slice(&chunk[..remaining]);
-            break;
-        }
-        buffer.extend_from_slice(&chunk[..taken]);
+        rendered
     }
-    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+/// One worker stream being drained to EOF on its own thread.
+///
+/// The buffer is shared rather than returned by the thread so the parent can
+/// read whatever arrived *without* joining. That matters on the kill path: a
+/// surviving grandchild can hold the pipe open forever, and a timed-out
+/// dispatch that captured nothing is precisely what made the issue #28
+/// deadlock so hard to diagnose.
+struct Drain {
+    captured: Arc<Mutex<Captured>>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl Drain {
+    /// Wait for EOF, then render everything the worker wrote.
+    fn finish(self) -> String {
+        let Self { captured, handle } = self;
+        let _ = handle.join();
+        render(&captured)
+    }
+
+    /// Render what has arrived so far, without waiting for EOF.
+    fn snapshot(&self) -> String {
+        render(&self.captured)
+    }
+}
+
+fn render(captured: &Arc<Mutex<Captured>>) -> String {
+    captured.lock().map_or_else(
+        |poisoned| poisoned.into_inner().render(),
+        |slot| slot.render(),
+    )
+}
+
+/// Drain `reader` to EOF on a background thread, retaining at most `max` bytes.
+///
+/// Reading **all the way to EOF is the point** (issue #28): the previous
+/// implementation stopped at `max` and only ran after the child exited, so a
+/// worker that filled the ~64 KB pipe buffer blocked in `write()`, could never
+/// exit, and was killed as a bogus `DISPATCH TIMEOUT`. Bytes past `max` are
+/// counted and discarded so the durable record stays bounded while the worker
+/// keeps running freely.
+fn drain_to_eof<R: Read + Send + 'static>(mut reader: R, max: usize) -> Drain {
+    let captured = Arc::new(Mutex::new(Captured::default()));
+    let sink = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+        let mut chunk = [0_u8; 8 * 1024];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(taken) => {
+                    let Ok(mut slot) = sink.lock() else { break };
+                    let room = max.saturating_sub(slot.bytes.len());
+                    if room == 0 {
+                        slot.truncated = true;
+                    } else {
+                        let kept = room.min(taken);
+                        slot.bytes.extend_from_slice(&chunk[..kept]);
+                        slot.truncated |= kept < taken;
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    });
+    Drain { captured, handle }
 }
 
 fn render_command_line(program: &str, args: &[String], prompt: &str, stdin: bool) -> String {
@@ -398,7 +470,7 @@ fn invoke_harness(
     prompt: &str,
     cwd: Option<&Path>,
     timeout: Duration,
-) -> std::result::Result<Invoked, DispatchFailureKind> {
+) -> std::result::Result<Invoked, (DispatchFailureKind, Option<Invoked>)> {
     let mut command = Command::new(program);
     for arg in &invocation.args {
         command.arg(arg);
@@ -416,7 +488,18 @@ fn invoke_harness(
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|_| DispatchFailureKind::MissingExecutable)?;
+        .map_err(|_| (DispatchFailureKind::MissingExecutable, None))?;
+    // Start draining BEFORE anything else can block: the prompt write below and
+    // the wait loop both happen while the worker is already free to write as
+    // much as it likes (issue #28).
+    let stdout_drain = child
+        .stdout
+        .take()
+        .map(|handle| drain_to_eof(handle, MAX_CAPTURED_BYTES));
+    let stderr_drain = child
+        .stderr
+        .take()
+        .map(|handle| drain_to_eof(handle, MAX_CAPTURED_BYTES));
     if invocation.uses_stdin()
         && let Some(mut stdin) = child.stdin.take()
     {
@@ -428,20 +511,10 @@ fn invoke_harness(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout_handle = child.stdout.take();
-                let mut stderr_handle = child.stderr.take();
-                let stdout = stdout_handle
-                    .as_mut()
-                    .map(|handle| bounded_capture(handle, MAX_CAPTURED_BYTES))
-                    .transpose()
-                    .map_err(|_| DispatchFailureKind::HarnessError)?
-                    .unwrap_or_default();
-                let stderr = stderr_handle
-                    .as_mut()
-                    .map(|handle| bounded_capture(handle, MAX_CAPTURED_BYTES))
-                    .transpose()
-                    .map_err(|_| DispatchFailureKind::HarnessError)?
-                    .unwrap_or_default();
+                // The child is gone, so both pipes are at EOF: joining returns
+                // everything it wrote, bounded.
+                let stdout = stdout_drain.map(Drain::finish).unwrap_or_default();
+                let stderr = stderr_drain.map(Drain::finish).unwrap_or_default();
                 return Ok(Invoked {
                     exit_code: status.code(),
                     stdout,
@@ -453,13 +526,32 @@ fn invoke_harness(
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(DispatchFailureKind::Timeout);
+                    // Snapshot instead of joining: a grandchild may still hold
+                    // the pipe, and partial output is what makes a real timeout
+                    // diagnosable. Dropping the Drain detaches its thread.
+                    let stdout = stdout_drain
+                        .as_ref()
+                        .map(Drain::snapshot)
+                        .unwrap_or_default();
+                    let stderr = stderr_drain
+                        .as_ref()
+                        .map(Drain::snapshot)
+                        .unwrap_or_default();
+                    return Err((
+                        DispatchFailureKind::Timeout,
+                        Some(Invoked {
+                            exit_code: None,
+                            stdout,
+                            stderr,
+                            success: false,
+                        }),
+                    ));
                 }
                 thread::sleep(
                     Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())),
                 );
             }
-            Err(_) => return Err(DispatchFailureKind::HarnessError),
+            Err(_) => return Err((DispatchFailureKind::HarnessError, None)),
         }
     }
 }
@@ -541,7 +633,7 @@ fn invoke_with_backoff(
                     }
                 }
             }
-            Err(kind) => Err(AttemptError::Terminal(kind, None)),
+            Err((kind, invoked)) => Err(AttemptError::Terminal(kind, invoked)),
         }
     };
     let is_retryable = |error: &AttemptError| matches!(error, AttemptError::RateLimited(_));
