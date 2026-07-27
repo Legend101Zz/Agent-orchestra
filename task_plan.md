@@ -28,7 +28,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | V1-3 Task contract v2 (acceptance-driven schema + enforcement) | — (✅ merged 2026-07-24, PR #22) |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | V1-4 Universal worker adapter (any probed harness as worker) | #4 (✅ merged 2026-07-24, PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | V1-5 Rate-limit-aware spawning (quota guard v2, concurrency caps) | #4 (✅ merged 2026-07-25, PR #25) |
-| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 |
+| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 (✅ merged 2026-07-27, PR #26) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — (✅ merged 2026-07-24, PR #23) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 |
@@ -36,15 +36,19 @@ record. (Issue numbers are filled in as issues are created.)
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 
-**Order: #16, #17, #3, #4, #5, #9, #6 and #7 are merged (#7 on 2026-07-25,
-PR #25 — quota guard v2: concurrency caps + spawn queue + rate-limit backoff).
-Both bottlenecks are cleared — #4 unblocked #6/#7/#12, #5 unblocked #8/#11; #6
-now unblocks #12. Ready set: #8 (`orch_*` + MCP, reuses the #5 schema), #11
-(worktree isolation, builds on #5), #12 (single-harness mode), plus #13.
-Next: #8, then #11. Follow-ups seeded by #5's review to fold into #8: wire
-`render_brief` into `dispatch send`, and add a headless `session create`.
-Parallel-safe now: #8, #11 — each from fresh `main`; start #13 before more TUI
-churn lands to avoid merge conflicts.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7 and #8 are merged (#8 on 2026-07-27,
+PR #26 — `orc_core::orch` defines seven verbs once and exposes them twice, as
+`pio orch <verb>` and as `orch_*` MCP tools from the new `pio-mcp` binary;
+tokio stays contained in `orc-mcp` per #16). Every dependency edge in this
+table is now cleared: #4 unblocked #6/#7/#12, #5 unblocked #8/#11, #6 unblocked
+#12, and #8 unblocked #10 — nothing left is waiting on anything. Ready set:
+#11 (worktree isolation, builds on #5), #10 (standalone Claude Code/Codex
+integrations, builds on #8's tool surface), #12 (single-harness mode), #13.
+Next: #11, then #10. Of the two follow-ups #5's review seeded into #8, the
+headless `session create` shipped; wiring `render_brief` into `dispatch send`
+did **not** and stays open by choice (`orch delegate` is the canonical path).
+Parallel-safe now: #11, #10, #12 — each from fresh `main`; start #13 before
+more TUI churn lands to avoid merge conflicts.**
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).

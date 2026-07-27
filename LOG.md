@@ -24,27 +24,31 @@ ship-log entries are part of finishing an issue.*
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
-| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | 🧪 | issue-8-orch-control-surface ([PR #26](https://github.com/Legend101Zz/Agent-orchestra/pull/26)) |
+| [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *needs #8* | — |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *unblocked* | — |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#7 merged (2026-07-25, PR #25) — quota guard v2 shipped: per-harness
-concurrency caps (probed defaults + `pio harness cap` override), a durable
-cross-session spawn queue (`pio dispatch drain`) instead of unbounded
-parallelism, and `backon` exponential+jitter backoff on provider rate-limit
-signals with an ORC WARNING. Adversarial review caught (and the fix round
-closed) a blocker where rate-limit detection fired on *successful* exit-0
-output — retrying and failing good work, the opposite of the objective — plus
-two minors (a `.slots.lock` stale-lock wedge, a unit-blind retry-after hint);
-re-review re-verified all three. This is the last of the "quota guard" work.
-Ready set: #8 (`orch_*` + MCP, reuses the #5 schema), #11 (worktree isolation,
-builds on #5), #12 (single-harness honest mode), plus #13 anytime.
-**Next: #8**, then #11. Known follow-up seeded by #5's review: the contract
-brief isn't yet wired into `dispatch send` (`render_brief` is `pub`), and
-there's no headless `session create` — fold both into #8. Start #13 before more
-TUI churn lands to avoid merge pain.**
+**#8 merged (2026-07-27, PR #26) — the control surface is live: seven verbs
+(`plan`, `delegate`, `status`, `await`, `review`, `finish`, `cancel`) defined
+once in `orc_core::orch` and exposed twice — as `pio orch <verb>` and as
+`orch_*` MCP tools over stdio from a new `pio-mcp` binary, so Claude Code,
+Codex or any MCP brain can drive pi-orchestra without a TUI. `pio mcp
+print-config` prints the registration snippet for both. Delegation renders the
+#5 contract into the worker's prompt, and `pio session create` finally makes a
+session headlessly. Tokio stays quarantined in `orc-mcp` per the #16 decision.
+Adversarial review caught (and the fix round closed) a blocker where
+`uninstall.sh` left a dangling `pio-mcp` on PATH, and a worse one where a
+failed or queued delegation returned plain success over MCP while the CLI
+exited 1/75 — `OrchOutcome.note` now carries that news on both surfaces.
+This is what #10 was waiting for. Ready set: **#11** (worktree isolation,
+builds on #5), **#10** (standalone Claude Code/Codex integrations, now
+unblocked), **#12** (single-harness honest mode), plus **#13** anytime.
+**Next: #11**, then #10. Still-open follow-up from #5's review: the contract
+brief is wired into `orch delegate` but *not* `dispatch send` — deliberate
+(`orch` is the canonical path), so do not record it as closed. Start #13
+before more TUI churn lands to avoid merge pain.**
 
 ## Prompts you run
 
@@ -152,6 +156,8 @@ outside pi-orchestra), which builds directly on this tool surface.
 > **Review 2026-07-26 (Claude, Fable) — 🔨 FIX.** All 5 gates green on my own run (185 tests, 0 failed) and all 4 ACs reproduced independently — raw JSON-RPC into the release `pio-mcp` (exactly 7 tools, contract-v2 schema reused by `$ref`), my own fixture worker end-to-end incl. the queued→drain→confirmed path, real CLI-vs-MCP twin-session diff, and `print-config` from a scratch install (valid JSON + `tomllib`-valid TOML, zero files written); mutation-tested the drift guards (smuggled 8th tool, drifted description, CLI dropping the contract — all three caught); tokio containment verified by `cargo tree`; the "no daemon" deviation is justified (orc-proto has no task-creation verb) and there is no scope creep. Two things to fix: **`uninstall.sh` leaves a dangling `pio-mcp` symlink on PATH** (reproduced live; the install test was updated for install but deliberately not for uninstall) — I authorize the one-line out-of-path edit — and **a failed or queued `orch_delegate` returns plain success over MCP** (`isError:false`, `note:null`) while the CLI exits 1/75, so `OrchOutcome.note` should carry the failure or queue warning. Four minors (one-directional CLI parity test, an overclaiming test comment, inert `orch_cancel` kill path, the `dispatch send` follow-up not fully discharged). Details on issue #8.
 
 > **Fix round 2026-07-26 (Claude, Fable — applied by the reviewer at Mrigesh's request) — 🧪 ACCEPT.** Both fixes are in on the same branch. `uninstall.sh` now unlinks `pio-mcp`, so an install→uninstall cycle leaves `~/.local/bin` empty with zero dangling links (verified live, and the install test now checks the uninstall side with `symlink_metadata` so a broken link can't slip past `exists()`). A failed or queued `orch_delegate` now fills `OrchOutcome.note`, so the MCP surface says the same thing the CLI's exit code does — a failure names its kind and message, a queued dispatch says "call orch_await to wait for a free slot" and is deliberately *not* worded as a failure; confirmed deliveries stay quiet. Also fixed the three minors: the CLI parity test now asserts set equality against `Verb::ALL` (an eighth CLI verb would have passed before), the MCP e2e test now asserts the delivered prompt really is the rendered brief instead of an always-true stdout check, and `orch_cancel`'s doc says plainly that its kill half only fires for a real background run. Left open on purpose: `render_brief` is wired into `orch delegate` but not `dispatch send` — the right call, but the seeded follow-up is not closed. All 5 gates green on Rust 1.91.1, **188 tests / 0 failed** (was 185); each fix regression-proofed by reverting it and watching its new test fail. Ready for local test + merge.
+
+> **Merged 2026-07-27 (PR #26, `0c9908a`) — ✅.** Tested locally by Mrigesh and merged. Note the entry above predates the fix round: `uninstall.sh` *does* unlink `pio-mcp` on `main`.
 
 ### 2026-07-24 — Never rate-limit your own subscriptions, issue #7 (code-puppy)
 pi-orchestra now protects the paid subscriptions you delegate to from being

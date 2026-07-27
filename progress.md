@@ -1060,3 +1060,25 @@ hand back to the implementer.
   over raw JSON-RPC stdio; a queued delegation says "call orch_await" and doing
   so returns `confirmed`.
 - Ready for Mrigesh to test locally and merge.
+
+## 2026-07-27 — Claude (Opus 5), issue #8 merged, dashboards updated
+
+- Mrigesh tested locally and merged **PR #26** into `main` (`0c9908a`), closing
+  issue #8. `main` now carries the `orch_*` control surface: `orc_core::orch`
+  defines the seven verbs once, `pio orch <verb>` and the `pio-mcp` MCP stdio
+  server expose them twice, `pio mcp print-config` prints the registration
+  snippets, and `pio session create` makes a session headlessly.
+- Updated `LOG.md`: #8 → ✅ (merged, PR #26); the headline paragraph now
+  summarizes #8 instead of #7 and names the new ready set; #10 dropped its
+  *needs #8* marker; a merged blockquote was appended under the #8 ship-log
+  entry noting that entry predates the fix round (its "uninstall.sh doesn't
+  unlink pio-mcp yet" caveat is no longer true on `main`).
+- Updated `task_plan.md`: #8 row marked merged, and the order paragraph rewritten
+  — every dependency edge in the issue map is now cleared, so #11, #10, #12 and
+  #13 are all startable in parallel from fresh `main`.
+- **Still open, deliberately:** wiring `render_brief` into `pio dispatch send`.
+  It is done for `orch delegate` only. Recorded in both dashboards so it is not
+  mistaken for closed just because #8 merged.
+- Next: **#11** (worktree isolation + independent review + receipt), then #10
+  (standalone Claude Code/Codex integrations, which #8 just unblocked). Start
+  #13 before more TUI churn lands.
