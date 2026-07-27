@@ -168,18 +168,25 @@ AGENTS="$HOME/.codex/AGENTS.md"
 if [ -f "$ROOT/codex/AGENTS-block.md" ]; then
   mkdir -p "$HOME/.codex"
   touch "$AGENTS"
+  # Trim trailing blank lines before re-appending: the owned block carries its
+  # own leading separator, so without this every refresh left the old separator
+  # behind and grew the user's file by a blank line per install (issue #10
+  # review). Command substitution strips trailing newlines; printf restores one.
+  trim_trailing_blanks() {
+    local text
+    text="$(cat "$1")"
+    printf '%s\n' "$text" > "$1.pi-orchestra.trim" && mv "$1.pi-orchestra.trim" "$1"
+  }
+  cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
   if ! grep -qF '<!-- pi-orchestra:begin -->' "$AGENTS"; then
-    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
-    printf '\n' >> "$AGENTS"
-    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
-    echo "    appended (backup: $AGENTS.pi-orchestra.bak)"
+    ACTION="appended"
   else
-    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
     sed -i '' '/<!-- pi-orchestra:begin -->/,/<!-- pi-orchestra:end -->/d' "$AGENTS"
-    printf '\n' >> "$AGENTS"
-    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
-    echo "    refreshed owned block (backup: $AGENTS.pi-orchestra.bak)"
+    ACTION="refreshed owned block"
   fi
+  trim_trailing_blanks "$AGENTS"
+  cat "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
+  echo "    $ACTION (backup: $AGENTS.pi-orchestra.bak)"
 fi
 
 echo "==> protected-config checksums"

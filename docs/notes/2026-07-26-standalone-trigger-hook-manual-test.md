@@ -62,8 +62,8 @@ pi-orchestra: delegate: detected — routing through pio.
 pi-orchestra trigger detected: `delegate:`. You (the conductor) are casting a
 spell — route this through pi-orchestra instead of doing the heavy work inline.
 
-Quota (relayed verbatim):
-  MiniMax quota: unknown — no MiniMax key in Keychain or auth.json
+Quota (from `pio quota`):
+  Quota ok — 5h window 100% / weekly 100% remaining.
 
 delegate: — one bounded hand-off to one worker.
   Preferred (MCP): call the `orch_delegate` tool with a task contract
@@ -83,10 +83,43 @@ self-review." ...
 Register the MCP tools once with `pio mcp print-config --format claude` ...
 ```
 
-The line `MiniMax quota: unknown — …` is the proof that the hook **invoked
-`pio`** (it ran `pio quota` and relayed its output verbatim). On a machine with
-a MiniMax key this is the real quota; if quota were BLOCKED (exit 3) the hook
-appends an explicit "ask the user before delegating; do NOT pass --force" note.
+The `Quota …` line is the proof that the hook **invoked `pio`** — it ran
+`pio quota --json` and rendered the level it reported.
+
+**Every level must reach the conductor.** This is the bug the first review round
+caught: the relay used to grep `pio quota`'s *human* output for `ORC WARNING`,
+which that command never prints (those markers come from `quota::gate()` via
+`pio run` / `pio orch delegate`), so a WARN-level quota was reported as "no
+advisory to relay". Reproduce all four levels by seeding an isolated
+`ORC_HOME` — real captured output:
+
+```bash
+for lvl in ok:80 warn:20 block:5; do
+  n=${lvl%%:*}; five=${lvl##*:}; mkdir -p "/tmp/q-$n"
+  printf '{"five_hour_pct":%s,"weekly_pct":90,"window_resets_in_min":60,"fetched_at":4102444800.0}' \
+    "$five" > "/tmp/q-$n/quota.json"
+  printf '{"prompt":"delegate: x"}' | ORC_HOME="/tmp/q-$n" \
+    ~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py 2>/dev/null
+done
+```
+
+```
+# level=ok    (pio quota exit 0)
+  Quota ok — 5h window 80% / weekly 90% remaining.
+# level=warn  (exit 2)
+  ORC WARNING: MiniMax quota low — 5h window 20% / weekly 90% remaining. Consider pausing delegation.
+  Tell the user this before spending tokens.
+# level=block (exit 3)
+  ORC BLOCKED: MiniMax quota below block threshold (5h 5%, weekly 90%).
+  Ask the user before delegating; do NOT pass --force unless they say so.
+# level=unknown (no key reachable, exit 4)
+  ORC NOTE: quota unknown (no MiniMax key in Keychain or auth.json) — proceeding,
+  but the guard cannot protect this delegation.
+```
+
+Unparseable output falls back to the exit code (2 → WARNING, 3 → BLOCKED,
+anything else → NOTE) rather than to silence, so the hook can never report calm
+it did not verify.
 
 Control cases (no trigger → the hook stays completely silent, exit 0):
 
@@ -97,12 +130,13 @@ printf '{"prompt":"redelegate: not a trigger"}'   | ~/.claude/pi-orchestra/claud
 # → no stdout, exit=0 for both
 ```
 
-Grammar parity with the in-pane source of truth (`orc_pty::trigger`) is guarded
-by a self-test:
+Grammar parity with the in-pane source of truth (`orc_pty::trigger`) and the
+quota relay (one case per level, plus an end-to-end run against a stub `pio`)
+are both guarded by a self-test:
 
 ```bash
 ~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py --selftest
-# → selftest: all 22 grammar checks passed
+# → selftest: all 39 grammar + quota checks passed
 ```
 
 ## Part B — live Claude Code procedure
@@ -118,8 +152,13 @@ by a self-test:
    `pio orch delegate <harness> --session <id> --title … --objective … --check …`
    (or the `orch_delegate` MCP tool if you registered it with
    `pio mcp print-config --format claude`).
-4. **Quota relay:** any `ORC WARNING` / `ORC BLOCKED` line from `pio quota` is
-   surfaced verbatim; on a block, Claude asks you before spending tokens.
+4. **Quota relay:** the hook runs `pio quota --json` and renders the reported
+   level as an `ORC WARNING` (warn) / `ORC BLOCKED` (block) / `ORC NOTE`
+   (unknown) advisory carrying the real 5-hour and weekly percentages; on a
+   block, Claude asks you before spending tokens. Note that `pio quota` itself
+   prints a plain report — the `ORC *` markers are emitted by `pio run` /
+   `pio orch delegate`; the hook renders the same vocabulary from the
+   authoritative level so one language reaches the conductor either way.
 5. **`orchestrate:`** routes the same way into the multi-worker plan
    (`orch_plan`→`orch_delegate`→`orch_status`/`orch_await`→`orch_review`→
    `orch_finish`); **`deliberate:`** honestly reports that the judged panel is a
@@ -127,10 +166,12 @@ by a self-test:
 
 ## Pass criteria
 
-- [x] A `delegate:` prompt causes the hook to invoke `pio` (the relayed
-  `MiniMax quota:` line proves it) and inject the exact CLI/MCP invocation.
+- [x] A `delegate:` prompt causes the hook to invoke `pio` (the `Quota …` line
+  proves it) and inject the exact CLI/MCP invocation.
+- [x] Every quota level (ok / warn / block / unknown) reaches the conductor with
+  its real percentages; a WARN is never reported as "no advisory".
 - [x] Non-triggers (`please delegate this`, `redelegate:`, `Delegate:`) produce
   no output and never block the prompt.
-- [x] `--selftest` passes (grammar parity with `orc_pty::trigger`).
+- [x] `--selftest` passes (grammar parity with `orc_pty::trigger` + quota levels).
 - [x] Registering the hook touches only your own `settings.json`; `install.sh`
   leaves all protected-config checksums unchanged (see the install AC1 evidence).

@@ -40,9 +40,11 @@ built yet.** Do not fake it.
 
 ## Guarantees to keep
 
-- **Quota first:** run `pio quota` and relay any `ORC WARNING`/`ORC BLOCKED`
-  line to the user verbatim before spending tokens; a blocked run exits 3 — never
-  `--force` without the user's say-so.
+- **Quota first:** run `pio quota` before spending tokens and tell the user its
+  level and remaining percentages. `pio quota` reports the level (exit 0 ok /
+  2 warn / 3 block, or `--json` for the numbers); the `ORC WARNING`/`ORC BLOCKED`
+  markers themselves come from `pio run`/`pio orch delegate` — relay those
+  verbatim when they appear. Never `--force` without the user's say-so.
 - **Single-harness honesty:** if only one harness is available, say
   "One capable harness detected. Parallel cross-harness deliberation is
   unavailable. Running a sequential plan with self-review." and proceed.

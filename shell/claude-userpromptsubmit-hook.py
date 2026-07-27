@@ -7,9 +7,10 @@ answer for standalone harnesses is a *hook / status acknowledgment* — so this
 script runs on every submitted prompt, and when the conductor casts a spell
 (``delegate:`` / ``orchestrate:`` / ``deliberate:``) it:
 
-1. invokes ``pio`` for a bounded, read-only quota check and relays any
-   ``ORC WARNING`` / ``ORC BLOCKED`` / ``ORC NOTE`` line verbatim (the quota
-   guarantee the skills already promise); and
+1. invokes ``pio quota --json`` (bounded; it delegates nothing and only
+   refreshes its own ``~/.orchestra`` quota cache) and renders the reported
+   level as the ``ORC WARNING`` / ``ORC BLOCKED`` / ``ORC NOTE`` line the
+   skills already promise; and
 2. injects context that tells the conductor the *exact* ``pio`` CLI / MCP
    invocation for the detected verb, plus the single-harness honesty rule.
 
@@ -51,6 +52,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 # Keywords in the same stable order as orc_pty::trigger::Trigger::ALL.
 TRIGGERS: tuple[str, ...] = ("delegate", "orchestrate", "deliberate")
@@ -109,11 +111,72 @@ def find_pio() -> str | None:
     return fallback if os.access(fallback, os.X_OK) else None
 
 
-def quota_relay(pio: str | None) -> list[str]:
-    """Run a bounded, read-only ``pio quota`` and relay ORC lines verbatim.
+# `pio quota` exit codes, from orc-cli's `quota_exit`: ok / warn / block / other.
+_EXIT_LEVEL = {0: "ok", 2: "warn", 3: "block"}
 
-    Never raises: a missing binary, a timeout, or a non-zero exit degrades to an
-    honest note so the hook stays fast and non-blocking. Bound with
+
+def _pct(value: object) -> str:
+    """Render a percentage the way `pio` does: 20.0 -> `20`, missing -> `?`."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:g}"
+    return "?"
+
+
+def quota_advisory(payload: object, returncode: int) -> list[str]:
+    """Render `pio quota --json` into the ORC advisory lines the skills promise.
+
+    The *level* is authoritative — `orc_core::quota` computed it against the
+    user's configured thresholds; this only renders it, mirroring the wording of
+    ``quota::gate()`` so one vocabulary reaches the conductor whether the news
+    arrives via `pio run` or via this hook.
+
+    Falls back to the exit code when the payload is unusable, and never claims
+    "no advisory" for a non-ok level.
+    """
+    level = None
+    five = weekly = reason = None
+    if isinstance(payload, dict):
+        raw_level = payload.get("level")
+        if isinstance(raw_level, str):
+            level = raw_level
+        five, weekly = payload.get("five_hour_pct"), payload.get("weekly_pct")
+        reason = payload.get("reason")
+    if level is None:
+        # Unparseable output: trust the exit code rather than invent calm.
+        level = _EXIT_LEVEL.get(returncode, "unknown")
+        if reason is None:
+            reason = f"could not parse `pio quota --json` (exit {returncode})"
+
+    if level == "warn":
+        return [
+            f"ORC WARNING: MiniMax quota low — 5h window {_pct(five)}% /"
+            f" weekly {_pct(weekly)}% remaining. Consider pausing delegation.",
+            "Tell the user this before spending tokens.",
+        ]
+    if level == "block":
+        return [
+            f"ORC BLOCKED: MiniMax quota below block threshold (5h {_pct(five)}%,"
+            f" weekly {_pct(weekly)}%).",
+            "Ask the user before delegating; do NOT pass --force unless they say so.",
+        ]
+    if level == "ok":
+        return [
+            f"Quota ok — 5h window {_pct(five)}% / weekly {_pct(weekly)}% remaining."
+        ]
+    detail = reason if isinstance(reason, str) and reason else "no reason reported"
+    return [
+        f"ORC NOTE: quota unknown ({detail}) — proceeding, but the guard cannot"
+        " protect this delegation."
+    ]
+
+
+def quota_relay(pio: str | None) -> list[str]:
+    """Run a bounded `pio quota --json` and relay the advisory for its level.
+
+    Not a mutation of anything the conductor owns: it delegates nothing and only
+    refreshes pi-orchestra's own `~/.orchestra` quota cache. Never raises — a
+    missing binary, a timeout, or unparseable output degrades to an honest note
+    so the hook stays fast and can't wedge a prompt. Bound with
     ``ORC_HOOK_QUOTA_TIMEOUT`` seconds (default 6).
     """
     if pio is None:
@@ -127,7 +190,7 @@ def quota_relay(pio: str | None) -> list[str]:
         timeout = 6.0
     try:
         done = subprocess.run(
-            [pio, "quota"],
+            [pio, "quota", "--json"],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -138,19 +201,16 @@ def quota_relay(pio: str | None) -> list[str]:
     except OSError as err:
         return [f"could not run `pio quota` ({err}); check your pi-orchestra install."]
 
-    lines: list[str] = []
-    combined = f"{done.stdout}\n{done.stderr}"
-    for raw in combined.splitlines():
+    try:
+        payload: object = json.loads(done.stdout)
+    except json.JSONDecodeError:
+        payload = None
+    lines = quota_advisory(payload, done.returncode)
+    # Anything pio itself marked as an ORC advisory is relayed verbatim on top.
+    for raw in f"{done.stdout}\n{done.stderr}".splitlines():
         text = raw.strip()
-        if text.startswith(("ORC WARNING", "ORC BLOCKED", "ORC NOTE", "MiniMax quota")):
+        if text.startswith(("ORC WARNING", "ORC BLOCKED", "ORC NOTE")):
             lines.append(text)
-    if done.returncode == 3:
-        lines.append(
-            "Quota is BLOCKED (pio quota exit 3). Ask the user before delegating;"
-            " do NOT pass --force unless they say so."
-        )
-    if not lines:
-        lines.append(f"pio quota ran (exit {done.returncode}); no quota advisory to relay.")
     return lines
 
 
@@ -227,7 +287,7 @@ def build_context(verbs: list[str], quota_lines: list[str]) -> str:
         "casting a spell — route this through pi-orchestra instead of doing the "
         "heavy work inline."
     )
-    quota_block = "Quota (relayed verbatim):\n" + "\n".join(
+    quota_block = "Quota (from `pio quota`):\n" + "\n".join(
         f"  {line}" for line in quota_lines
     )
     return "\n\n".join([header, quota_block, *guidance(verbs)])
@@ -261,7 +321,63 @@ def run_hook(stdin_text: str) -> int:
     return 0
 
 
-# --- Self-test: parity with orc_pty::trigger (drift guard) -------------------
+# --- Self-test: grammar parity + quota-relay coverage (drift guard) -------------------
+
+
+def _quota_checks(expect) -> None:
+    """Every quota level must reach the conductor — one case per level.
+
+    The bug this guards: the relay used to grep `pio quota`'s *human* output for
+    `ORC WARNING`, which that command never prints (those come from
+    `quota::gate()` via `pio run`/`dispatch`), so a WARN-level quota was reported
+    as "no advisory to relay". Each level is checked twice — once through the
+    pure renderer, once end-to-end through a real subprocess against a stub
+    `pio`, so a regression in either layer fails here.
+    """
+    levels = {
+        "ok": ({"level": "ok", "five_hour_pct": 80.0, "weekly_pct": 90.0}, 0, "Quota ok"),
+        "warn": (
+            {"level": "warn", "five_hour_pct": 20.0, "weekly_pct": 90.0},
+            2,
+            "ORC WARNING",
+        ),
+        "block": (
+            {"level": "block", "five_hour_pct": 5.0, "weekly_pct": 90.0},
+            3,
+            "ORC BLOCKED",
+        ),
+        "unknown": (
+            {"level": "unknown", "reason": "no MiniMax key"},
+            4,
+            "ORC NOTE",
+        ),
+    }
+    for name, (payload, code, marker) in levels.items():
+        rendered = " ".join(quota_advisory(payload, code))
+        expect(f"quota {name} renders {marker}", marker in rendered)
+        expect(f"quota {name} never says 'no advisory'", "no quota advisory" not in rendered)
+    # Percentages must survive, not just the marker.
+    warn = " ".join(quota_advisory(levels["warn"][0], 2))
+    expect("quota warn keeps the numbers", "20%" in warn and "90%" in warn)
+    # Unparseable output must fall back to the exit code, never to calm.
+    expect("bad json + exit 2 still warns", "ORC WARNING" in " ".join(quota_advisory(None, 2)))
+    expect("bad json + exit 3 still blocks", "ORC BLOCKED" in " ".join(quota_advisory(None, 3)))
+    expect("bad json + odd exit is unknown", "ORC NOTE" in " ".join(quota_advisory(None, 9)))
+    expect("missing pio is honest", "not found" in " ".join(quota_relay(None)))
+
+    # End-to-end: a stub `pio` proves the subprocess path parses --json output.
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, (payload, code, marker) in levels.items():
+            stub = os.path.join(tmp, f"pio-{name}")
+            with open(stub, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    f"printf '%s' '{json.dumps(payload)}'\n"
+                    f"exit {code}\n"
+                )
+            os.chmod(stub, 0o755)
+            relayed = " ".join(quota_relay(stub))
+            expect(f"quota {name} end-to-end via stub pio", marker in relayed)
 
 
 def _selftest() -> int:
@@ -291,13 +407,15 @@ def _selftest() -> int:
     expect("blank quiet", detect("") == [] and detect("   ") == [])
     expect("prompt+redelegate quiet", detect("\u276f redelegate: nope") == [])
 
+    _quota_checks(expect)
+
     failures = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}")
     if failures:
         print(f"selftest: {len(failures)} FAILED", file=sys.stderr)
         return 1
-    print(f"selftest: all {len(checks)} grammar checks passed")
+    print(f"selftest: all {len(checks)} grammar + quota checks passed")
     return 0
 
 
