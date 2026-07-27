@@ -1082,3 +1082,81 @@ hand back to the implementer.
 - Next: **#11** (worktree isolation + independent review + receipt), then #10
   (standalone Claude Code/Codex integrations, which #8 just unblocked). Start
   #13 before more TUI churn lands.
+
+## Session — 2026-07-26 (code-puppy): #10 standalone integrations v2 (Claude hook + Codex block v2)
+- Worked issue #10 (V1-8) on `issue-10-standalone-integrations` from fresh `main`
+  (HEAD `0c9908a`, the #8/PR-26 merge) — so the V1-6 dependency is satisfied and
+  #10 was unblocked. Harness-side only; allowed paths `skills/ codex/ shell/
+  install.sh uninstall.sh docs/`. No Rust source touched.
+- New Claude Code `UserPromptSubmit` hook `shell/claude-userpromptsubmit-hook.py`
+  (python3, stdlib only). Per the spec, closed UIs can't be re-colored, so the
+  standalone answer is a hook/acknowledgment: on every prompt it detects the
+  spell grammar, and on a hit it (1) runs a bounded `pio quota --json` and
+  renders the reported level as the `ORC WARNING/BLOCKED/NOTE` advisory the
+  skills promise, and (2) injects the exact `pio orch`/MCP invocation for the
+  verb. Always exits 0 (never eats a prompt).
+- Grammar is a faithful port of `orc_pty::trigger` (word-boundary + required
+  colon, case-sensitive, mid-line, repeatable; `redelegate:`/`delegated:`/
+  `Delegate:`/colon-less `delegate` stay quiet). The Rust crate can't be imported
+  from a hook, so drift is guarded by a built-in `--selftest` (22 checks, all
+  green) — flagged as the one intentional duplication.
+- AC2 text: updated `skills/pi-delegate/SKILL.md` (standalone `delegate:` +
+  `orch_delegate`/`pio orch delegate`), `skills/orchestrate/SKILL.md` (the seven
+  `orch_*` verbs/tools), a new `skills/deliberate/SKILL.md` (honest “panel is
+  V2, not available” fallback), and `codex/AGENTS-block.md` → v2 with a leading
+  Trigger-grammar section covering all three verbs + the normalized surface +
+  `pio mcp print-config`. Single-harness honesty and confirmed-delivery kept.
+- AC1: `install.sh` links the hook into a pi-orchestra-OWNED dir
+  (`~/.claude/pi-orchestra/`) and prints a manual `settings.json` snippet — it
+  never edits protected config; adds `deliberate` to the skill loop.
+  `uninstall.sh` removes the hook (own symlink only) + the dir if empty + the
+  `deliberate` skill. Verified on an isolated HOME: two installs → every marker
+  count == 1 and the three protected-config SHA-256s identical before==after;
+  uninstall leaves protected config byte-identical and no dangling links. The
+  Rust `install.rs` test (outside allowed paths) still passes unchanged.
+- AC3: `docs/notes/2026-07-26-standalone-trigger-hook-manual-test.md` documents
+  registration + a reproducible non-interactive simulation (real captured
+  output; the relayed `MiniMax quota:` line proves the hook invoked `pio`) + the
+  live Claude Code procedure + `--selftest`.
+- AC4 gates from rust/ (Rust 1.97): fmt clean; clippy --workspace
+  --all-targets -D warnings clean; test --workspace 45 suites / 0 failed; doc
+  -D warnings clean; build --release --locked clean.
+- Pushing the branch and commenting per-AC evidence; LOG.md #10 -> eyes + branch
+  and a ship-log entry added in this branch.
+
+## Session — 2026-07-27 (Claude): #10 review round + fix round
+
+- Adversarial review of `issue-10-standalone-integrations` (see the verdict on
+  issue #10). All five gates re-run green; AC1 install/uninstall reproduced in an
+  isolated HOME; every documented `pio session`/`orch`/`mcp` invocation executed
+  for real; and the Python↔Rust grammar port checked by building a harness over
+  `orc_pty::trigger::scan_line` and differentially fuzzing **4,019 cases**
+  (incl. Unicode boundary chars chosen to split Rust's `char::is_alphanumeric`
+  from Python's `str.isalnum()`) — **zero mismatches**, keyword and offset.
+- **Blocker found and fixed: the quota relay never fired.** The hook grepped
+  `pio quota`'s human output for `ORC WARNING`/`ORC BLOCKED`/`ORC NOTE`, but
+  those markers are produced by `quota::gate()` and only reach the user through
+  `pio run`/`dispatch` — `Commands::Quota` prints a different report entirely.
+  Measured: at level **warn** (exit 2) the conductor was told *"no quota advisory
+  to relay"*, a confident false negative on the one guarantee AC2 names. Only
+  the `unknown` branch worked, and that was the only branch the original
+  evidence demonstrated. The relay now drives off `pio quota --json` (level is
+  authoritative from `orc_core::quota`; the hook only renders it), carries the
+  real 5-hour/weekly percentages, and falls back to the exit code (2→WARNING,
+  3→BLOCKED, else→NOTE) when output is unparseable — never to silence.
+- `--selftest` grew from 22 to 39 checks: one case per quota level through the
+  pure renderer **and** end-to-end through a real subprocess against a stub
+  `pio`, plus unparseable-output fallbacks. This is the regression guard.
+- Corrected the three docs that asserted the impossible behavior (the manual-test
+  note, `skills/deliberate/SKILL.md`, the LOG.md ship-log entry) and dropped the
+  "read-only" claim for `pio quota` — it writes `quota.json` and appends
+  `quota_history.jsonl`.
+- Also fixed a **pre-existing** install bug surfaced by AC1's "run twice,
+  identical result": `~/.codex/AGENTS.md` grew a blank line on every install
+  (measured on `origin/main` too: 3036→3038→3040 bytes). The owned-block refresh
+  now trims trailing blanks before re-appending; verified byte-identical across
+  four consecutive installs.
+- Rebased onto `main` (`a0fa88a`) to clear the LOG.md/progress.md conflicts;
+  #8 stays ✅ merged and both progress entries survive.
+- Next: Mrigesh tests locally (`./install.sh`, register the hook, type
+  `delegate: …`) and merges; then #11.

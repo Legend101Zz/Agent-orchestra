@@ -49,6 +49,18 @@ remove_skill() {
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 remove_skill pi-delegate
 remove_skill orchestrate
+remove_skill deliberate
+
+# Claude Code trigger hook (issue #10): remove only our own symlink, then the
+# owned dir if it is now empty. A user file at that path is left untouched.
+HOOK_LINK="$HOME/.claude/pi-orchestra/claude-userpromptsubmit-hook.py"
+HOOK_SRC="$ROOT/shell/claude-userpromptsubmit-hook.py"
+if [ -L "$HOOK_LINK" ] && [ "$(readlink "$HOOK_LINK")" = "$HOOK_SRC" ]; then
+  rm "$HOOK_LINK"
+  rmdir "$HOME/.claude/pi-orchestra" 2>/dev/null || true
+elif [ -e "$HOOK_LINK" ] || [ -L "$HOOK_LINK" ]; then
+  echo "kept user file $HOOK_LINK" >&2
+fi
 
 RC="$HOME/.zshrc"
 if grep -qF '# >>> pi-orchestra >>>' "$RC" 2>/dev/null; then

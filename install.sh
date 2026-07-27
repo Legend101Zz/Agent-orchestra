@@ -139,27 +139,54 @@ install_skill() {
   fi
   ln -s "$source" "$destination"
 }
-for skill in pi-delegate orchestrate; do
+for skill in pi-delegate orchestrate deliberate; do
   install_skill "$skill"
 done
+
+echo "==> Claude Code trigger hook"
+# The hook lives in a pi-orchestra-owned dir and is registered by the user in
+# their OWN ~/.claude/settings.json — install.sh never edits protected config,
+# so the checksums below stay identical across runs (issue #10 AC1).
+HOOK_SRC="$ROOT/shell/claude-userpromptsubmit-hook.py"
+HOOK_DIR="$HOME/.claude/pi-orchestra"
+HOOK_LINK="$HOOK_DIR/claude-userpromptsubmit-hook.py"
+if [ -f "$HOOK_SRC" ]; then
+  mkdir -p "$HOOK_DIR"
+  if [ -e "$HOOK_LINK" ] && [ ! -L "$HOOK_LINK" ]; then
+    echo "    kept user file $HOOK_LINK" >&2
+  else
+    ln -sfn "$HOOK_SRC" "$HOOK_LINK"
+    echo "    linked $HOOK_LINK"
+    echo "    enable it by adding to ~/.claude/settings.json (pi-orchestra never edits it):"
+    echo '      "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command",'
+    echo "        \"command\": \"$HOOK_LINK\" } ] } ] }"
+  fi
+fi
 
 echo "==> Codex AGENTS.md block"
 AGENTS="$HOME/.codex/AGENTS.md"
 if [ -f "$ROOT/codex/AGENTS-block.md" ]; then
   mkdir -p "$HOME/.codex"
   touch "$AGENTS"
+  # Trim trailing blank lines before re-appending: the owned block carries its
+  # own leading separator, so without this every refresh left the old separator
+  # behind and grew the user's file by a blank line per install (issue #10
+  # review). Command substitution strips trailing newlines; printf restores one.
+  trim_trailing_blanks() {
+    local text
+    text="$(cat "$1")"
+    printf '%s\n' "$text" > "$1.pi-orchestra.trim" && mv "$1.pi-orchestra.trim" "$1"
+  }
+  cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
   if ! grep -qF '<!-- pi-orchestra:begin -->' "$AGENTS"; then
-    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
-    printf '\n' >> "$AGENTS"
-    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
-    echo "    appended (backup: $AGENTS.pi-orchestra.bak)"
+    ACTION="appended"
   else
-    cp "$AGENTS" "$AGENTS.pi-orchestra.bak"
     sed -i '' '/<!-- pi-orchestra:begin -->/,/<!-- pi-orchestra:end -->/d' "$AGENTS"
-    printf '\n' >> "$AGENTS"
-    sed -n '1,$p' "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
-    echo "    refreshed owned block (backup: $AGENTS.pi-orchestra.bak)"
+    ACTION="refreshed owned block"
   fi
+  trim_trailing_blanks "$AGENTS"
+  cat "$ROOT/codex/AGENTS-block.md" >> "$AGENTS"
+  echo "    $ACTION (backup: $AGENTS.pi-orchestra.bak)"
 fi
 
 echo "==> protected-config checksums"

@@ -26,7 +26,7 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
-| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ⬜ *unblocked* | — |
+| [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | 🧪 | issue-10-standalone-integrations ([PR #27](https://github.com/Legend101Zz/Agent-orchestra/pull/27)) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
@@ -133,6 +133,27 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-26 — Trigger words work outside pi-orchestra too, issue #10 (code-puppy)
+Now you can type `delegate:`, `orchestrate:`, or `deliberate:` in a plain Claude
+Code or Codex session — with no pi-orchestra TUI running — and the harness knows
+to route the work through `pio` instead of doing it all itself. A small Claude
+Code hook watches what you type; the moment you cast one of those spells it
+checks your quota — telling the assistant the real 5-hour/weekly numbers and
+warning it off when you're low or blocked — and hands it the exact `pio`/MCP
+commands to delegate the job. The matching
+skill/AGENTS text was refreshed so Codex and Claude give the same instructions,
+and `deliberate:` is answered honestly — the judged “panel” is a later (V2)
+feature, so it says so and offers a real single-worker or self-review fallback
+instead of faking it. What I did NOT do: wire the hook into your Claude settings
+for you (that stays a one-line, opt-in copy-paste so pi-orchestra never edits
+protected config), and I didn’t build the V2 panel itself. This is the last of
+the standalone-integration work for V1; it leans on the seven `orch_*` tools
+from #8.
+
+> **Review verdict (2026-07-27, Claude): 🔨 FIX** — all 5 gates green and the install/uninstall AC1 evidence reproduces exactly (protected-config checksums identical, two installs → identical tree), every documented `pio orch`/`session`/`mcp` invocation really exists and runs, and the Python↔Rust grammar port survived a 4,019-case differential fuzz against `orc_pty::trigger` with **zero** mismatches (incl. Unicode boundary chars) — but **the quota relay doesn't work**: the hook greps `pio quota` for `ORC WARNING/BLOCKED/NOTE`, and `pio quota` never emits those (they come from `quota::gate()` via `pio run`/`dispatch`). Measured: at level **warn** the conductor is told *"no quota advisory to relay"* — a confident false negative on the one guarantee AC2 names; only the `unknown` branch works, which is the only branch the evidence demonstrated. Three docs assert the same impossible behavior, `pio quota` is called "read-only" but writes `quota.json` + `quota_history.jsonl`, and the branch **does not merge** (conflicts in LOG.md/progress.md; as-is it would regress #8 from ✅ back to 🧪). 6-item fix list on the issue.
+
+> **Fix round + re-review (2026-07-27, Claude): 🧪 ACCEPT.** All six items closed and re-verified by me, not by claim. The relay now drives off `pio quota --json` — measured against the real binary at every level: ok → `Quota ok — 5h 80% / weekly 90%`, **warn → `ORC WARNING: … 5h 20% / weekly 90% … Consider pausing delegation.`**, block → `ORC BLOCKED` + "ask the user, do NOT --force", unknown → `ORC NOTE` with the reason; unparseable output falls back to the exit code, never to silence. `--selftest` 22 → **39 checks**, covering every level twice (pure renderer *and* end-to-end through a real subprocess against a stub `pio`). Three false docs corrected, "read-only" dropped (`pio quota` writes `quota.json` + `quota_history.jsonl`). Bonus: the pre-existing install bug where `~/.codex/AGENTS.md` gained a blank line every run is fixed — byte-identical across four consecutive installs. Rebased onto `a0fa88a`, conflicts gone, #8 stays ✅. All five gates green; the 4,019-case grammar fuzz re-run clean after the edits. Ready for your local test + merge.
 
 ### 2026-07-25 — One small toolset every brain can drive, issue #8 (code-puppy)
 Any conductor — a Claude Code or Codex session, a script, or a person at the
