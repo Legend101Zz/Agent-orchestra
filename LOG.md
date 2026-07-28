@@ -26,35 +26,31 @@ ship-log entries are part of finishing an issue.*
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
-| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | 🧪 | `issue-30-background-dispatch` ([PR #31](https://github.com/Legend101Zz/Agent-orchestra/pull/31)) |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 
-**#10 + #28 merged (2026-07-27, PRs #27 and #29) — triggers now work outside
-pi-orchestra, and delegation finally delivers.** You can type `delegate:` /
-`orchestrate:` / `deliberate:` in a plain Claude Code or Codex session and the
-harness routes the work through `pio`, relaying your real quota numbers first.
-Testing that live immediately exposed a worse bug underneath: **every
-non-trivial delegation had been failing since #8 merged.** pi-orchestra started
-a worker but only read its output *after* it exited, so any worker that said
-more than ~64KB filled the pipe, blocked mid-sentence, and got killed as a bogus
-"DISPATCH TIMEOUT" — the worker was fine the whole time. Fixed, with regression
-tests that fail on the old code by construction. A second live test caught the
-sequel: the capture kept the *first* 16KB, which for a JSON worker is header and
-thinking, so the answer at the end was thrown away and the brain redid the work
-itself. Now a head+tail window keeps the conclusion.
+**#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
+to be.** `pio orch delegate` returns the moment the worker has its brief instead
+of blocking for the whole run, so the expensive brain stays free; `orch_status`
+polls and `orch_await` blocks for the answer. The concurrency cap from #7
+survives detachment — the durable slot lease is handed to a detached supervisor
+that holds it for the worker's *real* lifetime, so `max_parallel_workers` finally
+means something and the bench can actually run more than one worker. A worker
+whose supervisor dies is reconciled to an honest `orphaned` state, its process
+killed and its slot freed, rather than wedging the board. And the record now
+stores the worker's *answer* plus token usage instead of a JSON firehose.
+Together with #28 (the pipe-buffer deadlock) this closes out a run of three
+defects that had made delegation useless for real work since #8 landed.
 
-**Next: #30**, then #11. #30 finishes what #28 deliberately left alone — the
-conductor still blocks for a worker's whole run (so `max_parallel_workers: 3` is
-unreachable and the "bench of workers" is a bench of one), and the record still
-stores raw transport JSON instead of the worker's answer. Do it **before #11**:
-both rewrite `dispatch.rs`, and #11's per-check report depends on how a dispatch
-reaches its terminal state. Also still open by choice: `render_brief` is wired
-into `orch delegate` but not `dispatch send`. Ready set: **#30**, then **#11**,
-**#12** (single-harness honest mode), **#13** anytime — start #13 before more TUI
-churn lands to avoid merge pain.**
+**Next: #11**, then #12 and #14; #13 anytime. #11 (worktree isolation +
+independent review + receipt) rewrites `dispatch.rs`, which is exactly why it
+was sequenced after #30 — its per-check report depends on how a dispatch reaches
+its terminal state, and that shape is now settled. Still open by choice:
+`render_brief` is wired into `orch delegate` but not `dispatch send`. Start #13
+before more TUI churn lands to avoid merge pain.**
 
 ## Prompts you run
 
@@ -155,6 +151,8 @@ receipt; those remain issue #11, which this now unblocks.
 > **Fix applied (2026-07-27, code-puppy):** `orch_await` and `orch_status` now elevate the newest terminal execution failure into the same top-level note, naming the execution state, failure kind, exit code, detail, task, and next action; successful terminal executions remain quiet. A real MCP stdio regression fixture confirms delivery, hits the one-second worker bound, and proves both tools return the same timeout/exit-124 note. All five gates are green.
 >
 > **Re-review (2026-07-27, Claude): 🧪 ACCEPT.** Fix verified live on both surfaces (`await` and `status` return the same note naming failure kind, exit 124, task and next action) and mutation-tested — restoring `note: None` fails the new MCP stdio test and only that test. Checked the harder half too, that it does not over-fire: a successful execution, a genuine legacy record with no `execution_status` key, and a stale failure followed by a successful retry are all silent; `list_dispatches` really is newest-first (`updated_at` descending), so the retry cannot be shadowed. All 5 gates re-run green on `b633c80`, with #28 flood 4/4, #30 background 4/4, #7 quota 5/5 and the hook selftest 41/41 intact. Scope is four files and the supervisor is untouched. Ready for local test + merge.
+>
+> **Merged 2026-07-28 (PR #31).** Mrigesh tested live in a real Claude Code session: `delegate:` confirmed delivery, reported the worker still running, then awaited its answer — on a third harness (`hermes`), which had not been exercised before. Answer independently re-verified against a local grep.
 
 ### 2026-07-26 — Trigger words work outside pi-orchestra too, issue #10 (code-puppy)
 Now you can type `delegate:`, `orchestrate:`, or `deliberate:` in a plain Claude

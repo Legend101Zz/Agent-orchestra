@@ -36,26 +36,22 @@ record. (Issue numbers are filled in as issues are created.)
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
-| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 |
+| [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10 and #28 are merged.** #10
-(2026-07-27, PR #27) gives the trigger grammar to standalone Claude Code and
-Codex sessions; #28 (2026-07-27, PR #29) fixed the pipe-buffer deadlock that had
-made **every non-trivial delegation fail since #8 merged** — `invoke_harness`
-only drained the worker's pipes after it exited, so a worker past the ~64KB
-buffer blocked in `write()`, never exited, and was killed as a false
-`DISPATCH TIMEOUT`. Found by exercising #10's hook against a real worker;
-regression tests fail on the old code by construction.
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28 and #30 are merged.**
+The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
+that had made every non-trivial delegation fail since #8; #30 (PR #31) then
+separated *delivery* from *execution* — `orch delegate` returns once the brief is
+received, a detached supervisor holds the #7 slot lease for the worker's real
+lifetime, a dead supervisor reconciles to `orphaned` instead of wedging the
+board, and the record stores the extracted answer plus usage rather than raw
+transport JSON.
 
-**Next: #30, then #11.** #30 carries what #28 deliberately did not attempt: the
-conductor still blocks for the worker's entire run, so `max_parallel_workers`
-is unreachable and the bench is a bench of one, and the record still stores raw
-transport JSON rather than the worker's answer (`runner::extract_text` already
-solves the latter for `pio run`). The blocker there is `spawn_guard::SlotLease`,
-which releases on `Drop` — returning early would silently defeat the #7
-concurrency cap, so lease ownership has to move into a detached supervisor.
-**Do #30 before #11:** both rewrite `dispatch.rs`, and #11's per-check report
-depends on how a dispatch reaches its terminal state.
+**Next: #11**, then **#12** and **#14**; **#13** anytime. #11 (worktree isolation
++ independent review + receipt) was deliberately sequenced after #30 because both
+rewrite `dispatch.rs` and #11's per-check report depends on how a dispatch
+reaches its terminal state — that shape is now settled, so #11 can build on it
+rather than around it.
 
 Still open by choice: `render_brief` is wired into `orch delegate` but not
 `dispatch send` (`orch` is the canonical path). Parallel-safe: #12 and #13 from

@@ -1292,3 +1292,29 @@ hand back to the implementer.
   note naming `failed`, `timeout`, exit 124, and the task; the successful path
   remains pinned to `note: null`.
 - Re-ran all five required Rust gates after the fix; all pass.
+
+## Session — 2026-07-28 (Claude): #30 merged, dashboards updated
+
+- Mrigesh merged **PR #31**; `main` is `77f069b` and issue #30 auto-closed.
+- **Live acceptance by the owner, in a real Claude Code session:** a `delegate:`
+  trigger confirmed delivery, reported the worker still running, then awaited its
+  answer — exercising the new delegate → status → await flow end to end. Notably
+  it ran on **`hermes`**, a third harness neither the implementer's evidence nor
+  my review had exercised (they used `pi-m3`, `codex` and shell fixtures), so the
+  detached-supervisor path is now demonstrated across three real harnesses. The
+  answer (zero TODOs in `orc-core`) was independently re-verified with a local
+  grep — matching my own earlier verification and the two harnesses before it.
+- LOG.md: #30 → ✅; the headline paragraph now covers #30 and names #11 as next
+  with the reason; a merged note was appended under the #30 ship-log entry
+  recording the live hermes test.
+- task_plan.md: #30 row marked merged; the order paragraph rewritten around
+  "#11 next", recording that #11 was sequenced after #30 on purpose because both
+  rewrite `dispatch.rs`.
+- Earlier the same run (commit `fe0670d`, on `main`): recorded the checkout move
+  to `/Volumes/Mrigesh SSD/Agent-orchestra` in docs/WORKFLOW.md + findings.md.
+  The move had silently dangled every symlink `install.sh` creates — the three
+  Claude skills and the `UserPromptSubmit` hook — so the trigger grammar had
+  stopped firing with no visible error. Repaired by re-running `./install.sh`
+  from the new location; verified all four links resolve and the hook responds.
+- **Remaining for V1: #11, #12, #13, #14.** Next: #11.
+
