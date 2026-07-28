@@ -13,12 +13,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::adapter::locate_executable;
 use crate::bench::{load_harness_registry, read_session};
 use crate::dispatch::DispatchRecord;
-use crate::invocation::resolve_worker_invocation;
-use crate::probe::probed_from;
 use crate::registry::{atomic_write_json, home, now_iso};
+use crate::single_harness::{alternate_model_profile, distinct_families, worker_capable};
 use crate::tasks::{Task, TaskActor, TaskCheckVerdict, TaskReportLink, attach_report, read_task};
 
 /// One independently judged acceptance check.
@@ -166,6 +164,7 @@ pub fn choose_reviewer(
     executor: &str,
     preferred: Option<&str>,
     capable: &[String],
+    registry: &crate::bench::HarnessRegistry,
 ) -> Result<ReviewerSelection> {
     let unique = capable
         .iter()
@@ -178,19 +177,42 @@ pub fn choose_reviewer(
     if let Some(preferred) = preferred
         && preferred != executor
         && unique.contains(preferred)
+        && distinct_families(registry, executor, preferred)
     {
         return Ok(ReviewerSelection {
             reviewer: preferred.to_owned(),
             self_review: false,
         });
     }
-    if let Some(reviewer) = capable
-        .iter()
-        .find(|candidate| candidate.as_str() != executor && unique.contains(*candidate))
-    {
+    if let Some(reviewer) = capable.iter().find(|candidate| {
+        candidate.as_str() != executor
+            && unique.contains(*candidate)
+            && distinct_families(registry, executor, candidate)
+    }) {
         return Ok(ReviewerSelection {
             reviewer: reviewer.clone(),
             self_review: false,
+        });
+    }
+    let model_order = preferred
+        .filter(|preferred| unique.contains(*preferred))
+        .map_or_else(
+            || capable.to_vec(),
+            |preferred| {
+                std::iter::once(preferred.to_owned())
+                    .chain(
+                        capable
+                            .iter()
+                            .filter(|candidate| candidate.as_str() != preferred)
+                            .cloned(),
+                    )
+                    .collect()
+            },
+        );
+    if let Some(reviewer) = alternate_model_profile(registry, executor, &model_order) {
+        return Ok(ReviewerSelection {
+            reviewer,
+            self_review: true,
         });
     }
     if unique.contains(executor) {
@@ -206,7 +228,7 @@ pub fn choose_reviewer(
         .ok_or_else(|| anyhow!("REVIEW UNAVAILABLE: no capable reviewer"))?;
     Ok(ReviewerSelection {
         reviewer,
-        self_review: false,
+        self_review: true,
     })
 }
 
@@ -239,14 +261,7 @@ pub fn select_reviewer(task: &Task) -> Result<ReviewerSelection> {
             let Some(config) = registry.harnesses.get(key) else {
                 return false;
             };
-            config.roles.iter().any(|role| role == "worker")
-                && locate_executable(&config.command).is_some()
-                && resolve_worker_invocation(
-                    config,
-                    &probed_from(&registry, &config.adapter),
-                    Some(cwd),
-                )
-                .is_ok()
+            worker_capable(&registry, config, Some(cwd))
         })
         .collect::<Vec<_>>();
     choose_reviewer(
@@ -255,6 +270,7 @@ pub fn select_reviewer(task: &Task) -> Result<ReviewerSelection> {
             .as_ref()
             .and_then(|contract| contract.reviewer.as_deref()),
         &capable,
+        &registry,
     )
 }
 
@@ -377,12 +393,14 @@ pub fn persist_report(
         .ok_or_else(|| anyhow!("task {task_id} has no executor"))?;
     let verdicts = parse_review_verdicts(&task, &reviewer_record.stdout)?;
     let reviewer = reviewer_record.harness.clone();
-    let review_mode = if reviewer == executor {
-        "self_review"
-    } else {
-        "independent"
-    }
-    .to_owned();
+    let registry = load_harness_registry()?;
+    let review_mode =
+        if reviewer == executor || !distinct_families(&registry, &executor, &reviewer) {
+            "self_review"
+        } else {
+            "independent"
+        }
+        .to_owned();
     let usage = aggregate_usage(dispatches);
     let mut receipts = dispatches
         .iter()
@@ -445,6 +463,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::bench::HarnessRegistry;
     use crate::contract::TaskContract;
     use crate::dispatch::DispatchRecord;
     use crate::registry::atomic_write_json;
@@ -530,20 +549,77 @@ mod tests {
 
     #[test]
     fn reviewer_selection_prefers_diversity_and_names_self_review_honestly() {
+        let registry = HarnessRegistry::default();
         let two = vec!["hermes".to_owned(), "codex".to_owned()];
         assert_eq!(
-            choose_reviewer("hermes", Some("hermes"), &two).unwrap(),
+            choose_reviewer("hermes", Some("hermes"), &two, &registry).unwrap(),
             ReviewerSelection {
                 reviewer: "codex".to_owned(),
                 self_review: false,
             }
         );
         assert_eq!(
-            choose_reviewer("hermes", None, &["hermes".to_owned()]).unwrap(),
+            choose_reviewer("hermes", None, &["hermes".to_owned()], &registry).unwrap(),
             ReviewerSelection {
                 reviewer: "hermes".to_owned(),
                 self_review: true,
             }
+        );
+    }
+
+    #[test]
+    fn reviewer_routes_between_models_only_when_two_distinct_models_are_registered() {
+        let mut registry = HarnessRegistry::default();
+        let mut duplicate = registry.harnesses["pi-m3"].clone();
+        duplicate.args = vec![
+            "--provider".to_owned(),
+            "minimax".to_owned(),
+            "--model".to_owned(),
+            "MiniMax-M3".to_owned(),
+        ];
+        registry
+            .harnesses
+            .insert("pi-m3-copy".to_owned(), duplicate);
+        let one_model = vec!["pi-m3-copy".to_owned(), "pi-m3".to_owned()];
+        assert_eq!(
+            choose_reviewer("pi-m3", None, &one_model, &registry).unwrap(),
+            ReviewerSelection {
+                reviewer: "pi-m3".to_owned(),
+                self_review: true,
+            },
+            "duplicate keys for one model must not engage model routing"
+        );
+
+        let mut second_model = registry.harnesses["pi-m3"].clone();
+        second_model.args = vec![
+            "--provider".to_owned(),
+            "minimax".to_owned(),
+            "--model".to_owned(),
+            "MiniMax-M2.7".to_owned(),
+        ];
+        registry.harnesses.insert("pi-m2".to_owned(), second_model);
+        let two_models = vec![
+            "pi-m3-copy".to_owned(),
+            "pi-m2".to_owned(),
+            "pi-m3".to_owned(),
+        ];
+        assert_eq!(
+            choose_reviewer("pi-m3", None, &two_models, &registry).unwrap(),
+            ReviewerSelection {
+                reviewer: "pi-m2".to_owned(),
+                self_review: true,
+            },
+            "a second configured model may route review but remains self-review"
+        );
+
+        let cross_harness = vec!["pi-m2".to_owned(), "hermes".to_owned(), "pi-m3".to_owned()];
+        assert_eq!(
+            choose_reviewer("pi-m3", None, &cross_harness, &registry).unwrap(),
+            ReviewerSelection {
+                reviewer: "hermes".to_owned(),
+                self_review: false,
+            },
+            "a genuinely different adapter family should win over model routing"
         );
     }
 

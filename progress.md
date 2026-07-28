@@ -1390,3 +1390,26 @@ hand back to the implementer.
   updated the same way (added #33 as a side-fix row, moved #11 into the merged
   list, rewrote the "Next" pointer to #12/#14/#13).
 - **Remaining for V1: #12, #13, #14.**
+
+## Session — 2026-07-28 (code-puppy): #12 single-harness honest mode
+
+- Refreshed `main`, confirmed dependencies #4 and #6 are closed, and created
+  `issue-12-single-harness-mode`.
+- Added adapter-family detection so several registry keys for one CLI remain
+  one harness. HOME and `pio session create` now show the exact required
+  single-harness notice and switch to sequential-role copy instead of implying
+  a parallel worker bench.
+- Reviewer routing now prefers a genuinely different adapter family. With one
+  family it uses the executor again, or a different profile only when the
+  registry contains more than one distinct provider/model pair; either path is
+  persisted as `self_review`, never artificial diversity.
+- Added fixture acceptance coverage for the exact launch notice, HOME at
+  150x44 and 72x30 in both current themes, multi-model routing gates, and the
+  full isolated implementer -> reviewer -> final-report lifecycle with one
+  harness.
+- All five required Rust gates pass with isolated target
+  `/tmp/pio-issue12-target.A6gYjV`: formatting, strict Clippy, full workspace
+  tests, warning-free rustdoc, and locked release build.
+- Product/test edits stayed inside `orc-core/`, `orc-app/`, and `orc-cli/`.
+  `progress.md` and `LOG.md` are the two workflow-required bookkeeping
+  exceptions mandated by AGENTS.md and the issue execution prompt.

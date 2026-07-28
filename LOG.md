@@ -29,7 +29,7 @@ ship-log entries are part of finishing an issue.*
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 👀 | `issue-12-single-harness-mode` |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -147,6 +147,15 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-28 — One capable harness still completes the job honestly, issue #12 (code-puppy)
+With only one capable CLI, pi-orchestra now says exactly what is unavailable,
+then runs the implementer and reviewer roles in sequence with the same durable
+worktree, evidence, retries, and final receipt. If that CLI has more than one
+registered model, review may use a different model profile but still says
+`self_review`; duplicate model entries never manufacture diversity. I did NOT
+build parallel deliberation or pretend two profiles are two harnesses; this
+completes the honest fallback and unblocks the V1 launch README in issue #14.
 
 ### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
 `opencode` was fully wired to run (it has an invocation template, `spawn_guard`
