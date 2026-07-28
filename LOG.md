@@ -29,7 +29,7 @@ ship-log entries are part of finishing an issue.*
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 👀 | `issue-12-single-harness-mode` |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 🔨 | `issue-12-single-harness-mode` — fix: flaky new test fixture breaks the test gate; pin the exact spec sentence |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -157,6 +157,8 @@ profile but still says `self_review`; duplicate labels never manufacture
 diversity. I did NOT build parallel deliberation or guess account-selection
 flags; this completes the honest fallback and unblocks the V1 launch README in
 issue #14.
+
+**Review (Claude, PR #35 @ `63842ac`): 🔨 FIX** — production code is correct and byte-exact, but the new `single_harness.rs` fixture races itself on a shared temp path so `cargo test --workspace` fails (4/15 under load), and the mandated sentence can be inverted to claim parallel deliberation with the whole suite still green.
 
 ### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
 `opencode` was fully wired to run (it has an invocation template, `spawn_guard`
