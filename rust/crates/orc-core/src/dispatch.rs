@@ -36,7 +36,9 @@ use crate::ratelimit::BackoffPolicy;
 use crate::registry::{atomic_write_json, home, now_iso, pid_alive};
 use crate::runner::Usage;
 use crate::spawn_guard;
-use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery, record_queued};
+use crate::tasks::{
+    Task, TaskActor, TaskStatus, read_task, record_delivery, record_queued, record_review_delivery,
+};
 
 /// Maximum bytes of stdout captured from one dispatch invocation.
 pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
@@ -78,6 +80,29 @@ pub enum ExecutionStatus {
     Failed,
     /// The detached supervisor died and reconciliation terminated the worker.
     Orphaned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchPurpose {
+    Execute,
+    Review,
+}
+
+impl DispatchPurpose {
+    const fn persisted(self) -> Option<&'static str> {
+        match self {
+            Self::Execute => None,
+            Self::Review => Some("review"),
+        }
+    }
+
+    fn from_record(record: &DispatchRecord) -> Self {
+        if record.purpose.as_deref() == Some("review") {
+            Self::Review
+        } else {
+            Self::Execute
+        }
+    }
 }
 
 impl ExecutionStatus {
@@ -233,6 +258,10 @@ pub struct DispatchRecord {
     pub cwd: Option<String>,
     /// Persisted prompt body that was delivered.
     pub prompt: String,
+    /// Additive dispatch purpose; absent means executor work, `review` means
+    /// independent acceptance review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     /// Delivery state: pending, queued, confirmed receipt, or pre-delivery failure.
     pub status: String,
     /// Worker execution state after delivery (additive in issue #30).
@@ -292,6 +321,12 @@ impl DispatchRecord {
     #[must_use]
     pub fn is_queued(&self) -> bool {
         self.status == DeliveryStatus::Queued.as_str()
+    }
+
+    /// Whether this dispatch asks a reviewer to judge acceptance checks.
+    #[must_use]
+    pub fn is_review(&self) -> bool {
+        self.purpose.as_deref() == Some("review")
     }
 
     /// Whether the worker execution is still live or starting.
@@ -415,15 +450,39 @@ fn select_worker<'a>(registry: &'a HarnessRegistry, key: &str) -> Result<&'a Har
 /// The task's effective working directory: the materialized worktree when the
 /// task is isolated, otherwise the session cwd. Returns the first that exists on
 /// disk so a stale path never masquerades as a missing executable at spawn.
-fn effective_cwd(session: &BenchSession, task: &Task) -> Option<String> {
+fn effective_cwd(session: &BenchSession, task: &Task) -> Result<Option<String>> {
     let worktree = task
         .worktree
         .as_ref()
         .and_then(|worktree| worktree.path.clone());
-    [worktree, Some(session.cwd.clone())]
+    if task.contract.is_some() {
+        let metadata = task.worktree.as_ref().ok_or_else(|| {
+            anyhow!(
+                "ISOLATION REQUIRED: contracted task {} has no owned worktree",
+                task.id
+            )
+        })?;
+        if metadata.state != "ready" {
+            bail!(
+                "ISOLATION REQUIRED: contracted task {} worktree is {}",
+                task.id,
+                metadata.state
+            )
+        }
+        let path = worktree
+            .filter(|dir| Path::new(dir).is_dir())
+            .ok_or_else(|| {
+                anyhow!(
+                    "ISOLATION REQUIRED: contracted task {} worktree is missing",
+                    task.id
+                )
+            })?;
+        return Ok(Some(path));
+    }
+    Ok([worktree, Some(session.cwd.clone())]
         .into_iter()
         .flatten()
-        .find(|dir| Path::new(dir).is_dir())
+        .find(|dir| Path::new(dir).is_dir()))
 }
 
 /// Placeholder command line for a pre-invocation failure record.
@@ -464,6 +523,20 @@ fn shell_escape(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
+
+fn record_pre_delivery_failure(
+    record: &DispatchRecord,
+    actor: TaskActor,
+    detail: String,
+) -> Result<()> {
+    if record.is_review() {
+        record_review_delivery(&record.session, &record.task, actor, false, detail)?;
+    } else {
+        record_delivery(&record.session, &record.task, actor, None, detail)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn failure_message(kind: &DispatchFailureKind, harness: &str) -> String {
     match kind {
         DispatchFailureKind::UnknownHarness => format!("UNKNOWN HARNESS: {harness}"),
@@ -493,7 +566,22 @@ struct Reuse {
 /// describing the delivery state — which may be `queued` when the harness is at
 /// its concurrency cap (issue #7), in which case no worker was spawned.
 pub fn dispatch(request: &DispatchRequest) -> Result<DispatchRecord> {
-    deliver(request, &BackoffPolicy::production(), None)
+    deliver(
+        request,
+        &BackoffPolicy::production(),
+        None,
+        DispatchPurpose::Execute,
+    )
+}
+
+/// Dispatch a structured acceptance review from the same isolated worktree.
+pub fn dispatch_review(request: &DispatchRequest) -> Result<DispatchRecord> {
+    deliver(
+        request,
+        &BackoffPolicy::production(),
+        None,
+        DispatchPurpose::Review,
+    )
 }
 
 /// Dispatch with an explicit backoff schedule (tests inject a fast policy).
@@ -501,13 +589,14 @@ pub fn dispatch_with_policy(
     request: &DispatchRequest,
     policy: &BackoffPolicy,
 ) -> Result<DispatchRecord> {
-    deliver(request, policy, None)
+    deliver(request, policy, None, DispatchPurpose::Execute)
 }
 
 fn deliver(
     request: &DispatchRequest,
     policy: &BackoffPolicy,
     reuse: Option<Reuse>,
+    purpose: DispatchPurpose,
 ) -> Result<DispatchRecord> {
     if request.session.trim().is_empty() {
         bail!("dispatch session is required")
@@ -555,7 +644,7 @@ fn deliver(
     };
     let registry = load_harness_registry()?;
     let resolved_key = request.harness.clone();
-    let cwd = effective_cwd(&session, &task);
+    let cwd = effective_cwd(&session, &task)?;
     let config = match select_worker(&registry, &resolved_key) {
         Ok(config) => config,
         Err(error) => {
@@ -582,6 +671,7 @@ fn deliver(
                 },
                 cwd,
                 reuse.as_ref(),
+                purpose,
             );
         }
     };
@@ -607,6 +697,7 @@ fn deliver(
                 },
                 cwd,
                 reuse.as_ref(),
+                purpose,
             );
         }
     };
@@ -630,6 +721,7 @@ fn deliver(
                 },
                 cwd,
                 reuse.as_ref(),
+                purpose,
             );
         }
     };
@@ -645,6 +737,7 @@ fn deliver(
         &command_line,
         cwd.clone(),
         reuse.as_ref(),
+        purpose,
     );
 
     // Hold both the provider-facing harness cap and the session-wide
@@ -714,11 +807,9 @@ fn deliver(
             record.ended_at = Some(now_iso());
             record.updated_at = now_iso();
             write_dispatch(&record)?;
-            record_delivery(
-                &request.session,
-                &request.task,
+            record_pre_delivery_failure(
+                &record,
                 TaskActor::from(request.actor),
-                None,
                 format!(
                     "dispatch {} failed before delivery: {}",
                     record.id,
@@ -752,11 +843,9 @@ fn deliver(
             record.updated_at = now_iso();
             write_dispatch(&record)?;
             let _ = fs::remove_file(supervisor_spec_path(&request.session, &record.id));
-            record_delivery(
-                &request.session,
-                &request.task,
+            record_pre_delivery_failure(
+                &record,
                 TaskActor::from(request.actor),
-                None,
                 format!(
                     "dispatch {} failed before delivery: supervisor lost",
                     record.id
@@ -785,6 +874,7 @@ fn new_record(
     command_line: &str,
     cwd: Option<String>,
     reuse: Option<&Reuse>,
+    purpose: DispatchPurpose,
 ) -> DispatchRecord {
     let now = now_iso();
     // Re-delivering a queued record keeps its stable id and original creation
@@ -804,6 +894,7 @@ fn new_record(
         command_line: command_line.to_owned(),
         cwd,
         prompt: request.prompt.clone(),
+        purpose: purpose.persisted().map(str::to_owned),
         status: DeliveryStatus::Pending.as_str().to_owned(),
         execution_status: None,
         supervisor_pid: None,
@@ -844,8 +935,9 @@ fn persist_failure(
     spec: FailureSpec,
     cwd: Option<String>,
     reuse: Option<&Reuse>,
+    purpose: DispatchPurpose,
 ) -> Result<DispatchRecord> {
-    let mut record = new_record(request, harness, &spec.command_line, cwd, reuse);
+    let mut record = new_record(request, harness, &spec.command_line, cwd, reuse, purpose);
     record.status = DeliveryStatus::Failed.as_str().to_owned();
     record.execution_status = Some(ExecutionStatus::Failed.as_str().to_owned());
     record.failure_kind = Some(kind_label(&spec.kind).to_owned());
@@ -853,11 +945,9 @@ fn persist_failure(
     record.ended_at = Some(now_iso());
     record.updated_at = now_iso();
     write_dispatch(&record)?;
-    record_delivery(
-        &request.session,
-        &request.task,
+    record_pre_delivery_failure(
+        &record,
         TaskActor::from(request.actor),
-        None,
         format!(
             "dispatch {} failed: {}",
             record.id,
@@ -1014,7 +1104,8 @@ pub fn drain_queued_with_policy(
         };
         // A per-record failure (task no longer running, missing session, …)
         // leaves the record queued and visible rather than aborting the sweep.
-        if let Ok(updated) = deliver(&request, policy, Some(reuse))
+        let purpose = DispatchPurpose::from_record(&record);
+        if let Ok(updated) = deliver(&request, policy, Some(reuse), purpose)
             && !updated.is_queued()
         {
             drained.push(updated);

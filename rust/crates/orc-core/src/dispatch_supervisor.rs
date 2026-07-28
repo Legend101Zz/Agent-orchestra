@@ -30,7 +30,7 @@ use crate::ratelimit::{self, BackoffPolicy};
 use crate::registry::{atomic_write_json, now_iso};
 use crate::runner::{Usage, extract_adapter_event};
 use crate::spawn_guard::{self, SlotLease};
-use crate::tasks::{TaskActor, record_delivery};
+use crate::tasks::{TaskActor, record_delivery, record_review_delivery};
 
 /// Serialized backoff policy passed from the caller to the detached process.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -497,16 +497,21 @@ fn mark_started(spec: &SupervisorSpec, worker_pid: u32) -> Result<()> {
     record.updated_at = now_iso();
     write_dispatch(&record)?;
     if first_delivery {
-        record_delivery(
-            &record.session,
-            &record.task,
-            spec.actor,
-            Some(spec.confirmed_link.clone()),
-            format!(
-                "dispatch {} delivered to {}; worker running",
-                record.id, record.harness
-            ),
-        )?;
+        let detail = format!(
+            "dispatch {} delivered to {}; worker running",
+            record.id, record.harness
+        );
+        if record.is_review() {
+            record_review_delivery(&record.session, &record.task, spec.actor, true, detail)?;
+        } else {
+            record_delivery(
+                &record.session,
+                &record.task,
+                spec.actor,
+                Some(spec.confirmed_link.clone()),
+                detail,
+            )?;
+        }
     }
     Ok(())
 }
@@ -535,17 +540,22 @@ fn persist_terminal(
             let delivered = record.is_confirmed();
             if !delivered {
                 record.status = DeliveryStatus::Failed.as_str().to_owned();
-                record_delivery(
-                    &record.session,
-                    &record.task,
-                    spec.actor,
-                    None,
-                    format!(
-                        "dispatch {} failed before delivery: {}",
-                        record.id,
-                        super::dispatch::failure_message(&kind, &record.harness)
-                    ),
-                )?;
+                let detail = format!(
+                    "dispatch {} failed before delivery: {}",
+                    record.id,
+                    super::dispatch::failure_message(&kind, &record.harness)
+                );
+                if record.is_review() {
+                    record_review_delivery(
+                        &record.session,
+                        &record.task,
+                        spec.actor,
+                        false,
+                        detail,
+                    )?;
+                } else {
+                    record_delivery(&record.session, &record.task, spec.actor, None, detail)?;
+                }
             }
             record.execution_status = Some(ExecutionStatus::Failed.as_str().to_owned());
             record.failure_kind = Some(kind_label(&kind).to_owned());

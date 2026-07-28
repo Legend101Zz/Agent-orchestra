@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,6 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{HarnessRegistry, create_session, write_harness_registry};
+use orc_core::tasks::{TaskActor, TaskCheckVerdict, TaskReportLink, attach_report};
 use serde_json::Value;
 
 /// Serialize the process-global `ORC_HOME` writes these tests share, so
@@ -227,6 +229,34 @@ fn contract_flags_round_trip_through_add_show_and_brief() {
     assert_eq!(task["contract"]["budget"]["max_tokens"], 50000);
     assert_eq!(task["contract"]["budget"]["max_usd_cents"], 250);
 
+    attach_report(
+        &session.id,
+        &id,
+        TaskActor::Brain,
+        TaskReportLink {
+            path: "/tmp/report.json".to_owned(),
+            executor: "pi-m3".to_owned(),
+            reviewer: "claude".to_owned(),
+            review_mode: "independent".to_owned(),
+            verdicts: vec![
+                TaskCheckVerdict {
+                    check: "widget renders".to_owned(),
+                    verdict: "pass".to_owned(),
+                    evidence: "render fixture passed".to_owned(),
+                },
+                TaskCheckVerdict {
+                    check: "tests pass".to_owned(),
+                    verdict: "pass".to_owned(),
+                    evidence: "cargo test --workspace: ok".to_owned(),
+                },
+            ],
+            tokens_total: Some(42),
+            cost_usd: Some("0.001000".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    )
+    .unwrap_or_else(|error| panic!("attach report: {error}"));
+
     // AC2: `task show` displays the contract to a human.
     let shown = orc(&home, &["task", "show", &id, "--session", &session.id]);
     assert!(
@@ -241,6 +271,9 @@ fn contract_flags_round_trip_through_add_show_and_brief() {
         "no new dependencies",
         "widget renders",
         "claude",
+        "verdict 1: pass · widget renders",
+        "verdict 2: pass · tests pass",
+        "cargo test --workspace: ok",
     ] {
         assert!(shown.contains(needle), "show missing {needle:?}:\n{shown}");
     }

@@ -180,6 +180,41 @@ pub struct TaskWorktree {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// One acceptance-check verdict copied from the durable final report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskCheckVerdict {
+    /// Contract check exactly as assigned to the worker and reviewer.
+    pub check: String,
+    /// Stable lowercase verdict: `pass` or `fail`.
+    pub verdict: String,
+    /// Reviewer's concise evidence for the verdict.
+    pub evidence: String,
+}
+
+/// Compact final-report link embedded additively in the task record.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskReportLink {
+    /// Durable report JSON path under `~/.orchestra/reports`.
+    pub path: String,
+    /// Harness that executed the task.
+    pub executor: String,
+    /// Harness that evaluated the acceptance checks.
+    pub reviewer: String,
+    /// `independent` or the honest `self_review` fallback.
+    pub review_mode: String,
+    /// One verdict for every contracted acceptance check.
+    pub verdicts: Vec<TaskCheckVerdict>,
+    /// Exact total tokens when every receipt reported usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_total: Option<u64>,
+    /// Summed exact cost when every receipt reported cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<String>,
+    /// Unknown future fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// Plain additive JSON task record.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Task {
@@ -209,6 +244,9 @@ pub struct Task {
     /// Acceptance-driven contract v2, when one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract: Option<TaskContract>,
+    /// Final review receipt once every acceptance check has a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<TaskReportLink>,
     /// Creation timestamp.
     pub created_at: String,
     /// Last mutation timestamp.
@@ -734,6 +772,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
         }
         None => None,
     };
+    let requires_isolation = new.isolate || contract.is_some();
     let now = now_iso();
     let mut task = Task {
         id,
@@ -744,7 +783,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
         depends_on: new.depends_on,
         assignee: None,
         assignee_run: None,
-        worktree: new.isolate.then(|| TaskWorktree {
+        worktree: requires_isolation.then(|| TaskWorktree {
             state: "requested".to_owned(),
             path: None,
             branch: None,
@@ -753,6 +792,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
             extra: BTreeMap::new(),
         }),
         contract,
+        report: None,
         created_at: now.clone(),
         updated_at: now,
         history: Vec::new(),
@@ -767,10 +807,26 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
         None,
     );
     write_task(&task)?;
-    if new.isolate {
+    if task.worktree.is_some() {
         materialize_worktree(&mut task, actor)?;
         write_task(&task)?;
     }
+    Ok(task)
+}
+
+/// Attach a compact final-report link to a task without discarding future fields.
+pub fn attach_report(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    report: TaskReportLink,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    task.report = Some(report);
+    append_history(&mut task, actor, "report_persisted", None, None, None);
+    write_task(&task)?;
     Ok(task)
 }
 
@@ -871,6 +927,33 @@ pub fn record_delivery(
         task.assignee_run = Some(link);
     }
     append_history(&mut task, actor, action, None, None, Some(detail));
+    write_task(&task)?;
+    Ok(task)
+}
+
+/// Record reviewer delivery without replacing the executor's run linkage.
+pub fn record_review_delivery(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    confirmed: bool,
+    detail: String,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    append_history(
+        &mut task,
+        actor,
+        if confirmed {
+            "review_delivery_confirmed"
+        } else {
+            "review_delivery_failed"
+        },
+        None,
+        None,
+        Some(detail),
+    );
     write_task(&task)?;
     Ok(task)
 }

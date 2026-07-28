@@ -10,6 +10,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -66,6 +67,25 @@ fn setup_fixture_with_worker(
 
     let cwd = home.join("cwd");
     fs::create_dir_all(&cwd).expect("create cwd");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&cwd)
+            .args(args)
+            .output()
+            .expect("run git fixture command");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "orc-mcp@example.invalid"]);
+    git(&["config", "user.name", "Orc MCP Test"]);
+    fs::write(cwd.join("README.md"), "fixture\n").expect("write fixture");
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "fixture"]);
 
     let _guard = lock();
     // SAFETY: fixture writes serialize through `lock()`; the spawned child reads
