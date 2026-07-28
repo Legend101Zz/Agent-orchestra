@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::{
-    HarnessConfig, create_session, list_sessions, load_harness_registry, write_harness_registry,
+    create_session, list_sessions, load_harness_registry, write_harness_registry,
 };
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
@@ -22,6 +22,7 @@ use orc_core::probe::{self, Capability, DoctorOptions};
 use orc_core::quota;
 use orc_core::registry::list_runs;
 use orc_core::runner::Mode;
+use orc_core::single_harness::{self, SINGLE_HARNESS_MESSAGE, provider_model_args};
 use orc_core::tasks::{self, NewTask, TaskActor, TaskStatus};
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -1287,22 +1288,6 @@ fn print_registered_profiles() -> Result<()> {
     Ok(())
 }
 
-/// Extract `(provider, model)` from a profile's `args` when they carry the
-/// `--provider <p> --model <m>` shape this module writes.
-fn provider_model_args(config: &HarnessConfig) -> Option<(&str, &str)> {
-    let mut iter = config.args.iter();
-    let mut provider = None;
-    let mut model = None;
-    while let Some(flag) = iter.next() {
-        match flag.as_str() {
-            "--provider" => provider = iter.next().map(String::as_str),
-            "--model" => model = iter.next().map(String::as_str),
-            _ => {}
-        }
-    }
-    provider.zip(model)
-}
-
 fn print_model_probe(key: &str, probe: &ModelProbe, json: bool) -> Result<i32> {
     match probe {
         ModelProbe::Models(models) => {
@@ -1615,10 +1600,21 @@ fn dispatch_session_command(command: SessionCommand) -> Result<i32> {
                 None => std::env::current_dir().context("resolve current directory")?,
             };
             let session = create_session(&brain, &workers, &cwd)?;
+            let registry = load_harness_registry()?;
+            let single = single_harness::detect(&registry, Some(&cwd)).is_some_and(|plan| {
+                plan.brain_profiles.contains(&brain)
+                    && !workers.is_empty()
+                    && workers
+                        .iter()
+                        .all(|worker| plan.worker_profiles.contains(worker))
+            });
             if json {
                 println!("{}", serde_json::to_string_pretty(&session)?);
             } else {
                 println!("{}", session.id);
+            }
+            if single {
+                eprintln!("{SINGLE_HARNESS_MESSAGE}");
             }
             Ok(0)
         }

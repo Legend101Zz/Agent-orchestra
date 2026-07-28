@@ -1390,3 +1390,43 @@ hand back to the implementer.
   updated the same way (added #33 as a side-fix row, moved #11 into the merged
   list, rewrote the "Next" pointer to #12/#14/#13).
 - **Remaining for V1: #12, #13, #14.**
+
+## Session — 2026-07-28 (code-puppy): #12 single-harness honest mode
+
+- Refreshed `main`, confirmed dependencies #4 and #6 are closed, and created
+  `issue-12-single-harness-mode`.
+- Added adapter-family detection so several registry keys for one CLI remain
+  one harness. HOME and `pio session create` now show the exact required
+  single-harness notice and switch to sequential-role copy instead of implying
+  a parallel worker bench.
+- Reviewer routing now prefers a genuinely different adapter family. With one
+  family it uses the executor again, or a different profile only when the
+  registry contains more than one distinct provider/model pair or explicit
+  additive `account` label; either path is persisted as `self_review`, never
+  artificial diversity.
+- Added fixture acceptance coverage for the exact launch notice, HOME at
+  150x44 and 72x30 in both current themes, multi-model routing gates, and the
+  full isolated implementer -> reviewer -> final-report lifecycle with one
+  harness.
+- All five required Rust gates pass with isolated target
+  `/tmp/pio-issue12-target.A6gYjV`: formatting, strict Clippy, full workspace
+  tests, warning-free rustdoc, and locked release build.
+- Product/test edits stayed inside `orc-core/`, `orc-app/`, and `orc-cli/`.
+  `progress.md` and `LOG.md` are the two workflow-required bookkeeping
+  exceptions mandated by AGENTS.md and the issue execution prompt.
+
+## Session — 2026-07-29 (code-puppy): #12 review fixes
+
+- Preserved the reviewer's `c101597` bookkeeping commit, then fixed both
+  blockers from the issue #12 adversarial review.
+- Made the two CLI acceptance fixtures collision-proof with distinct labels
+  and a process-local atomic sequence, so macOS clock granularity cannot make
+  concurrent tests share a Git repository.
+- Pinned the full mandated honesty sentence in test-owned literal text and
+  compared both the production constant and emitted stderr against it.
+- Verified the complete two-test target 15/15 times under active CPU load.
+  Temporarily changing `unavailable` to `available` made the exact-message test
+  fail, then the required production sentence was restored.
+- All five required Rust gates pass from `rust/` with isolated target
+  `/tmp/pio-issue12-reviewfix-target.igrvQm`, including the full workspace test
+  suite with no retry or exclusion.

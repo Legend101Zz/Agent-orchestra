@@ -19,6 +19,7 @@ pub mod registry;
 pub mod report;
 pub mod runner;
 pub mod search;
+pub mod single_harness;
 pub mod spawn_guard;
 pub mod tasks;
 

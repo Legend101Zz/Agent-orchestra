@@ -24,6 +24,7 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use orc_core::discovery::{self, HarnessDiscovery};
+use orc_core::single_harness::{self, SINGLE_HARNESS_MESSAGE, SingleHarnessPlan};
 use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
     PaneSnapshot, ServerResponse, SessionSummary, TaskSummary, TerminalColor,
@@ -156,6 +157,8 @@ pub struct HomeData {
     pub default_workers: Vec<String>,
     /// Configured worker bound.
     pub max_parallel_workers: usize,
+    /// Honest sequential fallback when exactly one adapter family is capable.
+    pub single_harness: Option<SingleHarnessPlan>,
     /// Ember or phosphor.
     pub theme: String,
     /// Reduced-motion preference.
@@ -343,6 +346,10 @@ impl BenchClient {
                 discovered: discovery::present_current(),
                 default_workers,
                 max_parallel_workers,
+                single_harness: orc_core::bench::read_harness_registry()
+                    .ok()
+                    .flatten()
+                    .and_then(|registry| single_harness::detect(&registry, None)),
                 theme,
                 reduced_motion,
                 leader_key,
@@ -783,24 +790,45 @@ struct NewSessionFlow {
 
 impl NewSessionFlow {
     fn new(home: &HomeData) -> Self {
+        let allowed_brains = home
+            .single_harness
+            .as_ref()
+            .map(|plan| &plan.brain_profiles);
+        let allowed_workers = home
+            .single_harness
+            .as_ref()
+            .map(|plan| &plan.worker_profiles);
         let brain_choices = home
             .harnesses
             .iter()
             .filter(|harness| harness.roles.iter().any(|role| role == "brain"))
+            .filter(|harness| allowed_brains.is_none_or(|profiles| profiles.contains(&harness.id)))
             .map(|harness| harness.id.clone())
             .collect();
         let worker_choices = home
             .harnesses
             .iter()
             .filter(|harness| harness.roles.iter().any(|role| role == "worker"))
+            .filter(|harness| allowed_workers.is_none_or(|profiles| profiles.contains(&harness.id)))
             .map(|harness| harness.id.clone())
-            .collect();
+            .collect::<Vec<_>>();
+        let mut selected_workers = home
+            .default_workers
+            .iter()
+            .filter(|worker| worker_choices.contains(*worker))
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected_workers.is_empty()
+            && let Some(worker) = worker_choices.first()
+        {
+            selected_workers.push(worker.clone());
+        }
         Self {
             step: FlowStep::Brain,
             brain_choices,
             brain_index: 0,
             worker_choices,
-            selected_workers: home.default_workers.clone(),
+            selected_workers,
             worker_index: 0,
             cwd: std::env::current_dir().map_or_else(
                 |_| ".".to_owned(),
@@ -960,6 +988,7 @@ const AVATAR_FRAMES: [&str; 8] = ["·", "✢", "✳", "✻", "✽", "✻", "✳"
 const AVATAR_STATIC: &str = "✻";
 const HOME_TITLE: &str = "PI ORCHESTRA";
 const HOME_TAGLINE: &str = "one conductor · a bench of workers · sessions survive detach";
+const SINGLE_HARNESS_TAGLINE: &str = "one harness · sequential roles · sessions survive detach";
 
 /// Render the animated masthead card and return the row below it.
 fn render_home_masthead(
@@ -967,6 +996,7 @@ fn render_home_masthead(
     area: Rect,
     theme: Theme,
     motion: Option<usize>,
+    single_harness: bool,
 ) -> u16 {
     let card_width = area.width.saturating_sub(4).clamp(24, 68);
     let card = Rect::new(
@@ -1005,7 +1035,14 @@ fn render_home_masthead(
     let masthead = Paragraph::new(vec![
         Line::from(title),
         Line::from(Span::styled(
-            format!("     {HOME_TAGLINE}"),
+            format!(
+                "     {}",
+                if single_harness {
+                    SINGLE_HARNESS_TAGLINE
+                } else {
+                    HOME_TAGLINE
+                }
+            ),
             Style::default().fg(theme.dim),
         )),
     ])
@@ -1191,6 +1228,31 @@ fn complete_cwd(input: &str) -> Option<String> {
     }
 }
 
+/// Wrap a notice on word boundaries without changing its words or punctuation.
+fn wrap_words(message: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in message.split_whitespace() {
+        let next_len = current
+            .chars()
+            .count()
+            .saturating_add(usize::from(!current.is_empty()))
+            .saturating_add(word.chars().count());
+        if !current.is_empty() && next_len > width {
+            lines.push(current);
+            current = String::new();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 fn render_home(
     frame: &mut Frame<'_>,
     state: &HomeState,
@@ -1200,7 +1262,8 @@ fn render_home(
 ) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
-    let body_top = render_home_masthead(frame, area, theme, motion);
+    let single_harness = state.data.single_harness.is_some();
+    let body_top = render_home_masthead(frame, area, theme, motion, single_harness);
     let text = Style::default().fg(theme.text);
     let dim = Style::default().fg(theme.dim);
     let focus = Style::default()
@@ -1209,10 +1272,28 @@ fn render_home(
     let mut lines: Vec<Line<'_>> = Vec::new();
     if let Some(flow) = &state.flow {
         lines.push(Line::styled(
-            "  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd",
+            if single_harness {
+                "  NEW SESSION   1 brain  →  2 worker profile  →  3 cwd"
+            } else {
+                "  NEW SESSION   1 brain  →  2 worker pool  →  3 cwd"
+            },
             dim,
         ));
         lines.push(Line::default());
+        if single_harness {
+            for line in wrap_words(
+                SINGLE_HARNESS_MESSAGE,
+                usize::from(area.width.saturating_sub(4)).max(1),
+            ) {
+                lines.push(Line::styled(
+                    format!("  {line}"),
+                    Style::default()
+                        .fg(theme.focus)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            lines.push(Line::default());
+        }
         match flow.step {
             FlowStep::Brain => {
                 lines.push(Line::styled("  STEP 1 / 3   CHOOSE BRAIN", text));
@@ -1229,7 +1310,14 @@ fn render_home(
                 ));
             }
             FlowStep::Workers => {
-                lines.push(Line::styled("  STEP 2 / 3   CHOOSE WORKER POOL", text));
+                lines.push(Line::styled(
+                    if single_harness {
+                        "  STEP 2 / 3   CHOOSE SEQUENTIAL WORKER PROFILE"
+                    } else {
+                        "  STEP 2 / 3   CHOOSE WORKER POOL"
+                    },
+                    text,
+                ));
                 for (index, worker) in flow.worker_choices.iter().enumerate() {
                     let selected = flow.selected_workers.contains(worker);
                     let chosen = index == flow.worker_index;
@@ -1243,7 +1331,11 @@ fn render_home(
                     ));
                 }
                 lines.push(Line::styled(
-                    "  space edits selection · enter continue",
+                    if single_harness {
+                        "  space edits profile selection · enter continue"
+                    } else {
+                        "  space edits selection · enter continue"
+                    },
                     dim,
                 ));
             }
@@ -1262,7 +1354,11 @@ fn render_home(
                     flow.selected_workers.join(", ")
                 };
                 lines.push(Line::styled(
-                    format!("  launching brain {brain} · workers {workers}"),
+                    if single_harness {
+                        format!("  launching brain {brain} · sequential profiles {workers}")
+                    } else {
+                        format!("  launching brain {brain} · workers {workers}")
+                    },
                     dim,
                 ));
                 lines.push(Line::styled(format!("  > {}", flow.cwd), focus));
@@ -1291,18 +1387,37 @@ fn render_home(
             ),
             Line::default(),
             Line::styled(
-                "  One expensive BRAIN plans and delegates; a bench of cheap",
+                if single_harness {
+                    "  One capable HARNESS plans, implements, then reviews in"
+                } else {
+                    "  One expensive BRAIN plans and delegates; a bench of cheap"
+                },
                 text,
             ),
             Line::styled(
-                "  WORKERS executes bounded briefs. Panes live in the orcd",
+                if single_harness {
+                    "  sequence with evidence. Panes live in the orcd daemon,"
+                } else {
+                    "  WORKERS executes bounded briefs. Panes live in the orcd"
+                },
                 text,
             ),
             Line::styled(
-                "  daemon, so sessions survive detach — close this client any",
+                if single_harness {
+                    "  so sessions survive detach — close this client any time"
+                } else {
+                    "  daemon, so sessions survive detach — close this client any"
+                },
                 text,
             ),
-            Line::styled("  time and reattach later.", text),
+            Line::styled(
+                if single_harness {
+                    "  and reattach later."
+                } else {
+                    "  time and reattach later."
+                },
+                text,
+            ),
             Line::default(),
             Line::styled(
                 "  FIRST KEYS",
@@ -1310,7 +1425,14 @@ fn render_home(
             ),
             Line::from(vec![
                 Span::styled("  n      ", focus),
-                Span::styled("new session — brain, worker pool, directory", text),
+                Span::styled(
+                    if single_harness {
+                        "new session — brain, sequential profile, directory"
+                    } else {
+                        "new session — brain, worker pool, directory"
+                    },
+                    text,
+                ),
             ]),
             Line::from(vec![
                 Span::styled("  enter  ", focus),
@@ -2923,9 +3045,10 @@ mod tests {
 
     use super::{
         AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HarnessDiscovery, HomeData, HomeState,
-        LeaderAction, LeaderKey, RawRouter, ScoreState, ShellState, ShellView, StageState, Theme,
-        ThemeName, baton_profile, render_help, render_home, render_score, render_shell,
-        render_stage, route_raw_mouse, route_runs_key, score_mouse,
+        LeaderAction, LeaderKey, NewSessionFlow, RawRouter, SINGLE_HARNESS_MESSAGE, ScoreState,
+        ShellState, ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton_profile,
+        render_help, render_home, render_score, render_shell, render_stage, route_raw_mouse,
+        route_runs_key, score_mouse,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use orc_pty::cells_from_stream;
@@ -3009,6 +3132,7 @@ mod tests {
                     discovered: Vec::new(),
                     default_workers: Vec::new(),
                     max_parallel_workers: 3,
+                    single_harness: None,
                     theme: "ember".to_owned(),
                     reduced_motion: false,
                     leader_key: "ctrl-g".to_owned(),
@@ -3409,6 +3533,7 @@ mod tests {
                     discovered: Vec::new(),
                     default_workers: Vec::new(),
                     max_parallel_workers: 3,
+                    single_harness: None,
                     theme: theme_name.as_str().to_owned(),
                     reduced_motion,
                     leader_key: "ctrl-g".to_owned(),
@@ -3655,6 +3780,7 @@ mod tests {
                         ],
                         default_workers: vec!["hermes".to_owned(), "pi-m3".to_owned()],
                         max_parallel_workers: 3,
+                        single_harness: None,
                         theme: "ember".to_owned(),
                         reduced_motion: false,
                         leader_key: "ctrl-b".to_owned(),
@@ -3755,6 +3881,82 @@ mod tests {
     }
 
     #[test]
+    fn single_harness_launch_message_snapshot_is_exact_and_sequential() {
+        for (width, height) in [(150, 44), (72, 30)] {
+            for theme_name in ThemeName::ALL {
+                let data = HomeData {
+                    sessions: Vec::new(),
+                    harnesses: vec![HarnessSummary {
+                        id: "solo".to_owned(),
+                        roles: vec!["brain".to_owned(), "worker".to_owned()],
+                        resumable: true,
+                        available: true,
+                        dispatch_verified: true,
+                    }],
+                    discovered: Vec::new(),
+                    default_workers: vec!["solo".to_owned()],
+                    max_parallel_workers: 3,
+                    single_harness: Some(SingleHarnessPlan {
+                        adapter: "solo".to_owned(),
+                        brain_profiles: vec!["solo".to_owned()],
+                        worker_profiles: vec!["solo".to_owned()],
+                        models: Vec::new(),
+                        accounts: Vec::new(),
+                    }),
+                    theme: theme_name.as_str().to_owned(),
+                    reduced_motion: false,
+                    leader_key: "ctrl-g".to_owned(),
+                };
+                let state = HomeState {
+                    flow: Some(NewSessionFlow::new(&data)),
+                    data,
+                    selected: 0,
+                    message: String::new(),
+                };
+                let backend = TestBackend::new(width, height);
+                let mut terminal = Terminal::new(backend).expect("single-harness HOME terminal");
+                terminal
+                    .draw(|frame| {
+                        render_home(frame, &state, Theme::from(theme_name), None, "ctrl-g")
+                    })
+                    .expect("render single-harness launch");
+                let rows = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .chunks(usize::from(width))
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.symbol())
+                            .collect::<String>()
+                            .trim()
+                            .to_owned()
+                    })
+                    .collect::<Vec<_>>();
+                let start = rows
+                    .iter()
+                    .position(|line| line.starts_with("One capable harness detected."))
+                    .expect("exact notice start");
+                let end = rows[start..]
+                    .iter()
+                    .position(|line| line.ends_with("self-review."))
+                    .map(|offset| start + offset)
+                    .expect("exact notice end");
+                assert_eq!(
+                    rows[start..=end].join(" "),
+                    SINGLE_HARNESS_MESSAGE,
+                    "{theme_name:?} {width}x{height}"
+                );
+                let screen = rows.join("\n");
+                assert!(screen.contains("one harness · sequential roles"));
+                assert!(screen.contains("worker profile"));
+                assert!(!screen.contains("a bench of workers"));
+                assert!(!screen.contains("independent review"));
+            }
+        }
+    }
+
+    #[test]
     fn availability_lines_render_discovered_section() {
         let harnesses = vec![HarnessSummary {
             id: "hermes".to_owned(),
@@ -3824,6 +4026,7 @@ mod tests {
             discovered: Vec::new(),
             default_workers: vec!["hermes".to_owned()],
             max_parallel_workers: 3,
+            single_harness: None,
             theme: "ember".to_owned(),
             reduced_motion: false,
             leader_key: "ctrl-g".to_owned(),
@@ -3874,6 +4077,7 @@ mod tests {
             discovered: Vec::new(),
             default_workers: Vec::new(),
             max_parallel_workers: 3,
+            single_harness: None,
             theme: "ember".to_owned(),
             reduced_motion: false,
             leader_key: "ctrl-g".to_owned(),
