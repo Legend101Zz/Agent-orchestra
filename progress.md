@@ -1243,3 +1243,52 @@ hand back to the implementer.
   acceptance check that the record must hold the worker's extracted answer
   (via `runner::extract_text`, already used by `pio run`) instead of raw
   transport JSON.
+
+## Session — 2026-07-27 (code-puppy): #30 background dispatch
+
+- Refreshed `main`, verified dependency #28 is closed/merged, and created
+  `issue-30-background-dispatch`. The requested `gh issue view` command could
+  not authenticate because this shell has no `GH_TOKEN`; the connected GitHub
+  app supplied the full issue body and confirmed there are no contract-changing
+  comments.
+- Added a detached hidden `pio _dispatch_exec` supervisor. `orch delegate`
+  transfers both the harness lease and a session-wide
+  `max_parallel_workers` lease to it, returns after the worker receives the
+  brief, and leaves completion/output to `orch status` and `orch await`.
+- Dispatch records now keep delivery and execution as separate additive states,
+  including supervisor/worker pids, start/end times, exact structured usage,
+  and terminal output. Dead-supervisor reconciliation kills a surviving worker
+  process group, marks the record `orphaned`, and releases only that dispatch's
+  slots.
+- Reused `runner::extract_text` / `extract_usage` through an adapter-aware event
+  helper: pi JSON transport persists the readable assistant answer and exact
+  usage, while unproven adapters retain the bounded raw head+tail fallback.
+- Acceptance tests prove a two-second worker does not block delegate; cap 1
+  queues until real exit and then auto-drains; cap 2 produces observed overlap;
+  a different process awaits and later reads the durable result; a SIGKILLed
+  supervisor reconciles and frees both slots; the 2 MB stdout/stderr flood
+  tests remain green; and a real pre-#30 record with an unknown field still
+  loads unchanged.
+- Updated MCP tool descriptions plus the standalone Claude/Codex skills, AGENTS
+  block, and hook guidance with the immediate-return → status/await flow and
+  the `--dispatch-timeout` (real worker bound) versus contract `--timeout`
+  (metadata) distinction. Hook self-test: 41/41 passing.
+- Live release-binary proof against `pi-m3` with quota at 99% in both windows:
+  delegate returned in 86 ms as `confirmed`/`running`; `orch await` then
+  persisted `ISSUE30_LIVE_ANSWER_OK` as plain stdout with `succeeded` and exit
+  0, rather than storing the JSON transport.
+- Final issue gates are green: fmt, clippy with warnings denied, the complete
+  workspace test suite, rustdoc with warnings denied, and locked release build.
+
+### Fix round — failed execution must speak over MCP
+
+- Preserved reviewer commit `066a7dc` and fixed its single blocker without
+  changing the background supervisor or dispatch lifecycle. The newest
+  terminal failed/orphaned execution now produces a top-level note for
+  `orch_status` and `orch_await`; an older failed attempt cannot shadow a newer
+  successful retry.
+- Added real MCP stdio coverage with a worker that confirms receipt and then
+  exceeds a one-second execution bound. Both observation tools return the same
+  note naming `failed`, `timeout`, exit 124, and the task; the successful path
+  remains pinned to `note: null`.
+- Re-ran all five required Rust gates after the fix; all pass.

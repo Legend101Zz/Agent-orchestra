@@ -21,7 +21,7 @@ use orc_core::bench::{
     HarnessConfig, HarnessRegistry, SessionPaneRecord, create_session, write_harness_registry,
     write_session,
 };
-use orc_core::orch::{self, DelegateRequest, OrchActor, Verb};
+use orc_core::orch::{self, AwaitRequest, DelegateRequest, OrchActor, Verb};
 use serde_json::{Value, json};
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -198,7 +198,7 @@ fn cli_delegate_matches_core_delegate() {
 
     // Core surface (ORC_HOME still points at core_home).
     let core_outcome = orch::delegate(DelegateRequest {
-        session: core_session,
+        session: core_session.clone(),
         harness: "fake-worker".to_owned(),
         title: Some("parity task".to_owned()),
         contract: serde_json::from_value(contract.clone()).unwrap(),
@@ -206,7 +206,15 @@ fn cli_delegate_matches_core_delegate() {
         ..Default::default()
     })
     .expect("core delegate");
-    let core_task = task_projection(&serde_json::to_value(&core_outcome.tasks[0]).unwrap());
+    let core_task_id = core_outcome.tasks[0].id.clone();
+    let core_terminal = orch::await_delegation(AwaitRequest {
+        session: core_session,
+        task: core_task_id,
+        timeout_sec: Some(10),
+        poll_interval_ms: Some(10),
+    })
+    .expect("await core delegate");
+    let core_task = task_projection(&serde_json::to_value(&core_terminal.tasks[0]).unwrap());
 
     // CLI surface (child bound to cli_home).
     let cli_outcome = pio_ok(
@@ -226,7 +234,21 @@ fn cli_delegate_matches_core_delegate() {
             "--json",
         ],
     );
-    let cli_task = task_projection(&cli_outcome["tasks"][0]);
+    let cli_task_id = cli_outcome["tasks"][0]["id"].as_str().expect("CLI task id");
+    let cli_terminal = pio_ok(
+        &cli_home,
+        &[
+            "orch",
+            "await",
+            cli_task_id,
+            "--session",
+            &cli_session,
+            "--timeout",
+            "10",
+            "--json",
+        ],
+    );
+    let cli_task = task_projection(&cli_terminal["tasks"][0]);
     drop(_guard);
 
     assert_eq!(
@@ -393,7 +415,7 @@ fn failed_delegation_is_announced_in_the_outcome() {
         "note must name the task left behind: {note}"
     );
 
-    // The happy path stays quiet — a note means "something needs your attention".
+    // A delivered background worker tells the conductor how to observe it.
     let confirmed = pio_ok(
         &home,
         &[
@@ -408,10 +430,22 @@ fn failed_delegation_is_announced_in_the_outcome() {
         ],
     );
     assert_eq!(confirmed["dispatches"][0]["status"], "confirmed");
-    assert!(
-        confirmed["note"].is_null(),
-        "a confirmed delivery must not carry a note: {confirmed}"
-    );
+    let execution = confirmed["dispatches"][0]["execution_status"]
+        .as_str()
+        .expect("confirmed delivery execution status");
+    assert!(matches!(execution, "running" | "succeeded"));
+    if execution == "running" {
+        let note = confirmed["note"].as_str().expect("running guidance note");
+        assert!(
+            note.contains("still running") && note.contains("orch_await"),
+            "a running background delivery must explain the next step: {confirmed}"
+        );
+    } else {
+        assert!(
+            confirmed["note"].is_null(),
+            "an already successful delivery should be quiet: {confirmed}"
+        );
+    }
 
     let _ = fs::remove_dir_all(&home);
 }

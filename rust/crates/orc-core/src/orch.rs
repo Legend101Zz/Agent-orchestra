@@ -22,7 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{TaskContract, render_brief};
-use crate::dispatch::{self, DeliveryStatus, DispatchActor, DispatchRecord, DispatchRequest};
+use crate::dispatch::{self, DispatchActor, DispatchRecord, DispatchRequest};
 use crate::registry::find_run;
 use crate::tasks::{self, NewTask, Task, TaskActor, TaskStatus};
 
@@ -109,13 +109,13 @@ impl Verb {
                 "Record a contracted task on the board (backlog) without delegating it yet."
             }
             Self::Delegate => {
-                "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given. Blocks until the worker finishes or the delivery bound elapses; that bound is the harness's dispatch_timeout_sec (120s when unset), NOT the contract's timeout field, which is metadata only. Agentic workers routinely need several minutes."
+                "Delegate a task to a worker harness: assign it, start it, and return as soon as the brief is delivered while the worker continues in the background. Poll with orch_status or block for output and exit code with orch_await. --dispatch-timeout bounds the background worker (harness dispatch_timeout_sec, 120s when unset); the contract's --timeout is metadata only."
             }
             Self::Status => {
                 "Read the durable state of one task (or the whole board) with its dispatch records."
             }
             Self::Await => {
-                "Block until a delegated task's newest delivery reaches a terminal state (confirmed or failed), or the timeout elapses."
+                "Block until a delegated task's newest worker reaches a terminal state, returning its answer, usage, and exit code, or until the await timeout elapses."
             }
             Self::Review => "Move a running task into review.",
             Self::Cancel => {
@@ -315,18 +315,44 @@ pub fn plan(request: PlanRequest) -> Result<OrchOutcome> {
     Ok(OrchOutcome::task_only(Verb::Plan, task))
 }
 
-/// Explain a delivery that did not confirm, for [`OrchOutcome::note`].
+/// Explain delivery and execution state that a conductor must not miss.
 ///
-/// The CLI signals a non-confirmed delegation through its exit code (1 for a
-/// failure, 75 for a queued dispatch). MCP has no such channel, so the same
-/// news has to travel in the outcome itself or a conductor reading only the
-/// top-level result would take a failed delegation for a successful one. The
-/// task is deliberately left in the status the delegation moved it to — that
-/// matches `dispatch send`, whose failed delivery is likewise recorded as
-/// history rather than rolled back — so the note says so explicitly.
+/// The CLI signals a non-confirmed delivery or failed execution through its
+/// exit code. MCP has no such channel, so the same news has to travel in the
+/// outcome itself or a conductor reading only the top-level result would take
+/// a failure for success. The task is deliberately left in the status the
+/// delegation moved it to, so every failure note says so explicitly.
 fn delivery_note(record: &DispatchRecord, task: &Task) -> Option<String> {
     if record.is_confirmed() {
-        return None;
+        if record.is_running() {
+            return Some(format!(
+                "dispatch {} delivered; worker is still running. Poll with orch_status or block with orch_await.",
+                record.id
+            ));
+        }
+        return matches!(
+            record.execution_status.as_deref(),
+            Some("failed" | "orphaned")
+        )
+        .then(|| {
+            let exit = record.exit_code.map_or_else(
+                || "no exit code".to_owned(),
+                |code| format!("exit code {code}"),
+            );
+            format!(
+                "dispatch {} delivered, but worker execution {} ({}, {}): {}. Task {} is left {} — inspect the captured output, then cancel or re-delegate it.",
+                record.id,
+                record.execution_status.as_deref().unwrap_or("failed"),
+                record.failure_kind.as_deref().unwrap_or("execution_failed"),
+                exit,
+                record
+                    .error
+                    .as_deref()
+                    .unwrap_or("worker execution did not succeed"),
+                task.id,
+                task.status
+            )
+        });
     }
     if record.is_queued() {
         // Queued is not a failure: the brief is still going to be delivered, so
@@ -347,6 +373,24 @@ fn delivery_note(record: &DispatchRecord, task: &Task) -> Option<String> {
         task.id,
         task.status
     ))
+}
+
+/// Report the newest terminal failure for each returned task.
+///
+/// Dispatch lists are newest-first. Looking up one record per task prevents an
+/// old failed attempt from making a later successful retry look unsuccessful.
+fn terminal_failure_note(tasks: &[Task], dispatches: &[DispatchRecord]) -> Option<String> {
+    let notes = tasks
+        .iter()
+        .filter_map(|task| {
+            dispatches
+                .iter()
+                .find(|record| record.task == task.id)
+                .filter(|record| record.is_terminal())
+                .and_then(|record| delivery_note(record, task))
+        })
+        .collect::<Vec<_>>();
+    (!notes.is_empty()).then(|| notes.join("\n"))
 }
 
 /// Delegate a task to a worker harness: assign, start, and dispatch its brief.
@@ -455,17 +499,18 @@ pub fn status(request: StatusRequest) -> Result<OrchOutcome> {
             dispatch::list_dispatches(&request.session)?,
         ),
     };
+    let note = terminal_failure_note(&tasks, &dispatches);
     Ok(OrchOutcome {
         verb: Verb::Status.tool_name().to_owned(),
         tasks,
         dispatches,
-        note: None,
+        note,
     })
 }
 
 /// Whether a dispatch record has reached a terminal delivery state.
 fn delivery_is_terminal(record: &DispatchRecord) -> bool {
-    record.is_confirmed() || record.status == DeliveryStatus::Failed.as_str()
+    record.is_terminal()
 }
 
 /// The newest dispatch for one task, if any (`list_dispatches` is newest-first).
@@ -496,16 +541,20 @@ pub fn await_delegation(request: AwaitRequest) -> Result<OrchOutcome> {
         let task_status = TaskStatus::parse(&task.status)?;
         let latest = latest_dispatch(&request.session, &request.task)?;
         let terminal = latest.as_ref().is_some_and(delivery_is_terminal)
-            || matches!(
-                task_status,
-                TaskStatus::Review | TaskStatus::Done | TaskStatus::Dropped
-            );
+            || latest.is_none()
+                && matches!(
+                    task_status,
+                    TaskStatus::Review | TaskStatus::Done | TaskStatus::Dropped
+                );
         if terminal {
+            let note = latest
+                .as_ref()
+                .and_then(|record| delivery_note(record, &task));
             return Ok(OrchOutcome {
                 verb: Verb::Await.tool_name().to_owned(),
                 tasks: vec![task],
                 dispatches: latest.into_iter().collect(),
-                note: None,
+                note,
             });
         }
         if latest.as_ref().is_some_and(DispatchRecord::is_queued) {
@@ -599,6 +648,7 @@ pub fn codex_mcp_toml(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::DeliveryStatus;
     use serde_json::Value;
     use std::collections::BTreeSet;
 
@@ -643,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn delivery_note_speaks_only_when_the_delivery_did_not_confirm() {
+    fn delivery_note_distinguishes_receipt_success_and_terminal_failure() {
         // Built through serde so the durable records stay free of a `Default`
         // impl they do not otherwise need.
         let task: Task = serde_json::from_value(serde_json::json!({
@@ -660,10 +710,41 @@ mod tests {
         .unwrap();
         assert!(
             delivery_note(&record, &task).is_none(),
-            "a confirmed delivery is quiet"
+            "a pre-#30 confirmed record remains a quiet terminal success"
+        );
+
+        record.execution_status = Some("running".to_owned());
+        let running = delivery_note(&record, &task).expect("a running worker gives guidance");
+        assert!(
+            running.contains("still running") && running.contains("orch_await"),
+            "{running}"
+        );
+
+        record.execution_status = Some("succeeded".to_owned());
+        assert!(
+            delivery_note(&record, &task).is_none(),
+            "a successful execution is quiet"
+        );
+
+        record.execution_status = Some("failed".to_owned());
+        record.failure_kind = Some("timeout".to_owned());
+        record.error = Some("DISPATCH TIMEOUT: hermes exceeded 1s".to_owned());
+        record.exit_code = Some(124);
+        let execution_failed = delivery_note(&record, &task).expect("a failed execution speaks");
+        assert!(
+            execution_failed.contains("worker execution failed")
+                && execution_failed.contains("timeout")
+                && execution_failed.contains("exit code 124"),
+            "{execution_failed}"
+        );
+        assert!(
+            execution_failed.contains("T0007") && execution_failed.contains("running"),
+            "{execution_failed}"
         );
 
         record.status = DeliveryStatus::Failed.as_str().to_owned();
+        record.execution_status = Some("failed".to_owned());
+        record.exit_code = None;
         record.failure_kind = Some("unknown_harness".to_owned());
         record.error = Some("UNKNOWN HARNESS: hermes".to_owned());
         let failed = delivery_note(&record, &task).expect("a failed delivery speaks");

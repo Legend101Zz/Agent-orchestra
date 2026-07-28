@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{
     BenchSession, DiscoveredHarness, HarnessConfig, HarnessRegistry, create_session,
@@ -124,6 +124,24 @@ fn running_task(session: &str, title: &str, worker: &str) -> orc_core::tasks::Ta
     running
 }
 
+fn await_terminal(
+    session: &str,
+    delivered: orc_core::dispatch::DispatchRecord,
+) -> orc_core::dispatch::DispatchRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record = dispatch::read_dispatch(session, &delivered.id).expect("read dispatch");
+        if record.is_terminal() {
+            return record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dispatch did not finish: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Build a session with three probe-driven workers of differing capabilities.
 fn setup(home: &Path) -> BenchSession {
     fs::create_dir_all(home).expect("create home");
@@ -199,6 +217,7 @@ fn flag_prompt_worker_receives_brief_and_returns_a_confirmed_receipt() {
         timeout_sec: Some(30),
     })
     .expect("dispatch resolves");
+    let record = await_terminal(&session.id, record);
 
     assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
     // The claude probe advertised structured output → the adapter added the
@@ -245,6 +264,7 @@ fn subcommand_worker_receives_brief_and_uses_probed_cwd_and_json_flags() {
         timeout_sec: Some(30),
     })
     .expect("dispatch resolves");
+    let record = await_terminal(&session.id, record);
 
     assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
     // codex probed non-interactive + structured + working-dir →

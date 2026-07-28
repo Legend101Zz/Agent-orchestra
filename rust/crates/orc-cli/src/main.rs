@@ -135,6 +135,11 @@ enum Commands {
         #[arg(long)]
         idle_timeout: Option<f64>,
     },
+    #[command(name = "_dispatch_exec", hide = true)]
+    _DispatchExec {
+        /// Private detached-supervisor specification.
+        spec: PathBuf,
+    },
     /// List registry runs, reconciling dead worker PIDs.
     List {
         #[arg(long)]
@@ -279,7 +284,7 @@ enum OrchCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Delegate a task to a worker: assign, start, dispatch its brief (orch_delegate).
+    /// Delegate a task and return after delivery while the worker runs (orch_delegate).
     ///
     /// Names an existing --task, or creates one inline from --title plus the
     /// contract flags. The worker prompt defaults to the rendered task brief.
@@ -307,12 +312,12 @@ enum OrchCommand {
         pane: Option<String>,
         #[arg(long)]
         run: Option<String>,
-        /// Seconds to wait for the worker to finish before killing it.
+        /// Seconds the background worker may run before the supervisor kills it.
         ///
         /// THIS is the delivery bound, distinct from the contract's `--timeout`
         /// (which is metadata only). Defaults to the harness's
-        /// `dispatch_timeout_sec`, or 120s when that is 0. Raise it for agentic
-        /// workers: a real repo-scanning run takes minutes.
+        /// `dispatch_timeout_sec`, or 120s when that is 0. This does not make
+        /// delegate block; use `pio orch await` when you want to wait.
         #[arg(long = "dispatch-timeout")]
         dispatch_timeout: Option<u64>,
         #[arg(long, value_enum, default_value = "brain")]
@@ -918,9 +923,13 @@ fn print_dispatch(record: &orc_core::dispatch::DispatchRecord, json: bool) -> Re
     if json {
         println!("{}", serde_json::to_string_pretty(record)?);
     } else {
+        let state = record.execution_status.as_deref().map_or_else(
+            || record.status.clone(),
+            |run| format!("{}/{run}", record.status),
+        );
         println!(
-            "{}  {:<9}  {:<6}  {:<10}  task={}",
-            record.id, record.status, record.actor, record.harness, record.task,
+            "{}  {:<19}  {:<6}  {:<10}  task={}",
+            record.id, state, record.actor, record.harness, record.task,
         );
         if let Some(error) = &record.error {
             println!("    error: {error}");
@@ -1184,9 +1193,13 @@ fn print_outcome(outcome: &OrchOutcome, json: bool) -> Result<()> {
         println!("{}  {:<9}  {}", task.id, task.status, task.title);
     }
     for record in &outcome.dispatches {
+        let state = record.execution_status.as_deref().map_or_else(
+            || record.status.clone(),
+            |run| format!("{}/{run}", record.status),
+        );
         println!(
-            "dispatch {}  {:<9}  {}  task={}",
-            record.id, record.status, record.harness, record.task
+            "dispatch {}  {:<19}  {}  task={}",
+            record.id, state, record.harness, record.task
         );
     }
     if let Some(note) = &outcome.note {
@@ -1289,8 +1302,15 @@ fn dispatch_orch(command: OrchCommand) -> Result<i32> {
             // A note means the wait timed out before a terminal delivery; exit
             // 75 (EX_TEMPFAIL) so scripts can retry without treating it as fatal.
             let timed_out = outcome.note.is_some();
+            let worker_exit = outcome
+                .dispatches
+                .first()
+                .filter(|record| record.is_terminal())
+                .and_then(|record| record.exit_code)
+                .filter(|code| *code != 0)
+                .unwrap_or(0);
             print_outcome(&outcome, json)?;
-            Ok(if timed_out { 75 } else { 0 })
+            Ok(if timed_out { 75 } else { worker_exit })
         }
         OrchCommand::Review {
             task,
@@ -1492,6 +1512,7 @@ fn dispatch(command: Commands) -> Result<i32> {
             echo,
             idle_timeout,
         } => control::run_hidden(&run_dir, idle_timeout, echo),
+        Commands::_DispatchExec { spec } => orc_core::dispatch_supervisor::execute(&spec),
         Commands::List { json } => {
             if json {
                 println!(

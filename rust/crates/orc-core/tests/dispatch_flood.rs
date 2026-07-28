@@ -16,7 +16,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{HarnessConfig, HarnessRegistry, create_session, write_harness_registry};
 use orc_core::dispatch::{
@@ -138,7 +138,7 @@ fn running_task(session: &str, title: &str) -> orc_core::tasks::Task {
 }
 
 fn dispatch_flood(session: &str, task: &str) -> orc_core::dispatch::DispatchRecord {
-    dispatch::dispatch(&DispatchRequest {
+    let delivered = dispatch::dispatch(&DispatchRequest {
         session: session.to_owned(),
         task: task.to_owned(),
         actor: DispatchActor::Brain,
@@ -148,7 +148,24 @@ fn dispatch_flood(session: &str, task: &str) -> orc_core::dispatch::DispatchReco
         prompt: "flood the pipe".to_owned(),
         timeout_sec: Some(FLOOD_TIMEOUT_SEC),
     })
-    .expect("dispatch must not error")
+    .expect("dispatch must not error");
+    assert_eq!(
+        delivered.status,
+        DeliveryStatus::Confirmed.as_str(),
+        "the flood worker must receive its brief"
+    );
+    let deadline = Instant::now() + Duration::from_secs(FLOOD_TIMEOUT_SEC);
+    loop {
+        let record = dispatch::read_dispatch(session, &delivered.id).expect("read flood dispatch");
+        if record.is_terminal() {
+            return record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "flood dispatch never reached terminal state: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

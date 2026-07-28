@@ -54,10 +54,13 @@ count) — do one bounded hand-off to one worker through the normalized surface:
         --title "<what>" --objective "<done-when>" \
         --check "<acceptance check>" [--allowed <path> --forbidden <rule>] --json
 
-Observe the result with `orch_status` / `pio orch status <T>`; block for it with
-`orch_await` / `pio orch await <T>`. The worker prompt defaults to the rendered
-contract brief, so a well-formed contract is the whole instruction. Only a
-`confirmed` dispatch means the worker received the brief.
+`orch_delegate` / `pio orch delegate` returns as soon as the worker receives
+the brief; the worker keeps running in the background. Poll it with
+`orch_status` / `pio orch status <T>`, or block for the answer, usage, and exit
+code with `orch_await` / `pio orch await <T>`. `--dispatch-timeout` bounds that
+background worker; the contract's `--timeout` is metadata and does not stop the
+process. The prompt defaults to the rendered contract brief. Only a
+`confirmed` dispatch means receipt — `confirmed` + `running` is not completion.
 
 A Claude Code `UserPromptSubmit` hook (installed to
 `~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py`, registered manually)
@@ -84,8 +87,9 @@ then keep task and delivery state linked explicitly:
     pio dispatch send T0001 hermes "<bounded brief>" --pane <worker-pane> --session "$ORC_SESSION" --actor brain --json
 
 Only a `confirmed` dispatch means the worker received the brief. A missing
-executable, absent `dispatch_args` capability, stopped pane, timeout, or
-non-zero exit is unavailable/failed and must be reported as such.
+executable, absent `dispatch_args` capability, or stopped pane is unavailable;
+after confirmation, use status/await to report a timeout or non-zero worker exit
+as an execution failure.
 
 ## Quota rules (IMPORTANT)
 

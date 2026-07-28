@@ -2,10 +2,10 @@
 //!
 //! Phase 4A dispatches are explicit, recorded, and bounded. Every dispatch
 //! carries a known actor (brain or human), an owning session, a worker pane
-//! or harness key, a prompt body, and a delivery state machine that moves
-//! from `pending` through either `confirmed` (exit code 0) or `failed`
-//! (missing executable, capability unavailable, non-zero exit, bounded
-//! timeout, or unparseable response).
+//! or harness key, a prompt body, and two honest state dimensions: delivery
+//! moves from `pending`/`queued` to `confirmed` once the brief is handed over,
+//! while the additive execution state moves from `starting`/`running` to a
+//! terminal result written by a detached supervisor.
 //!
 //! Dispatch is layered above the daemon/core registry and never injects
 //! keystrokes into a PTY. It uses a configured non-interactive command
@@ -14,14 +14,10 @@
 //! command. The harness record declares whether stdin or argv should carry
 //! the prompt and the bounded timeout for one invocation.
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,10 +30,11 @@ use crate::bench::{
     BenchSession, HarnessConfig, HarnessRegistry, dispatch_timeout_for, load_harness_registry,
     read_session,
 };
-use crate::invocation::{Invocation, resolve_worker_invocation};
+use crate::invocation::resolve_worker_invocation;
 use crate::probe::probed_from;
-use crate::ratelimit::{self, BackoffPolicy};
-use crate::registry::{atomic_write_json, home, now_iso};
+use crate::ratelimit::BackoffPolicy;
+use crate::registry::{atomic_write_json, home, now_iso, pid_alive};
+use crate::runner::Usage;
 use crate::spawn_guard;
 use crate::tasks::{Task, TaskActor, TaskStatus, read_task, record_delivery, record_queued};
 
@@ -58,10 +55,60 @@ pub enum DeliveryStatus {
     /// concurrency cap; no worker was spawned (issue #7). It is drained later by
     /// [`drain_queued`] when a slot frees.
     Queued,
-    /// The harness exited successfully and produced parseable output.
+    /// The worker process received the brief; it may still be running.
     Confirmed,
-    /// The dispatch could not be delivered or did not return success.
+    /// The brief could not be delivered to a worker process.
     Failed,
+}
+
+/// Runtime state of a dispatch after the brief is delivered.
+///
+/// This additive field separates delivery (`status = confirmed`) from worker
+/// completion. Old records omit it and retain their pre-#30 terminal meaning.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionStatus {
+    /// The detached supervisor owns the slot but has not started the worker yet.
+    Starting,
+    /// The brief was handed to a live worker.
+    Running,
+    /// The worker exited successfully.
+    Succeeded,
+    /// The worker exited unsuccessfully or exceeded its execution bound.
+    Failed,
+    /// The detached supervisor died and reconciliation terminated the worker.
+    Orphaned,
+}
+
+impl ExecutionStatus {
+    /// Return the durable lowercase execution word.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    /// Whether this runtime state is terminal.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Orphaned)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "starting" => Some(Self::Starting),
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            "orphaned" => Some(Self::Orphaned),
+            _ => None,
+        }
+    }
 }
 
 impl DeliveryStatus {
@@ -158,7 +205,7 @@ pub enum DispatchFailureKind {
 }
 
 /// Plain additive durable dispatch record.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DispatchRecord {
     /// Stable `D`-prefixed dispatch identifier.
     pub id: String,
@@ -186,8 +233,17 @@ pub struct DispatchRecord {
     pub cwd: Option<String>,
     /// Persisted prompt body that was delivered.
     pub prompt: String,
-    /// Delivery state after the bounded invocation.
+    /// Delivery state: pending, queued, confirmed receipt, or pre-delivery failure.
     pub status: String,
+    /// Worker execution state after delivery (additive in issue #30).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_status: Option<String>,
+    /// Detached supervisor pid while the execution is live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_pid: Option<u32>,
+    /// Current worker process-group leader while the execution is live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_pid: Option<u32>,
     /// Exit code reported by the harness, when one is recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
@@ -207,6 +263,15 @@ pub struct DispatchRecord {
     /// backoff notices (issue #7). Additive; empty for a clean delivery.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Exact structured usage extracted from a supported adapter transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+    /// Timestamp when the first worker received the brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Timestamp when the worker reached a terminal state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
     /// Creation timestamp.
     pub created_at: String,
     /// Last mutation timestamp.
@@ -228,6 +293,33 @@ impl DispatchRecord {
     pub fn is_queued(&self) -> bool {
         self.status == DeliveryStatus::Queued.as_str()
     }
+
+    /// Whether the worker execution is still live or starting.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.execution_status.as_deref().is_some_and(|status| {
+            matches!(
+                ExecutionStatus::parse(status),
+                Some(ExecutionStatus::Starting | ExecutionStatus::Running)
+            )
+        })
+    }
+
+    /// Whether this record has reached a durable terminal state.
+    ///
+    /// Pre-#30 records have no execution state, so their confirmed/failed
+    /// delivery status remains terminal for backward compatibility.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        match self
+            .execution_status
+            .as_deref()
+            .and_then(ExecutionStatus::parse)
+        {
+            Some(status) => status.is_terminal(),
+            None => self.is_confirmed() || self.status == DeliveryStatus::Failed.as_str(),
+        }
+    }
 }
 
 /// Inputs the caller supplies when recording one dispatch.
@@ -247,7 +339,7 @@ pub struct DispatchRequest {
     pub run: Option<String>,
     /// Prompt body that will be delivered to the harness.
     pub prompt: String,
-    /// Optional bounded timeout override in seconds.
+    /// Optional background worker execution timeout override in seconds.
     pub timeout_sec: Option<u64>,
 }
 
@@ -286,6 +378,11 @@ fn dispatch_dir(session: &str) -> PathBuf {
 #[must_use]
 pub fn dispatch_path(session: &str, id: &str) -> PathBuf {
     dispatch_dir(session).join(format!("{id}.json"))
+}
+
+/// Private detached-supervisor input beside the durable dispatch record.
+pub(crate) fn supervisor_spec_path(session: &str, id: &str) -> PathBuf {
+    dispatch_dir(session).join(format!("{id}.supervisor.json"))
 }
 
 fn dispatch_id_is_valid(id: &str) -> bool {
@@ -342,114 +439,6 @@ fn placeholder_command(registry: &HarnessRegistry, key: &str) -> String {
     }
 }
 
-/// Bytes kept from the *start* of a capture, for the worker's opening context.
-const HEAD_BYTES: usize = MAX_CAPTURED_BYTES / 4;
-/// Bytes kept from the *end* of a capture — where an agentic worker's actual
-/// answer lives, after its session header, reasoning, and tool calls.
-const TAIL_BYTES: usize = MAX_CAPTURED_BYTES - HEAD_BYTES;
-
-/// A bounded window over one worker stream: its head, its tail, and how much
-/// was dropped in between.
-///
-/// Keeping only the head would be worse than useless for a JSON-mode worker:
-/// `pi --mode json` opens with a session header and the model's thinking, so a
-/// head-only capture hands the conductor a preamble and throws the answer away
-/// — which is exactly what happened in live testing, forcing the brain to redo
-/// the work itself and defeating the point of delegating.
-#[derive(Default)]
-struct Captured {
-    head: Vec<u8>,
-    tail: VecDeque<u8>,
-    dropped: usize,
-}
-
-impl Captured {
-    fn push(&mut self, chunk: &[u8]) {
-        let mut chunk = chunk;
-        if self.head.len() < HEAD_BYTES {
-            let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
-            self.head.extend_from_slice(&chunk[..take]);
-            chunk = &chunk[take..];
-        }
-        self.tail.extend(chunk.iter().copied());
-        while self.tail.len() > TAIL_BYTES {
-            self.tail.pop_front();
-            self.dropped += 1;
-        }
-    }
-
-    fn render(&self) -> String {
-        let mut rendered = String::from_utf8_lossy(&self.head).into_owned();
-        if self.dropped > 0 {
-            rendered.push_str(&format!("{TRUNCATION_MARKER} ({} bytes)", self.dropped));
-        }
-        let tail: Vec<u8> = self.tail.iter().copied().collect();
-        rendered.push_str(&String::from_utf8_lossy(&tail));
-        rendered
-    }
-}
-
-/// One worker stream being drained to EOF on its own thread.
-///
-/// The buffer is shared rather than returned by the thread so the parent can
-/// read whatever arrived *without* joining. That matters on the kill path: a
-/// surviving grandchild can hold the pipe open forever, and a timed-out
-/// dispatch that captured nothing is precisely what made the issue #28
-/// deadlock so hard to diagnose.
-struct Drain {
-    captured: Arc<Mutex<Captured>>,
-    handle: thread::JoinHandle<()>,
-}
-
-impl Drain {
-    /// Wait for EOF, then render everything the worker wrote.
-    fn finish(self) -> String {
-        let Self { captured, handle } = self;
-        let _ = handle.join();
-        render(&captured)
-    }
-
-    /// Render what has arrived so far, without waiting for EOF.
-    fn snapshot(&self) -> String {
-        render(&self.captured)
-    }
-}
-
-fn render(captured: &Arc<Mutex<Captured>>) -> String {
-    captured.lock().map_or_else(
-        |poisoned| poisoned.into_inner().render(),
-        |slot| slot.render(),
-    )
-}
-
-/// Drain `reader` to EOF on a background thread, keeping a bounded head+tail window.
-///
-/// Reading **all the way to EOF is the point** (issue #28): the previous
-/// implementation stopped at the cap and only ran after the child exited, so a
-/// worker that filled the ~64 KB pipe buffer blocked in `write()`, could never
-/// exit, and was killed as a bogus `DISPATCH TIMEOUT`. Bytes past `max` are
-/// counted and discarded so the durable record stays bounded while the worker
-/// keeps running freely.
-fn drain_to_eof<R: Read + Send + 'static>(mut reader: R) -> Drain {
-    let captured = Arc::new(Mutex::new(Captured::default()));
-    let sink = Arc::clone(&captured);
-    let handle = thread::spawn(move || {
-        let mut chunk = [0_u8; 8 * 1024];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(taken) => {
-                    let Ok(mut slot) = sink.lock() else { break };
-                    slot.push(&chunk[..taken]);
-                }
-                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-    });
-    Drain { captured, handle }
-}
-
 fn render_command_line(program: &str, args: &[String], prompt: &str, stdin: bool) -> String {
     let mut parts = Vec::with_capacity(args.len() + 2);
     parts.push(shell_escape(program));
@@ -475,105 +464,7 @@ fn shell_escape(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
-/// Captured result of one bounded harness invocation.
-///
-/// Unlike a plain `Result`, this preserves stdout/stderr even when the harness
-/// exited non-zero, so the backoff layer can scan the output for a rate-limit
-/// signal before deciding whether the failure is retryable (issue #7).
-struct Invoked {
-    exit_code: Option<i32>,
-    stdout: String,
-    stderr: String,
-    success: bool,
-}
-
-fn invoke_harness(
-    program: &Path,
-    invocation: &Invocation,
-    prompt: &str,
-    cwd: Option<&Path>,
-    timeout: Duration,
-) -> std::result::Result<Invoked, (DispatchFailureKind, Option<Invoked>)> {
-    let mut command = Command::new(program);
-    for arg in &invocation.args {
-        command.arg(arg);
-    }
-    if invocation.uses_stdin() {
-        command.stdin(Stdio::piped());
-    } else {
-        command.arg(prompt).stdin(Stdio::null());
-    }
-    // Orchestrator-provided cwd control: the worker runs in the task's effective
-    // working directory (issue #6), independent of any per-adapter --dir flag.
-    if let Some(dir) = cwd {
-        command.current_dir(dir);
-    }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|_| (DispatchFailureKind::MissingExecutable, None))?;
-    // Start draining BEFORE anything else can block: the prompt write below and
-    // the wait loop both happen while the worker is already free to write as
-    // much as it likes (issue #28).
-    let stdout_drain = child.stdout.take().map(drain_to_eof);
-    let stderr_drain = child.stderr.take().map(drain_to_eof);
-    if invocation.uses_stdin()
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        let _ = stdin.write_all(prompt.as_bytes());
-        let _ = stdin.flush();
-        drop(stdin);
-    }
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // The child is gone, so both pipes are at EOF: joining returns
-                // everything it wrote, bounded.
-                let stdout = stdout_drain.map(Drain::finish).unwrap_or_default();
-                let stderr = stderr_drain.map(Drain::finish).unwrap_or_default();
-                return Ok(Invoked {
-                    exit_code: status.code(),
-                    stdout,
-                    stderr,
-                    success: status.success(),
-                });
-            }
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // Snapshot instead of joining: a grandchild may still hold
-                    // the pipe, and partial output is what makes a real timeout
-                    // diagnosable. Dropping the Drain detaches its thread.
-                    let stdout = stdout_drain
-                        .as_ref()
-                        .map(Drain::snapshot)
-                        .unwrap_or_default();
-                    let stderr = stderr_drain
-                        .as_ref()
-                        .map(Drain::snapshot)
-                        .unwrap_or_default();
-                    return Err((
-                        DispatchFailureKind::Timeout,
-                        Some(Invoked {
-                            exit_code: None,
-                            stdout,
-                            stderr,
-                            success: false,
-                        }),
-                    ));
-                }
-                thread::sleep(
-                    Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())),
-                );
-            }
-            Err(_) => return Err((DispatchFailureKind::HarnessError, None)),
-        }
-    }
-}
-
-fn failure_message(kind: &DispatchFailureKind, harness: &str) -> String {
+pub(crate) fn failure_message(kind: &DispatchFailureKind, harness: &str) -> String {
     match kind {
         DispatchFailureKind::UnknownHarness => format!("UNKNOWN HARNESS: {harness}"),
         DispatchFailureKind::CapabilityUnavailable => {
@@ -587,98 +478,6 @@ fn failure_message(kind: &DispatchFailureKind, harness: &str) -> String {
             format!("RATE LIMITED: {harness} kept signaling rate limits after backoff")
         }
         DispatchFailureKind::HarnessError => "HARNESS ERROR".to_owned(),
-    }
-}
-
-/// Retryable failure of one backoff attempt.
-///
-/// Only [`Self::RateLimited`] is retried; everything else is terminal and
-/// returned to the caller unchanged after the first attempt.
-enum AttemptError {
-    /// The harness signaled a rate limit; the last output is kept for the record.
-    RateLimited(Invoked),
-    /// A terminal failure kind, with any captured output when one exists.
-    Terminal(DispatchFailureKind, Option<Invoked>),
-}
-
-/// Terminal outcome of a backed-off delivery, plus the warnings it emitted.
-struct BackedOff {
-    /// Confirmed run, or a failure kind with the last captured output.
-    result: std::result::Result<Invoked, (DispatchFailureKind, Option<Invoked>)>,
-    /// User-visible ORC WARNING lines emitted during backoff.
-    warnings: Vec<String>,
-}
-
-/// Invoke one worker under rate-limit-aware exponential backoff (issue #7).
-///
-/// Each attempt spawns the worker and scans its captured stdout+stderr for a
-/// rate-limit signal ([`crate::ratelimit`]); a signal makes the attempt
-/// retryable and emits an ORC WARNING (with any parsed retry-after hint) before
-/// `backon` sleeps. A clean run, a non-rate-limit failure, or an exhausted
-/// backoff budget ends the loop.
-fn invoke_with_backoff(
-    program: &Path,
-    invocation: &Invocation,
-    prompt: &str,
-    cwd: Option<&Path>,
-    timeout: Duration,
-    adapter: &str,
-    policy: &BackoffPolicy,
-) -> BackedOff {
-    let warnings = RefCell::new(Vec::new());
-    let attempt = || -> std::result::Result<Invoked, AttemptError> {
-        match invoke_harness(program, invocation, prompt, cwd, timeout) {
-            Ok(invoked) => {
-                if invoked.success {
-                    // A clean (exit 0) run is confirmed regardless of what its
-                    // output merely *mentions*: a coding worker that summarizes
-                    // "added 429 handling / rate-limit backoff" is not itself
-                    // rate-limited. Only a non-success invocation is scanned for
-                    // a throttle signal, because real provider rate limits exit
-                    // non-zero (reviewer Fix 1 — detection must not fail good work
-                    // nor multiply provider load on successful runs).
-                    Ok(invoked)
-                } else {
-                    let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
-                    if ratelimit::is_rate_limited(adapter, &combined) {
-                        Err(AttemptError::RateLimited(invoked))
-                    } else {
-                        Err(AttemptError::Terminal(
-                            DispatchFailureKind::HarnessError,
-                            Some(invoked),
-                        ))
-                    }
-                }
-            }
-            Err((kind, invoked)) => Err(AttemptError::Terminal(kind, invoked)),
-        }
-    };
-    let is_retryable = |error: &AttemptError| matches!(error, AttemptError::RateLimited(_));
-    let notify = |error: &AttemptError, delay: Duration| {
-        if let AttemptError::RateLimited(invoked) = error {
-            let combined = format!("{}\n{}", invoked.stdout, invoked.stderr);
-            let hint = ratelimit::detect(adapter, &combined)
-                .and_then(|signal| signal.retry_after)
-                .map_or_else(String::new, |seconds| {
-                    format!(" (harness asked for ~{seconds}s)")
-                });
-            warnings.borrow_mut().push(format!(
-                "ORC WARNING: {adapter} worker rate-limited{hint}; backing off {:.1}s before retry",
-                delay.as_secs_f64()
-            ));
-        }
-    };
-    let result = ratelimit::run_with_backoff(policy, attempt, is_retryable, notify);
-    let result = match result {
-        Ok(invoked) => Ok(invoked),
-        Err(AttemptError::RateLimited(invoked)) => {
-            Err((DispatchFailureKind::RateLimited, Some(invoked)))
-        }
-        Err(AttemptError::Terminal(kind, invoked)) => Err((kind, invoked)),
-    };
-    BackedOff {
-        result,
-        warnings: warnings.into_inner(),
     }
 }
 
@@ -790,7 +589,8 @@ fn deliver(
     // The adapter chooses the invocation style from the probe results (issue #6);
     // an honest refusal names the missing capability instead of guessing one.
     let adapter = config.adapter.clone();
-    let cap = spawn_guard::effective_cap(&registry, &resolved_key);
+    let harness_cap = spawn_guard::effective_cap(&registry, &resolved_key);
+    let session_cap = registry.max_parallel_workers.max(1);
     let probed = probed_from(&registry, &config.adapter);
     let invocation = match resolve_worker_invocation(config, &probed, cwd.as_deref().map(Path::new))
     {
@@ -839,29 +639,6 @@ fn deliver(
             .unwrap_or_else(|| dispatch_timeout_for(config)),
     );
 
-    // Quota guard v2: never exceed this harness's concurrent-worker cap. When
-    // every slot is taken we record a *queued* dispatch (visible state) and DO
-    // NOT spawn a worker (issue #7, AC1); `drain_queued` runs it once a slot
-    // frees. The lease TTL bounds the whole backoff budget so a legitimately
-    // long dispatch is never pruned out from under itself.
-    let attempts = u32::try_from(policy.max_retries)
-        .unwrap_or(u32::MAX)
-        .saturating_add(1);
-    let lease_ttl = timeout
-        .saturating_mul(attempts)
-        .saturating_add(policy.max_delay.saturating_mul(attempts))
-        .max(spawn_guard::DEFAULT_LEASE_TTL);
-    let Some(lease) = spawn_guard::acquire_slot(&resolved_key, cap, lease_ttl, None)? else {
-        return persist_queued(
-            request,
-            &resolved_key,
-            &command_line,
-            cwd,
-            cap,
-            reuse.as_ref(),
-        );
-    };
-
     let mut record = new_record(
         request,
         &resolved_key,
@@ -869,72 +646,129 @@ fn deliver(
         cwd.clone(),
         reuse.as_ref(),
     );
-    let backed_off = invoke_with_backoff(
-        &program,
-        &invocation,
-        &request.prompt,
-        cwd.as_deref().map(Path::new),
-        timeout,
-        &adapter,
-        policy,
-    );
-    record.warnings = backed_off.warnings;
-    match backed_off.result {
-        Ok(invoked) => {
-            record.status = DeliveryStatus::Confirmed.as_str().to_owned();
-            record.exit_code = invoked.exit_code;
-            record.stdout = invoked.stdout;
-            record.stderr = invoked.stderr;
-            record.updated_at = now_iso();
-        }
-        Err((kind, invoked)) => {
-            record.status = DeliveryStatus::Failed.as_str().to_owned();
-            record.failure_kind = Some(kind_label(&kind).to_owned());
-            record.error = Some(failure_message(&kind, &resolved_key));
-            if let Some(invoked) = invoked {
-                record.exit_code = invoked.exit_code;
-                record.stdout = invoked.stdout;
-                record.stderr = invoked.stderr;
-            }
-            record.updated_at = now_iso();
-        }
-    }
-    // Release the concurrency slot the instant the bounded invocation ends.
-    lease.release();
+
+    // Hold both the provider-facing harness cap and the session-wide
+    // max_parallel_workers cap for the real worker lifetime. The detached
+    // supervisor adopts both leases before this conductor returns.
+    let attempts = u32::try_from(policy.max_retries)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let lease_ttl = timeout
+        .saturating_mul(attempts)
+        .saturating_add(policy.max_delay.saturating_mul(attempts))
+        .max(spawn_guard::DEFAULT_LEASE_TTL);
+    let session_slot = format!("session:{}", request.session);
+    let Some(session_lease) =
+        spawn_guard::acquire_slot(&session_slot, session_cap, lease_ttl, Some(&record.id))?
+    else {
+        let note = format!(
+            "ORC WARNING: session {} at max_parallel_workers {session_cap}; queued dispatch {} (no worker spawned)",
+            request.session, record.id
+        );
+        return persist_queued(record, note);
+    };
+    let Some(harness_lease) =
+        spawn_guard::acquire_slot(&resolved_key, harness_cap, lease_ttl, Some(&record.id))?
+    else {
+        drop(session_lease);
+        let note = format!(
+            "ORC WARNING: {resolved_key} at concurrency cap {harness_cap}; queued dispatch {} (no worker spawned)",
+            record.id
+        );
+        return persist_queued(record, note);
+    };
+    let leases = vec![session_lease, harness_lease];
+    record.execution_status = Some(ExecutionStatus::Starting.as_str().to_owned());
     write_dispatch(&record)?;
-    let task_actor = TaskActor::from(request.actor);
-    if record.is_confirmed() {
-        let link = selected_pane
-            .clone()
-            .or_else(|| request.run.clone())
-            .unwrap_or_else(|| record.id.clone());
-        record_delivery(
-            &request.session,
-            &request.task,
-            task_actor,
-            Some(link),
-            format!("dispatch {} confirmed by {}", record.id, record.harness),
-        )?;
-    } else {
-        record_delivery(
-            &request.session,
-            &request.task,
-            task_actor,
-            None,
-            format!(
-                "dispatch {} failed: {}",
-                record.id,
-                record
-                    .error
-                    .as_deref()
-                    .unwrap_or("worker did not confirm delivery")
-            ),
-        )?;
+    let confirmed_link = selected_pane
+        .or_else(|| request.run.clone())
+        .unwrap_or_else(|| record.id.clone());
+    let lease_paths = leases
+        .iter()
+        .map(|lease| lease.path().to_path_buf())
+        .collect();
+    let supervisor = crate::dispatch_supervisor::launch(
+        crate::dispatch_supervisor::SupervisorRequest {
+            session: &request.session,
+            dispatch: &record.id,
+            program: &program,
+            invocation: &invocation,
+            prompt: &request.prompt,
+            cwd: cwd.as_deref().map(Path::new),
+            timeout,
+            adapter: &adapter,
+            policy,
+            lease_paths,
+            confirmed_link: &confirmed_link,
+            actor: TaskActor::from(request.actor),
+        },
+        leases,
+    );
+    let supervisor_pid = match supervisor {
+        Ok(pid) => pid,
+        Err(error) => {
+            record.status = DeliveryStatus::Failed.as_str().to_owned();
+            record.execution_status = Some(ExecutionStatus::Failed.as_str().to_owned());
+            record.failure_kind = Some("supervisor_error".to_owned());
+            record.error = Some(format!("SUPERVISOR ERROR: {error:#}"));
+            record.ended_at = Some(now_iso());
+            record.updated_at = now_iso();
+            write_dispatch(&record)?;
+            record_delivery(
+                &request.session,
+                &request.task,
+                TaskActor::from(request.actor),
+                None,
+                format!(
+                    "dispatch {} failed before delivery: {}",
+                    record.id,
+                    record.error.as_deref().unwrap_or("supervisor error")
+                ),
+            )?;
+            return Ok(record);
+        }
+    };
+
+    // Wait only for the delivery handshake. The worker's execution bound is
+    // enforced inside the detached supervisor; orch_await performs the long
+    // user-facing wait.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let observed = read_dispatch_unreconciled(&request.session, &record.id)?;
+        if observed.is_confirmed() || observed.status == DeliveryStatus::Failed.as_str() {
+            return Ok(observed);
+        }
+        if !pid_alive(Some(supervisor_pid)) || Instant::now() >= deadline {
+            crate::runner::terminate_pid(supervisor_pid);
+            let _ = spawn_guard::release_dispatch_slots(&record.id);
+            record = observed;
+            record.status = DeliveryStatus::Failed.as_str().to_owned();
+            record.execution_status = Some(ExecutionStatus::Orphaned.as_str().to_owned());
+            record.supervisor_pid = Some(supervisor_pid);
+            record.failure_kind = Some("supervisor_lost".to_owned());
+            record.error =
+                Some("SUPERVISOR LOST before the worker confirmed receipt of the brief".to_owned());
+            record.ended_at = Some(now_iso());
+            record.updated_at = now_iso();
+            write_dispatch(&record)?;
+            let _ = fs::remove_file(supervisor_spec_path(&request.session, &record.id));
+            record_delivery(
+                &request.session,
+                &request.task,
+                TaskActor::from(request.actor),
+                None,
+                format!(
+                    "dispatch {} failed before delivery: supervisor lost",
+                    record.id
+                ),
+            )?;
+            return Ok(record);
+        }
+        thread::sleep(Duration::from_millis(10));
     }
-    Ok(record)
 }
 
-fn kind_label(kind: &DispatchFailureKind) -> &'static str {
+pub(crate) fn kind_label(kind: &DispatchFailureKind) -> &'static str {
     match kind {
         DispatchFailureKind::UnknownHarness => "unknown_harness",
         DispatchFailureKind::CapabilityUnavailable => "capability_unavailable",
@@ -971,12 +805,18 @@ fn new_record(
         cwd,
         prompt: request.prompt.clone(),
         status: DeliveryStatus::Pending.as_str().to_owned(),
+        execution_status: None,
+        supervisor_pid: None,
+        worker_pid: None,
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
         failure_kind: None,
         error: None,
         warnings: Vec::new(),
+        usage: None,
+        started_at: None,
+        ended_at: None,
         created_at,
         updated_at: now,
         extra: BTreeMap::new(),
@@ -1007,8 +847,10 @@ fn persist_failure(
 ) -> Result<DispatchRecord> {
     let mut record = new_record(request, harness, &spec.command_line, cwd, reuse);
     record.status = DeliveryStatus::Failed.as_str().to_owned();
+    record.execution_status = Some(ExecutionStatus::Failed.as_str().to_owned());
     record.failure_kind = Some(kind_label(&spec.kind).to_owned());
     record.error = Some(spec.detail);
+    record.ended_at = Some(now_iso());
     record.updated_at = now_iso();
     write_dispatch(&record)?;
     record_delivery(
@@ -1029,29 +871,16 @@ fn persist_failure(
 /// cap, so no worker was spawned (issue #7, AC1). The record is durable and
 /// visible via `pio dispatch list`; the task history gains a `delivery_queued`
 /// event without changing the task's status or claiming a worker received it.
-fn persist_queued(
-    request: &DispatchRequest,
-    harness: &str,
-    command_line: &str,
-    cwd: Option<String>,
-    cap: usize,
-    reuse: Option<&Reuse>,
-) -> Result<DispatchRecord> {
-    let mut record = new_record(request, harness, command_line, cwd, reuse);
+fn persist_queued(mut record: DispatchRecord, note: String) -> Result<DispatchRecord> {
     record.status = DeliveryStatus::Queued.as_str().to_owned();
-    let note = format!(
-        "ORC WARNING: {harness} at concurrency cap {cap}; queued dispatch {} (no worker spawned)",
-        record.id
-    );
+    record.execution_status = None;
+    record.supervisor_pid = None;
+    record.worker_pid = None;
     record.warnings.push(note.clone());
     record.updated_at = now_iso();
     write_dispatch(&record)?;
-    record_queued(
-        &request.session,
-        &request.task,
-        TaskActor::from(request.actor),
-        note,
-    )?;
+    let actor = DispatchActor::parse(&record.actor).unwrap_or(DispatchActor::Brain);
+    record_queued(&record.session, &record.task, TaskActor::from(actor), note)?;
     Ok(record)
 }
 
@@ -1078,8 +907,10 @@ pub fn list_dispatches(session: &str) -> Result<Vec<DispatchRecord>> {
     };
     let mut records = entries
         .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|entry| fs::read(entry.path()).ok())
         .filter_map(|bytes| serde_json::from_slice::<DispatchRecord>(&bytes).ok())
+        .filter_map(|record| reconcile_record(record).ok())
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         right
@@ -1092,6 +923,11 @@ pub fn list_dispatches(session: &str) -> Result<Vec<DispatchRecord>> {
 
 /// Read one durable dispatch record.
 pub fn read_dispatch(session: &str, id: &str) -> Result<DispatchRecord> {
+    reconcile_record(read_dispatch_unreconciled(session, id)?)
+}
+
+/// Read one record without performing dead-supervisor reconciliation.
+pub(crate) fn read_dispatch_unreconciled(session: &str, id: &str) -> Result<DispatchRecord> {
     if session.trim().is_empty() {
         bail!("dispatch session is required")
     }
@@ -1099,6 +935,36 @@ pub fn read_dispatch(session: &str, id: &str) -> Result<DispatchRecord> {
     let path = dispatch_path(session, id);
     serde_json::from_slice(&fs::read(&path)?)
         .with_context(|| format!("parse dispatch {}", path.display()))
+}
+
+/// Reconcile a dispatch whose detached supervisor no longer exists.
+///
+/// The worker is a separate process group, so a killed supervisor can leave it
+/// alive. Reconciliation terminates that group, marks the record terminal, and
+/// releases only this dispatch's durable leases.
+fn reconcile_record(mut record: DispatchRecord) -> Result<DispatchRecord> {
+    if !record.is_running() {
+        return Ok(record);
+    }
+    let Some(supervisor_pid) = record.supervisor_pid else {
+        return Ok(record);
+    };
+    if pid_alive(Some(supervisor_pid)) {
+        return Ok(record);
+    }
+    if let Some(worker_pid) = record.worker_pid {
+        crate::runner::terminate_pid(worker_pid);
+    }
+    let _ = spawn_guard::release_dispatch_slots(&record.id);
+    record.execution_status = Some(ExecutionStatus::Orphaned.as_str().to_owned());
+    record.worker_pid = None;
+    record.failure_kind = Some("supervisor_lost".to_owned());
+    record.error = Some("SUPERVISOR LOST: worker terminated during reconciliation".to_owned());
+    record.ended_at = Some(now_iso());
+    record.updated_at = now_iso();
+    write_dispatch(&record)?;
+    let _ = fs::remove_file(supervisor_spec_path(&record.session, &record.id));
+    Ok(record)
 }
 
 /// Re-attempt every queued dispatch for a session, oldest first (issue #7).
@@ -1186,5 +1052,41 @@ mod tests {
             assert_eq!(DeliveryStatus::parse(value).unwrap().as_str(), value);
         }
         assert!(DeliveryStatus::parse("not-a-state").is_err());
+    }
+
+    #[test]
+    fn real_pre_issue_30_record_loads_without_runtime_fields() {
+        // Shape copied from the durable record written by issue #28: no
+        // execution_status/pids/usage/timestamps, plus an unknown future field.
+        let record: DispatchRecord = serde_json::from_value(serde_json::json!({
+            "id": "D-pi-m3-1785136766-session-0001",
+            "session": "agent-orchestra-1785136766-0000",
+            "task": "T0001",
+            "actor": "brain",
+            "harness": "pi-m3",
+            "command_line": "pi -p --mode json brief",
+            "prompt": "brief",
+            "status": "confirmed",
+            "exit_code": 0,
+            "stdout": "answer",
+            "stderr": "",
+            "warnings": [],
+            "created_at": "2026-07-27T09:00:00+00:00",
+            "updated_at": "2026-07-27T09:00:24+00:00",
+            "pre_change_receipt": "preserve me"
+        }))
+        .expect("pre-change record loads");
+        assert!(record.execution_status.is_none());
+        assert!(record.supervisor_pid.is_none());
+        assert!(record.worker_pid.is_none());
+        assert!(record.usage.is_none());
+        assert!(
+            record.is_terminal(),
+            "old confirmed semantics stay terminal"
+        );
+        assert_eq!(
+            record.extra.get("pre_change_receipt"),
+            Some(&serde_json::json!("preserve me"))
+        );
     }
 }

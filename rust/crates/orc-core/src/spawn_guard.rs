@@ -135,9 +135,30 @@ impl SlotLease {
         &self.harness
     }
 
+    /// Path of the durable lease record used for supervisor handoff.
+    #[must_use]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Explicitly release the slot now instead of at drop.
     pub fn release(mut self) {
         self.remove();
+    }
+
+    /// Transfer this durable lease to a detached supervisor process.
+    ///
+    /// The on-disk owner pid changes before this guard is disarmed, so there is
+    /// no window where the slot silently disappears when the delegating caller
+    /// returns. The supervisor later adopts the same path and releases it when
+    /// the real worker lifetime ends.
+    pub fn handoff_to(mut self, supervisor_pid: u32) -> Result<PathBuf> {
+        let mut record: LeaseRecord = serde_json::from_slice(&fs::read(&self.path)?)
+            .with_context(|| format!("parse slot lease {}", self.path.display()))?;
+        record.pid = supervisor_pid;
+        atomic_write_json(&self.path, &record)?;
+        self.released = true;
+        Ok(self.path.clone())
     }
 
     fn remove(&mut self) {
@@ -146,6 +167,79 @@ impl SlotLease {
             self.released = true;
         }
     }
+}
+
+/// Adopt a lease already handed to the current detached supervisor.
+///
+/// The parent writes the new owner pid immediately after spawning us. A short
+/// bounded wait closes that handoff race without ever manufacturing a fresh
+/// slot outside the original atomic cap check.
+pub(crate) fn adopt_slot(path: &Path) -> Result<SlotLease> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let record = fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<LeaseRecord>(&bytes).ok());
+        match record {
+            Some(record) if record.pid == std::process::id() => {
+                return Ok(SlotLease {
+                    path: path.to_path_buf(),
+                    harness: record.harness,
+                    released: false,
+                });
+            }
+            Some(_) if std::time::Instant::now() < deadline => thread::sleep(LOCK_WAIT),
+            Some(record) => {
+                anyhow::bail!(
+                    "slot lease {} belongs to pid {}, not supervisor {}",
+                    path.display(),
+                    record.pid,
+                    std::process::id()
+                )
+            }
+            None if std::time::Instant::now() < deadline => thread::sleep(LOCK_WAIT),
+            None => anyhow::bail!("slot lease {} disappeared during handoff", path.display()),
+        }
+    }
+}
+
+/// Release every lease linked to one dispatch id.
+///
+/// Reconciliation uses this after a supervisor crash so a dead worker cannot
+/// wedge either its harness cap or its session-wide `max_parallel_workers`
+/// slot. Only matching additive lease records are removed.
+pub(crate) fn release_dispatch_slots(dispatch: &str) -> Result<usize> {
+    let root = home().join("slots");
+    let harnesses = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut released = 0;
+    for harness in harnesses.filter_map(std::result::Result::ok) {
+        let path = harness.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let _lock = lock_slots(&path)?;
+        for entry in fs::read_dir(&path)?.filter_map(std::result::Result::ok) {
+            let lease_path = entry.path();
+            if lease_path
+                .extension()
+                .is_none_or(|extension| extension != "json")
+            {
+                continue;
+            }
+            let matches = fs::read(&lease_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<LeaseRecord>(&bytes).ok())
+                .is_some_and(|record| record.dispatch.as_deref() == Some(dispatch));
+            if matches && fs::remove_file(&lease_path).is_ok() {
+                released += 1;
+            }
+        }
+    }
+    Ok(released)
 }
 
 impl Drop for SlotLease {

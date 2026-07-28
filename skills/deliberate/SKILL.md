@@ -49,5 +49,6 @@ built yet.** Do not fake it.
   "One capable harness detected. Parallel cross-harness deliberation is
   unavailable. Running a sequential plan with self-review." and proceed.
 - **Confirmed delivery only:** a worker received its brief only when the dispatch
-  is `confirmed`; missing executables, absent capabilities, stopped panes,
-  timeouts, and non-zero exits are unavailable/failed and reported as such.
+  is `confirmed`; `confirmed/running` is not completion. Missing executables,
+  absent capabilities, and stopped panes are unavailable; status/await reports
+  later timeouts or non-zero exits as worker execution failures.

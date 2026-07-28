@@ -19,13 +19,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{
     BenchSession, HarnessConfig, HarnessRegistry, create_session, write_harness_registry,
 };
 use orc_core::dispatch::{
-    DispatchActor, DispatchRequest, dispatch_with_policy, drain_queued_with_policy, list_dispatches,
+    DispatchActor, DispatchRecord, DispatchRequest, dispatch_with_policy, drain_queued_with_policy,
+    list_dispatches, read_dispatch,
 };
 use orc_core::ratelimit::BackoffPolicy;
 use orc_core::spawn_guard::{DEFAULT_LEASE_TTL, acquire_slot};
@@ -116,6 +117,21 @@ fn request(session: &str, task: &str, harness: &str, prompt: &str) -> DispatchRe
     }
 }
 
+fn await_terminal(session: &str, delivered: DispatchRecord) -> DispatchRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record = read_dispatch(session, &delivered.id).expect("read dispatch");
+        if record.is_terminal() {
+            return record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dispatch did not finish: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AC1 — the extra worker is queued, never spawned.
 // ---------------------------------------------------------------------------
@@ -183,6 +199,7 @@ fn dispatch_beyond_the_cap_is_queued_and_no_worker_is_spawned() {
     assert_eq!(drained.len(), 1, "exactly one record drained");
     assert!(drained[0].is_confirmed(), "drained record is confirmed");
     assert_eq!(drained[0].id, queued.id, "queued record became confirmed");
+    let _terminal = await_terminal(&session.id, drained[0].clone());
     assert!(sentinel.exists(), "the worker ran once the slot freed");
     let _ = fs::remove_dir_all(home);
 }
@@ -230,6 +247,7 @@ exit 0
         &BackoffPolicy::fast(),
     )
     .expect("dispatch resolves");
+    let record = await_terminal(&session.id, record);
 
     assert!(
         record.is_confirmed(),
@@ -303,8 +321,13 @@ exit 1
         &BackoffPolicy::fast(),
     )
     .expect("dispatch persists a failed record");
+    let record = await_terminal(&session.id, record);
 
-    assert_eq!(record.status, "failed");
+    assert_eq!(
+        record.status, "confirmed",
+        "delivery remains confirmed even though the worker later failed"
+    );
+    assert_eq!(record.execution_status.as_deref(), Some("failed"));
     assert_eq!(
         record.failure_kind.as_deref(),
         Some("rate_limited"),
@@ -363,6 +386,7 @@ exit 0
         &BackoffPolicy::fast(),
     )
     .expect("dispatch persists a record");
+    let record = await_terminal(&session.id, record);
 
     assert_eq!(
         record.status, "confirmed",
@@ -442,6 +466,7 @@ fn the_cap_is_configured_in_the_registry_and_shared_across_sessions() {
     let drained = drain_queued_with_policy(&session_b.id, &BackoffPolicy::fast()).expect("drain B");
     assert_eq!(drained.len(), 1);
     assert!(drained[0].is_confirmed());
+    let _terminal = await_terminal(&session_b.id, drained[0].clone());
     assert!(sentinel.exists(), "B ran after A's slot freed");
     let _ = fs::remove_dir_all(home);
 }

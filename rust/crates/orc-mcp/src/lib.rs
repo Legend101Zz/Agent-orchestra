@@ -105,7 +105,7 @@ impl OrchServer {
     /// Assign, start, and dispatch a task to a worker harness.
     #[tool(
         name = "orch_delegate",
-        description = "Delegate a task to a worker harness: assign it, start it, and dispatch its brief. Creates the task inline when no task id is given. Blocks until the worker finishes or the delivery bound elapses; that bound is the harness's dispatch_timeout_sec (120s when unset), NOT the contract's timeout field, which is metadata only. Agentic workers routinely need several minutes."
+        description = "Delegate a task to a worker harness: assign it, start it, and return as soon as the brief is delivered while the worker continues in the background. Poll with orch_status or block for output and exit code with orch_await. --dispatch-timeout bounds the background worker (harness dispatch_timeout_sec, 120s when unset); the contract's --timeout is metadata only."
     )]
     async fn delegate(
         &self,
@@ -129,7 +129,7 @@ impl OrchServer {
     /// Block until a delegated task's newest delivery is terminal.
     #[tool(
         name = "orch_await",
-        description = "Block until a delegated task's newest delivery reaches a terminal state (confirmed or failed), or the timeout elapses."
+        description = "Block until a delegated task's newest worker reaches a terminal state, returning its answer, usage, and exit code, or until the await timeout elapses."
     )]
     async fn await_delegation(
         &self,
@@ -180,7 +180,8 @@ impl ServerHandler for OrchServer {
             .with_instructions(
                 "pi-orchestra control surface. Seven tools: orch_plan, orch_delegate, \
                  orch_status, orch_await, orch_review, orch_cancel, orch_finish. Delegation is \
-                 contract-driven; a worker receives the task's rendered acceptance brief."
+                 contract-driven; delegate returns after delivery, status polls durable state, \
+                 and await blocks for the worker's answer and exit code."
                     .to_owned(),
             )
     }
