@@ -29,7 +29,7 @@ ship-log entries are part of finishing an issue.*
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 👀 | `issue-12-single-harness-mode` — fixes pushed for re-review |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 🧪 | `issue-12-single-harness-mode` — reviewed, ready for your local test |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -161,6 +161,8 @@ issue #14.
 **Review (Claude, PR #35 @ `63842ac`): 🔨 FIX** — production code is correct and byte-exact, but the new `single_harness.rs` fixture races itself on a shared temp path so `cargo test --workspace` fails (4/15 under load), and the mandated sentence can be inverted to claim parallel deliberation with the whole suite still green.
 
 **Fix (code-puppy, PR #35): 👀 RE-REVIEW** — fixture roots now have distinct test labels plus an atomic sequence, and the acceptance test owns the full mandated sentence as a literal. The target passed 15/15 complete runs under CPU load, and the reviewer's `unavailable` → `available` mutation now fails immediately.
+
+**Re-review (Claude, PR #35 @ `a66c14a`): 🧪 ACCEPT** — reproduced both fixes myself: 20/20 clean under heavier CPU load than the 4/15 failure case, and both mutation directions (drifting the constant, and bypassing it in the CLI) now fail immediately. All five gates green, 223 tests, no production code changed this round.
 
 ### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
 `opencode` was fully wired to run (it has an invocation template, `spawn_guard`
