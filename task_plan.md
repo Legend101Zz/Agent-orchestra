@@ -32,14 +32,15 @@ record. (Issue numbers are filled in as issues are created.)
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — (✅ merged 2026-07-24, PR #23) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 (✅ merged 2026-07-27, PR #27) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 (✅ merged 2026-07-28, PR #32) |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 (✅ merged 2026-07-28, PR #35) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30 and #11 are merged.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11 and #12 are
+merged. Only #13 (visual identity) and #14 (README) remain in V1.**
 The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
 that had made every non-trivial delegation fail since #8; #30 (PR #31) then
 separated *delivery* from *execution* — `orch delegate` returns once the brief is
@@ -53,13 +54,24 @@ independently reviewed verdict per acceptance check (or an honest
 check is `fail`. Opened along the way, #33 (PR #34) fixed a real gap hit while
 testing #11 locally — `opencode` was fully wired but unreachable through
 `session create`, and `pi-m3` was a single hardcoded `pi` model with no way to
-register another.
+register another. #12 (PR #35) then completed the honest-degradation story: with
+exactly one capable adapter family, launch prints the mandated sentence verbatim
+and the full pipeline still runs sequentially; diversity is counted by adapter
+family rather than registry key, so two model profiles of one CLI may alternate
+implementer/reviewer roles but the report stays `self_review` — never
+manufactured independence.
 
-**Next: #12** and **#14**; **#13** anytime. Parallel-safe: #12 and #13 from
-fresh `main`; start #13 before more TUI churn lands to avoid merge conflicts.
+**Next: #13** and **#14** — the last two V1 items. Start #13 before more TUI
+churn lands to avoid merge conflicts.
 
 Still open by choice: `render_brief` is wired into `orch delegate` but not
-`dispatch send` (`orch` is the canonical path).
+`dispatch send` (`orch` is the canonical path). Small debts from #12, none
+blocking: the `?` help screen is not single-harness aware; HOME calls
+`single_harness::detect(.., None)` while `session create` passes `Some(cwd)`, so
+the two can disagree on whether the mode is active; `alternate_profile` has no
+test for the "executor profile has no `--provider/--model`, one sibling does"
+edge; and `background_dispatch.rs:195`'s sub-1s wall-clock budget is
+storage-dependent (fails on an external-SSD checkout, passes on internal disk).
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).

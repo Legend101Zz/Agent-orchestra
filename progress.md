@@ -1430,3 +1430,42 @@ hand back to the implementer.
 - All five required Rust gates pass from `rust/` with isolated target
   `/tmp/pio-issue12-reviewfix-target.igrvQm`, including the full workspace test
   suite with no retry or exclusion.
+
+## Session — 2026-07-29 (Claude): #12 adversarial review, both rounds, then merged
+
+- Reviewed PR #35 (`issue-12-single-harness-mode`) against issue #12's contract.
+  Note for the record: the review was requested as "#35 for issue #11"; #35 is
+  issue #12's work (`Closes #12`). #11 shipped earlier as PR #32.
+- Round 1 verdict 🔨 FIX (`63842ac`), two blocking findings, both reproduced
+  rather than inferred:
+  1. The PR's own new `orc-cli/tests/single_harness.rs` raced itself. Both
+     tests called `root("home")` with a hardcoded label, so the only thing
+     separating their temp dirs was `SystemTime::now().as_nanos()` — and
+     observed nonces end in 4–5 zeros (macOS granularity ~10 us). Both threads
+     landed on the same path and raced inside `git init`. Reproduced 4 failures
+     in 15 runs under CPU load; 12/12 green solo, which is why it looked clean
+     to the implementer. `cargo test --workspace` exited 101.
+  2. Both AC1 tests compared rendered output against `SINGLE_HARNESS_MESSAGE`
+     itself, not the spec text. Mutating the middle of the constant to
+     "Parallel cross-harness deliberation is available. Running a parallel
+     panel with independent peer review..." left the entire suite green — the
+     exact lie the issue exists to prevent.
+- Round 2 verdict 🧪 ACCEPT (`a66c14a`): fixture roots now carry a per-test
+  label plus a process-local `AtomicU64`; the acceptance test owns the mandated
+  sentence as an independent literal. Re-ran my own reproductions: 20/20 under
+  heavier load than the failure case (both tests still concurrent, not
+  serialized), and both mutation directions now fail — drifting the constant,
+  and bypassing it by changing the CLI's `eprintln!`. All five gates exit 0,
+  223 tests, zero failures.
+- Verified separately that `background_dispatch.rs:195`'s sub-1s assertion is
+  pre-existing and NOT this PR's: it fails 8/8 on `origin/main` in a worktree on
+  the same external SSD volume, and passes on the internal disk. Storage-speed
+  dependent, left untouched.
+- Two review-process gotchas worth remembering: `git diff main --stat` in a
+  stale checkout showed ~27 files / 4668 insertions because local `main`
+  predated the #11/#33 merges — the real diff is `origin/main...HEAD`, 8 files.
+  And `${PIPESTATUS[0]}` silently yields nothing in zsh, so piping a gate to
+  `tail` hid a failing `cargo test --workspace` behind a green-looking log.
+  Capture gate exit codes without a pipe.
+- Mrigesh merged PR #35 (`8f07f1e`) and closed #12. Status boards updated here,
+  in `LOG.md`, and in `task_plan.md`. Only #13 and #14 remain in V1.

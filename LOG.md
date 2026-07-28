@@ -29,7 +29,7 @@ ship-log entries are part of finishing an issue.*
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
-| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | 🧪 | `issue-12-single-harness-mode` — reviewed, ready for your local test |
+| [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -59,9 +59,31 @@ to register another — both now work (`discover()` auto-registers any
 known-adapter harness; `pio harness add` registers new named model profiles
 with validated or manual input).
 
-**Next: #12 and #14; #13 anytime.** Still open by choice:
+**#12 merged (2026-07-28, PR #35) — with one CLI installed, pi-orchestra is
+still useful and says so honestly.** When exactly one adapter family is
+capable, launch prints the mandated sentence verbatim — *"One capable harness
+detected. Parallel cross-harness deliberation is unavailable. Running a
+sequential plan with self-review."* — and then still delivers the whole
+pipeline: durable session, isolated worktree, bounded dispatch, sequential
+implementer→reviewer, acceptance evidence, final receipt. The key honesty call
+is that diversity is counted by *adapter family*, not registry key, so two
+model profiles of the same CLI can alternate implementer/reviewer roles but the
+report still says `self_review` — pi-orchestra never manufactures independence
+it doesn't have. HOME copy switches to sequential language in this mode too.
+Took two review rounds: the first found that the new test fixture raced itself
+(making `cargo test --workspace` fail under load) and that the mandated
+sentence was only compared against its own constant — so it could have been
+edited to advertise parallel deliberation with the whole suite still green.
+Both fixed and re-verified by mutation.
+
+**Next: #13 and #14 — that's all of V1.** Still open by choice:
 `render_brief` is wired into `orch delegate` but not `dispatch send`. Start #13
-before more TUI churn lands to avoid merge pain.**
+before more TUI churn lands to avoid merge pain. Known small debts left by #12
+(none blocking): the `?` help screen isn't single-harness aware, HOME and
+`session create` can disagree on whether the mode is active because one probes
+without a cwd, and `background_dispatch.rs`'s sub-1s timing assertion is
+hardware-dependent — it fails on external-SSD checkouts and passes on internal
+disks.
 
 ## Prompts you run
 
