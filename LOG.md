@@ -27,7 +27,7 @@ ship-log entries are part of finishing an issue.*
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *unblocked* | — |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *next* | — |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
