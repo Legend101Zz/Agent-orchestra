@@ -27,10 +27,11 @@ ship-log entries are part of finishing an issue.*
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | 🧪 | `issue-11-isolation-review-report` |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
+| [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | 👀 | `issue-33-harness-registration` |
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
@@ -45,10 +46,19 @@ stores the worker's *answer* plus token usage instead of a JSON firehose.
 Together with #28 (the pipe-buffer deadlock) this closes out a run of three
 defects that had made delegation useless for real work since #8 landed.
 
-**Next: #11**, then #12 and #14; #13 anytime. #11 (worktree isolation +
-independent review + receipt) rewrites `dispatch.rs`, which is exactly why it
-was sequenced after #30 — its per-check report depends on how a dispatch reaches
-its terminal state, and that shape is now settled. Still open by choice:
+**#11 merged (2026-07-28, PR #32) — every contracted task is isolated,
+independently reviewed, and produces a final receipt.** Contracted tasks now
+run in their own Git worktree so a worker cannot touch the main checkout;
+`orch review` dispatches to a different capable harness when one exists, or
+labels the result an honest `self_review` with just one; `orch finish` refuses
+to move a task to `done` while any acceptance check is verdicted `fail`. Along
+the way, issue #33 (Claude) fixed a gap found while testing #11 locally:
+`pio harness list` discovered `opencode` but never made it usable, and `pi-m3`
+was a single hardcoded model profile with no way to register another — both
+now work (`discover()` auto-registers any known-adapter harness; `pio harness
+add` registers new named model profiles with validated or manual input).
+
+**Next: #12 and #14; #13 anytime.** Still open by choice:
 `render_brief` is wired into `orch delegate` but not `dispatch send`. Start #13
 before more TUI churn lands to avoid merge pain.**
 
@@ -136,6 +146,21 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
+`opencode` was fully wired to run (it has an invocation template, `spawn_guard`
+already knew its concurrency cap) but was unreachable — `session create
+--worker opencode` failed even right after `harness list` reported it
+available, because discovery only recorded presence, never made it a usable
+profile. Any `KNOWN_HARNESSES` name with a working invocation template now
+becomes usable automatically the moment it's found on `PATH`. Separately,
+`pi-m3` was a single hardcoded model of the generic `pi` binary with no way to
+register another; `pio harness add <key> --like <existing> --provider --model`
+now does that, auto-probing the harness's own model list (`pi --list-models`,
+`opencode models`) when possible and rejecting bad pairs with the real valid
+choices, falling back to trusting manual input when the probe itself fails. I
+did NOT add a way to edit/remove profiles, change role or capability-probe
+semantics, or build model-flag support for any adapter besides `pi`.
 
 ### 2026-07-28 — Isolated work, independent review, and final receipts, issue #11 (code-puppy)
 Contracted tasks now run in their own Git worktrees, so a worker cannot change

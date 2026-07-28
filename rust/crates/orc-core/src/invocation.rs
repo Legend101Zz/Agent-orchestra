@@ -191,6 +191,16 @@ fn template_for(adapter: &str) -> Option<InvocationTemplate> {
     Some(template)
 }
 
+/// Whether `adapter` has a known non-interactive invocation template.
+///
+/// Used by discovery to decide whether auto-registering a bare profile for a
+/// newly-found executable would actually be dispatchable, without duplicating
+/// the adapter list `template_for` already owns.
+#[must_use]
+pub(crate) fn has_invocation_template(adapter: &str) -> bool {
+    template_for(adapter).is_some()
+}
+
 /// Resolve the argv (prompt excluded) and prompt delivery for one worker.
 ///
 /// `probed` is the verified capability set for this harness's adapter (empty for

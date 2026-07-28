@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::locate_executable;
 use crate::bench::{
-    DiscoveredHarness, HarnessRegistry, load_harness_registry, read_harness_registry,
-    write_harness_registry,
+    DiscoveredHarness, HarnessConfig, HarnessRegistry, load_harness_registry,
+    read_harness_registry, write_harness_registry,
 };
 use crate::quota::command_output_with_timeout;
 use crate::registry::now_iso;
@@ -87,6 +87,7 @@ pub fn discover(probe_versions: bool) -> Result<Vec<HarnessDiscovery>> {
             stored_version
         };
         record_discovery(&mut registry.discovered, name, path_str, version, &now);
+        register_default_profile(&mut registry.harnesses, name);
     }
     write_harness_registry(&registry)?;
     Ok(present(&registry))
@@ -152,6 +153,32 @@ fn record_discovery(
     }
 }
 
+/// Insert a minimal usable profile for `name` when none exists yet and the
+/// adapter has a working invocation template. Never overwrites an existing
+/// entry — hand-configured or previously auto-registered. Leaves
+/// `dispatch_args` empty so `invocation::resolve_worker_invocation` derives
+/// the actual invocation from the adapter's template (path 2) instead of a
+/// second hardcoded flag list living here.
+fn register_default_profile(harnesses: &mut BTreeMap<String, HarnessConfig>, name: &str) {
+    if harnesses.contains_key(name) || !crate::invocation::has_invocation_template(name) {
+        return;
+    }
+    harnesses.insert(
+        name.to_owned(),
+        HarnessConfig {
+            command: name.to_owned(),
+            args: Vec::new(),
+            resume_args: Vec::new(),
+            roles: vec!["brain".to_owned(), "worker".to_owned()],
+            adapter: name.to_owned(),
+            dispatch_args: Vec::new(),
+            dispatch_uses_stdin: false,
+            dispatch_timeout_sec: 0,
+            extra: BTreeMap::new(),
+        },
+    );
+}
+
 /// Best-effort cheap version string from one bounded `--version` invocation.
 ///
 /// Returns `None` unless the command exits successfully, so a harness that
@@ -179,8 +206,8 @@ fn probe_version(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HarnessRegistry, present, record_discovery};
-    use crate::bench::DiscoveredHarness;
+    use super::{HarnessRegistry, present, record_discovery, register_default_profile};
+    use crate::bench::{DiscoveredHarness, HarnessConfig};
     use std::collections::BTreeMap;
 
     #[test]
@@ -273,5 +300,46 @@ mod tests {
             .find(|row| row.name == "opencode")
             .expect("opencode row");
         assert!(opencode.first_seen.is_none());
+    }
+
+    #[test]
+    fn register_default_profile_fills_gaps_and_never_overwrites() {
+        let mut harnesses = BTreeMap::from([(
+            "claude".to_owned(),
+            HarnessConfig {
+                command: "custom-claude-path".to_owned(),
+                args: vec!["--hand-edited".to_owned()],
+                resume_args: Vec::new(),
+                roles: vec!["brain".to_owned()],
+                adapter: "claude".to_owned(),
+                dispatch_args: Vec::new(),
+                dispatch_uses_stdin: false,
+                dispatch_timeout_sec: 0,
+                extra: BTreeMap::new(),
+            },
+        )]);
+
+        // An existing entry is never touched, even though its adapter has a
+        // template.
+        register_default_profile(&mut harnesses, "claude");
+        assert_eq!(harnesses["claude"].command, "custom-claude-path");
+        assert_eq!(harnesses["claude"].args, vec!["--hand-edited".to_owned()]);
+
+        // A known adapter with no existing entry gets a minimal usable
+        // profile: both roles, empty dispatch_args so invocation.rs's
+        // template synthesis (not a hardcoded flag list) drives dispatch.
+        register_default_profile(&mut harnesses, "opencode");
+        let opencode = &harnesses["opencode"];
+        assert_eq!(opencode.command, "opencode");
+        assert_eq!(opencode.adapter, "opencode");
+        assert_eq!(
+            opencode.roles,
+            vec!["brain".to_owned(), "worker".to_owned()]
+        );
+        assert!(opencode.dispatch_args.is_empty());
+
+        // A name with no invocation template is never inserted.
+        register_default_profile(&mut harnesses, "no-such-adapter");
+        assert!(!harnesses.contains_key("no-such-adapter"));
     }
 }

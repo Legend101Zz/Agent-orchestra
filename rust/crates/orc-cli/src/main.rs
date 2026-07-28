@@ -7,11 +7,12 @@ use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::{
-    create_session, list_sessions, load_harness_registry, write_harness_registry,
+    HarnessConfig, create_session, list_sessions, load_harness_registry, write_harness_registry,
 };
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
 use orc_core::discovery;
+use orc_core::harness_models::{self, ModelProbe};
 use orc_core::metrics::{brain_usage, delegated_value, worker_stats};
 use orc_core::orch::{
     self, AwaitRequest, DelegateRequest, OrchActor, OrchOutcome, PlanRequest, StatusRequest,
@@ -707,6 +708,32 @@ enum HarnessCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Register a new named harness profile, e.g. another model of `pi`.
+    ///
+    /// Copies `command`/`adapter`/`roles`/`resume_args`/`dispatch_args`/
+    /// `dispatch_uses_stdin`/`dispatch_timeout_sec` from `--like`, then sets
+    /// `--provider`/`--model` as the new profile's `args` — supported for
+    /// the `pi` adapter today. `--list-models` probes and prints without
+    /// registering anything.
+    Add {
+        /// New registry key, e.g. `pi-claude`. Required unless --list-models.
+        key: Option<String>,
+        /// Existing registry key to copy command/adapter/roles from.
+        #[arg(long)]
+        like: String,
+        /// Provider name, validated against the harness's own model list
+        /// when one can be probed.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model name, validated the same way as --provider.
+        #[arg(long)]
+        model: Option<String>,
+        /// Probe and print the harness's available models; register nothing.
+        #[arg(long)]
+        list_models: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn quota_exit(level: &str) -> i32 {
@@ -1107,6 +1134,7 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
                         println!("{:<10} NOT ON PATH · unavailable", harness.name);
                     }
                 }
+                print_registered_profiles()?;
             }
             Ok(0)
         }
@@ -1153,6 +1181,158 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
                 }
             }
             Ok(0)
+        }
+        HarnessCommand::Add {
+            key,
+            like,
+            provider,
+            model,
+            list_models,
+            json,
+        } => {
+            let mut registry = load_harness_registry()?;
+            let source = registry
+                .harnesses
+                .get(&like)
+                .cloned()
+                .with_context(|| format!("unknown harness: {like}"))?;
+
+            if list_models {
+                let probe = harness_models::probe(&source.adapter, &source.command);
+                return print_model_probe(&like, &probe, json);
+            }
+
+            let key =
+                key.ok_or_else(|| anyhow!("harness add requires <key> unless --list-models"))?;
+            let provider = provider.ok_or_else(|| {
+                anyhow!("harness add requires --provider (use --list-models to see choices)")
+            })?;
+            let model = model.ok_or_else(|| {
+                anyhow!("harness add requires --model (use --list-models to see choices)")
+            })?;
+
+            if source.adapter != "pi" {
+                anyhow::bail!(
+                    "harness add only supports provider/model profiles for the 'pi' adapter \
+                     today; {like} uses adapter '{}'",
+                    source.adapter
+                );
+            }
+
+            if let ModelProbe::Models(models) =
+                harness_models::probe(&source.adapter, &source.command)
+                && !models.iter().any(|(p, m)| *p == provider && *m == model)
+            {
+                let choices = models
+                    .iter()
+                    .map(|(p, m)| format!("{p}/{m}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "'{provider}/{model}' is not a model {like} can run; valid choices: {choices}"
+                );
+            }
+
+            let mut config = source;
+            config.args = vec![
+                "--provider".to_owned(),
+                provider.clone(),
+                "--model".to_owned(),
+                model.clone(),
+            ];
+            registry.harnesses.insert(key.clone(), config);
+            write_harness_registry(&registry)?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "key": key,
+                        "like": like,
+                        "provider": provider,
+                        "model": model,
+                    }))?
+                );
+            } else {
+                println!("registered {key} (like {like}) \u{b7} {provider}/{model}");
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// Print every registered harness profile with its configured provider/model
+/// when one is set (currently only the `pi` adapter's `--provider <p>
+/// --model <m>` shape, written by `harness add` and the `pi-m3` default).
+fn print_registered_profiles() -> Result<()> {
+    let registry = load_harness_registry()?;
+    if registry.harnesses.is_empty() {
+        return Ok(());
+    }
+    println!("\nregistered profiles:");
+    for (key, config) in &registry.harnesses {
+        let roles = config.roles.join("+");
+        match provider_model_args(config) {
+            Some((provider, model)) => {
+                println!(
+                    "  {key:<12} {} ({roles}) \u{b7} {provider}/{model}",
+                    config.command
+                );
+            }
+            None => {
+                println!("  {key:<12} {} ({roles})", config.command);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extract `(provider, model)` from a profile's `args` when they carry the
+/// `--provider <p> --model <m>` shape this module writes.
+fn provider_model_args(config: &HarnessConfig) -> Option<(&str, &str)> {
+    let mut iter = config.args.iter();
+    let mut provider = None;
+    let mut model = None;
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--provider" => provider = iter.next().map(String::as_str),
+            "--model" => model = iter.next().map(String::as_str),
+            _ => {}
+        }
+    }
+    provider.zip(model)
+}
+
+fn print_model_probe(key: &str, probe: &ModelProbe, json: bool) -> Result<i32> {
+    match probe {
+        ModelProbe::Models(models) => {
+            if json {
+                let rows: Vec<_> = models
+                    .iter()
+                    .map(|(provider, model)| {
+                        serde_json::json!({"provider": provider, "model": model})
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                for (provider, model) in models {
+                    println!("{provider}/{model}");
+                }
+            }
+            Ok(0)
+        }
+        ModelProbe::NoProber => {
+            eprintln!(
+                "no automatic model listing for {key}; run its own model-listing command \
+                 yourself (e.g. its --help), then pass --provider/--model to `harness add`"
+            );
+            Ok(1)
+        }
+        ModelProbe::Failed(reason) => {
+            eprintln!(
+                "could not probe {key}'s models ({reason}); pass --provider/--model manually"
+            );
+            Ok(1)
         }
     }
 }

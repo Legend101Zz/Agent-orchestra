@@ -5,6 +5,7 @@ pub mod control;
 pub mod discovery;
 pub mod dispatch;
 pub mod dispatch_supervisor;
+pub mod harness_models;
 pub mod inbox;
 pub mod invocation;
 pub mod metrics;
