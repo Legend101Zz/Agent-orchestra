@@ -112,6 +112,53 @@ fn harness_list_shows_all_five_with_three_present_and_two_unavailable() {
 }
 
 #[test]
+fn harness_list_then_session_create_can_use_a_newly_discovered_harness() {
+    // Reproduces the exact reported failure: `opencode` is a KNOWN_HARNESSES
+    // name with a working invocation template, but before issue #33 nothing
+    // ever put it into `harnesses`, so `session create --worker opencode`
+    // failed with "unknown worker harness: opencode" even right after
+    // `harness list` reported it "available".
+    let root = root("discover-then-session");
+    let home = root.join("orchestra");
+    let bin = root.join("bin");
+    let cwd = root.join("cwd");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fake_harness(&bin, "opencode", "opencode 1.0.0");
+
+    let listed = run(&home, &bin, &["harness", "list"]);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+
+    let created = run(
+        &home,
+        &bin,
+        &[
+            "session",
+            "create",
+            "--brain",
+            "opencode",
+            "--worker",
+            "opencode",
+            "--cwd",
+            &cwd.to_string_lossy(),
+            "--json",
+        ],
+    );
+    assert!(
+        created.status.success(),
+        "session create with a newly auto-registered harness should succeed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn harness_list_is_additive_and_preserves_unknown_fields() {
     let root = root("additive");
     let home = root.join("orchestra");

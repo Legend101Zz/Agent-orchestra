@@ -146,8 +146,10 @@ pub struct HarnessRegistry {
     pub app: BenchAppConfig,
     /// PATH-discovered harness executables keyed by harness name.
     ///
-    /// Populated by `pio harness list` (auto-discovery). Additive and
-    /// independent of [`Self::harnesses`], which stays user-editable.
+    /// Populated by `pio harness list` (auto-discovery). Additive; discovery
+    /// also fills gaps in [`Self::harnesses`] for known-adapter names with no
+    /// existing profile (issue #33), but never overwrites an existing entry
+    /// there, hand-configured or previously auto-registered.
     #[serde(default)]
     pub discovered: BTreeMap<String, DiscoveredHarness>,
     /// Unknown future fields.
