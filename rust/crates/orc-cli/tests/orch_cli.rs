@@ -45,24 +45,27 @@ fn fresh_home(label: &str) -> PathBuf {
 /// Write a fixture harness registry under the *current* `ORC_HOME`; the caller
 /// sets `ORC_HOME` under `lock()` first.
 fn write_fixture_registry(home: &Path) {
+    write_fixture_registry_with_review_verdict(home, "pass");
+}
+
+fn write_fixture_registry_with_review_verdict(home: &Path, verdict: &str) {
+    assert!(matches!(verdict, "pass" | "fail"));
     let bin = home.join("bin");
     fs::create_dir_all(&bin).expect("create bin");
     let script = bin.join("fake-worker.sh");
-    fs::write(
-        &script,
-        r#"#!/bin/sh
+    let script_body = r#"#!/bin/sh
 case "$*" in
   *"Acceptance checks:"*)
-    echo '{"verdicts":[{"check":"it builds","verdict":"pass","evidence":"fixture review passed"}]}'
+    echo '{"verdicts":[{"check":"it builds","verdict":"__VERDICT__","evidence":"fixture review returned __VERDICT__"}]}'
     ;;
   *)
     echo "fake-worker-stdout ${@: -1}"
     ;;
 esac
 exit 0
-"#,
-    )
-    .expect("write fake worker");
+"#
+    .replace("__VERDICT__", verdict);
+    fs::write(&script, script_body).expect("write fake worker");
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod fake worker");
     let mut registry = HarnessRegistry::default();
     for config in registry.harnesses.values_mut() {
@@ -419,6 +422,127 @@ fn cli_full_lifecycle_over_the_verbs() {
         ],
     );
     assert_eq!(cancelled["tasks"][0]["status"], "dropped");
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// A failed acceptance verdict is a hard completion barrier: the real CLI
+/// lifecycle persists the report but must leave the task in review.
+#[test]
+fn failed_review_verdict_blocks_finish_and_keeps_task_in_review() {
+    let home = fresh_home("failed-review");
+    let session;
+    {
+        let _guard = lock();
+        // SAFETY: serialized by `lock()`; used only to write the fixture.
+        unsafe { std::env::set_var("ORC_HOME", &home) };
+        write_fixture_registry_with_review_verdict(&home, "fail");
+        session = write_fixture_session(&home);
+    }
+
+    let planned = pio_ok(
+        &home,
+        &[
+            "orch",
+            "plan",
+            "reject failed review",
+            "--session",
+            &session,
+            "--objective",
+            "Only accepted work may finish.",
+            "--check",
+            "it builds",
+            "--json",
+        ],
+    );
+    let task_id = planned["tasks"][0]["id"]
+        .as_str()
+        .expect("task id")
+        .to_owned();
+
+    let delegated = pio_ok(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "fake-worker",
+            "--session",
+            &session,
+            "--task",
+            &task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(delegated["tasks"][0]["status"], "running");
+    pio_ok(
+        &home,
+        &[
+            "orch",
+            "await",
+            &task_id,
+            "--session",
+            &session,
+            "--timeout",
+            "10",
+            "--json",
+        ],
+    );
+
+    let reviewed = pio_ok(
+        &home,
+        &["orch", "review", &task_id, "--session", &session, "--json"],
+    );
+    assert_eq!(reviewed["tasks"][0]["status"], "review");
+    pio_ok(
+        &home,
+        &[
+            "orch",
+            "await",
+            &task_id,
+            "--session",
+            &session,
+            "--timeout",
+            "10",
+            "--json",
+        ],
+    );
+
+    let finish = pio(
+        &home,
+        &["orch", "finish", &task_id, "--session", &session, "--json"],
+    );
+    assert!(
+        !finish.status.success(),
+        "finish must reject a failed acceptance verdict"
+    );
+    let error = String::from_utf8_lossy(&finish.stderr);
+    assert!(
+        error.contains("remains review") && error.contains("1 acceptance check(s) failed"),
+        "finish must explain the failed completion barrier: {error}"
+    );
+
+    let status = pio_ok(
+        &home,
+        &["orch", "status", &task_id, "--session", &session, "--json"],
+    );
+    let task = &status["tasks"][0];
+    assert_eq!(task["status"], "review");
+    assert_eq!(task["report"]["verdicts"][0]["check"], "it builds");
+    assert_eq!(task["report"]["verdicts"][0]["verdict"], "fail");
+    assert!(
+        task["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .all(|event| event["to"] != "done"),
+        "failed review must never record a transition to done"
+    );
+
+    let report_path = task["report"]["path"].as_str().expect("report path");
+    let report: Value =
+        serde_json::from_slice(&fs::read(report_path).expect("persisted failed report"))
+            .expect("failed report JSON");
+    assert_eq!(report["verdicts"][0]["verdict"], "fail");
 
     let _ = fs::remove_dir_all(&home);
 }
