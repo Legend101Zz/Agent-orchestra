@@ -21,7 +21,9 @@ struct Args {
     command: Option<AppCommand>,
     #[arg(long)]
     socket: Option<PathBuf>,
-    #[arg(long, default_value = "ember")]
+    /// Fallback theme when the daemon has no configured one; the registry's
+    /// `app.theme` wins whenever it is set.
+    #[arg(long, default_value = "nocturne")]
     theme: String,
     #[arg(long)]
     bench: bool,

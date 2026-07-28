@@ -27,19 +27,28 @@ use orc_core::discovery::{self, HarnessDiscovery};
 use orc_core::single_harness::{self, SINGLE_HARNESS_MESSAGE, SingleHarnessPlan};
 use orc_proto::{
     ClientRequest, DaemonMetrics, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence,
-    PaneSnapshot, ServerResponse, SessionSummary, TaskSummary, TerminalColor,
+    PaneSnapshot, ServerResponse, SessionSummary, TaskSummary,
 };
 use orc_pty::trigger::{Trigger, scan_line};
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::symbols::{Marker, border};
+use ratatui::style::{Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Points};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use tachyonfx::{EffectTimer, Interpolation};
 use thiserror::Error;
+
+pub mod baton;
+pub mod glyph;
+#[cfg(test)]
+mod snapshot;
+pub mod theme;
+
+use crate::glyph::{Glyph, GlyphTier, Glyphs};
+pub use crate::theme::ThemeName;
+use crate::theme::{ColorTier, Slot, TRIGGER_RAINBOW, Theme};
 
 const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -69,75 +78,6 @@ pub enum AppError {
 /// Result type returned by client operations.
 pub type Result<T> = std::result::Result<T, AppError>;
 
-/// The two approved Bench themes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThemeName {
-    /// Warm charcoal, bone, brass, and oxblood.
-    Ember,
-    /// CRT-green monochrome with semantic exceptions.
-    Phosphor,
-}
-
-impl ThemeName {
-    /// Every approved theme, so snapshot coverage tracks the palette set
-    /// automatically as themes are added.
-    pub const ALL: [Self; 2] = [Self::Ember, Self::Phosphor];
-
-    /// Parse a configured theme name.
-    #[must_use]
-    pub fn named(name: &str) -> Self {
-        if name.eq_ignore_ascii_case("phosphor") {
-            Self::Phosphor
-        } else {
-            Self::Ember
-        }
-    }
-
-    #[must_use]
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ember => "ember",
-            Self::Phosphor => "phosphor",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Theme {
-    stage: Color,
-    text: Color,
-    dim: Color,
-    focus: Color,
-    pulse: Color,
-    shadow: Color,
-    attention: Color,
-}
-
-impl From<ThemeName> for Theme {
-    fn from(value: ThemeName) -> Self {
-        match value {
-            ThemeName::Ember => Self {
-                stage: Color::Rgb(18, 16, 15),
-                text: Color::Rgb(225, 215, 194),
-                dim: Color::Rgb(91, 80, 65),
-                focus: Color::Rgb(209, 158, 77),
-                pulse: Color::Rgb(255, 201, 105),
-                shadow: Color::Rgb(8, 7, 7),
-                attention: Color::Rgb(122, 42, 38),
-            },
-            ThemeName::Phosphor => Self {
-                stage: Color::Rgb(2, 13, 8),
-                text: Color::Rgb(151, 255, 190),
-                dim: Color::Rgb(38, 99, 61),
-                focus: Color::Rgb(111, 255, 160),
-                pulse: Color::Rgb(207, 255, 220),
-                shadow: Color::Rgb(0, 5, 3),
-                attention: Color::Rgb(255, 107, 77),
-            },
-        }
-    }
-}
-
 /// A version-negotiated connection used for command and benchmark traffic.
 pub struct BenchClient {
     stream: UnixStream,
@@ -159,7 +99,7 @@ pub struct HomeData {
     pub max_parallel_workers: usize,
     /// Honest sequential fallback when exactly one adapter family is capable.
     pub single_harness: Option<SingleHarnessPlan>,
-    /// Ember or phosphor.
+    /// The configured theme name: nocturne, ember, or phosphor.
     pub theme: String,
     /// Reduced-motion preference.
     pub reduced_motion: bool,
@@ -556,55 +496,50 @@ struct StageState {
     panes: Vec<PaneSnapshot>,
     focus: usize,
     pane_areas: Vec<Rect>,
+    /// The baton's decay timer. It is reset on every output tick, so
+    /// `done()` means "no output for [`baton::DECAY`]" — the spec's trigger
+    /// for falling back to the idle rail — and the shell's repaint loop reads
+    /// the same signal to stop animating.
     pulse: EffectTimer,
     last_tick: Instant,
+    /// When the current sweep began, so the packet's frame is a function of
+    /// wall-clock rather than of how often the shell happened to repaint.
+    sweep_start: Instant,
     theme: Theme,
+    glyphs: Glyphs,
     session_id: Option<String>,
     layout: Vec<LayoutRect>,
     zoomed: bool,
     dragging: Option<(usize, u16, u16)>,
     raw_router: RawRouter,
     confirmed_panes: std::collections::HashSet<String>,
-    baton_kind: BatonKind,
     leader_label: String,
     /// Recoverable command failure shown on the legend line instead of
     /// exiting the client.
     message: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BatonKind {
-    Settle,
-    Dispatch,
-    Complete,
-    Failed,
-}
-
-fn baton_profile(kind: BatonKind) -> (u32, usize, bool) {
-    match kind {
-        BatonKind::Settle => (700, 1, false),
-        BatonKind::Dispatch => (480, 3, false),
-        BatonKind::Complete => (760, 2, true),
-        BatonKind::Failed => (1050, 1, true),
-    }
-}
-
 impl StageState {
-    fn new(panes: Vec<PaneSnapshot>, theme: ThemeName) -> Self {
+    fn new(panes: Vec<PaneSnapshot>, theme: Theme, glyphs: Glyphs) -> Self {
+        let now = Instant::now();
         Self {
             panes,
             focus: 0,
             pane_areas: Vec::new(),
-            pulse: EffectTimer::from_ms(900, Interpolation::CubicOut),
-            last_tick: Instant::now(),
-            theme: theme.into(),
+            pulse: EffectTimer::from_ms(
+                u32::try_from(baton::DECAY.as_millis()).unwrap_or(u32::MAX),
+                Interpolation::Linear,
+            ),
+            last_tick: now,
+            sweep_start: now,
+            theme,
+            glyphs,
             session_id: None,
             layout: Vec::new(),
             zoomed: false,
             dragging: None,
             raw_router: RawRouter::default(),
             confirmed_panes: std::collections::HashSet::new(),
-            baton_kind: BatonKind::Settle,
             leader_label: "ctrl-g".to_owned(),
             message: String::new(),
         }
@@ -614,9 +549,10 @@ impl StageState {
         session_id: String,
         panes: Vec<PaneSnapshot>,
         layout: Vec<LayoutRect>,
-        theme: ThemeName,
+        theme: Theme,
+        glyphs: Glyphs,
     ) -> Self {
-        let mut state = Self::new(panes, theme);
+        let mut state = Self::new(panes, theme, glyphs);
         state.session_id = Some(session_id);
         state.layout = layout;
         state
@@ -630,9 +566,18 @@ impl StageState {
             || panes.len() != self.panes.len();
         self.panes = panes;
         if changed {
-            self.pulse.reset();
+            self.mark_output();
         }
         self.focus = self.focus.min(self.panes.len().saturating_sub(1));
+    }
+
+    /// A pane produced output, or a task event landed: restart the decay
+    /// timer, and begin a sweep if the rail had gone idle.
+    fn mark_output(&mut self) {
+        if self.pulse.done() {
+            self.sweep_start = Instant::now();
+        }
+        self.pulse.reset();
     }
 
     fn advance(&mut self) {
@@ -642,11 +587,18 @@ impl StageState {
         let _ = self.pulse.process(elapsed);
     }
 
-    fn set_baton_kind(&mut self, kind: BatonKind) {
-        if self.baton_kind != kind {
-            self.baton_kind = kind;
-            self.pulse = EffectTimer::from_ms(baton_profile(kind).0, Interpolation::CubicOut);
-        }
+    /// The baton's state right now, given the client's motion preference.
+    ///
+    /// `pulse.done()` is the 400 ms silence the spec decays on; the sweep
+    /// frame comes from `sweep_start` so the packet advances at a fixed
+    /// 110 ms/frame regardless of repaint rate.
+    fn baton_state(&self, reduced_motion: bool) -> baton::State {
+        let since_output = if self.pulse.done() {
+            baton::DECAY
+        } else {
+            Duration::ZERO
+        };
+        baton::State::resolve(reduced_motion, since_output, self.sweep_start.elapsed())
     }
 
     /// Whether any conductor pane currently shows a trigger. The shell keeps
@@ -851,6 +803,7 @@ struct ShellState {
     stage: Option<StageState>,
     score: Option<ScoreState>,
     theme: Theme,
+    glyphs: Glyphs,
     runs: orc_tui::App,
     reports: Vec<orc_core::report::FinalReport>,
     help: bool,
@@ -864,12 +817,37 @@ struct ShellState {
     watch_session: Arc<Mutex<Option<String>>>,
 }
 
-fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, leader_label: &str) {
+/// The glyph and semantic slot one card carries.
+///
+/// A blocked card is the exception that outranks its column, because a task
+/// nobody can start is not the same news as a task nobody has started. The
+/// glyph is what survives `NO_COLOR`; the slot is decoration on top.
+fn task_state(task: &TaskSummary) -> (Glyph, Slot) {
+    if task.blocked {
+        return (Glyph::Failed, Slot::Failed);
+    }
+    match task.status.as_str() {
+        "done" => (Glyph::Confirmed, Slot::Confirmed),
+        "running" => (Glyph::InProgress, Slot::Worker),
+        "review" => (Glyph::InProgress, Slot::Brain),
+        _ => (Glyph::Pending, Slot::Pending),
+    }
+}
+
+fn render_score(
+    frame: &mut Frame<'_>,
+    score: &mut ScoreState,
+    theme: Theme,
+    glyphs: Glyphs,
+    leader_label: &str,
+) {
     let area = frame.area();
     score.width = area.width.max(1);
-    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    frame.render_widget(Block::new().style(Style::default().bg(theme.bg())), area);
     let columns = ["backlog", "assigned", "running", "review", "done"];
     let width = (area.width / columns.len() as u16).max(1);
+    let body = Style::default().fg(theme.fg());
+    let meta = theme.state(Slot::Muted);
     for (index, status) in columns.iter().enumerate() {
         let x = area.x.saturating_add(width.saturating_mul(index as u16));
         let column = Rect::new(
@@ -882,31 +860,49 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
             },
             area.height,
         );
-        let mut lines = vec![format!(" {}", status.to_ascii_uppercase())];
+        let mut lines = vec![(
+            format!(" {}", status.to_ascii_uppercase()),
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+        )];
         for task in score.tasks.iter().filter(|task| task.status == *status) {
             let selected = score
                 .tasks
                 .get(score.selected)
                 .is_some_and(|chosen| chosen.id == task.id);
-            lines.push(format!(
-                "{} {} {}",
-                if selected { "›" } else { " " },
-                task.id,
-                task.title
+            let (glyph, slot) = task_state(task);
+            lines.push((
+                format!(
+                    "{} {} {} {}",
+                    if selected { "›" } else { " " },
+                    glyphs.get(glyph),
+                    task.id,
+                    task.title
+                ),
+                if selected {
+                    theme.selection()
+                } else {
+                    theme.state(slot)
+                },
             ));
-            lines.push(format!(
-                "  {} · {}",
-                task.assignee.as_deref().unwrap_or("unassigned"),
-                if task.isolated { "isolate" } else { "shared" }
+            lines.push((
+                format!(
+                    "  {} · {}",
+                    task.assignee.as_deref().unwrap_or("unassigned"),
+                    if task.isolated { "isolate" } else { "shared" }
+                ),
+                meta,
             ));
             if let Some(diff) = &task.diff {
-                lines.push(format!("  {diff}"));
+                lines.push((format!("  {diff}"), meta));
             }
             if let Some(tokens) = &task.tokens {
-                lines.push(format!("  {tokens} tokens"));
+                lines.push((format!("  {tokens} tokens"), meta));
             }
             if task.blocked {
-                lines.push("  BLOCKED: dependencies".to_owned());
+                lines.push((
+                    format!("  {} BLOCKED: dependencies", glyphs.get(Glyph::Failed)),
+                    theme.state(Slot::Failed),
+                ));
             }
             if let Some(report) = score.reports.get(&task.id) {
                 let passed = report
@@ -914,46 +910,70 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
                     .iter()
                     .filter(|verdict| verdict.verdict == "pass")
                     .count();
-                lines.push(format!(
-                    "  {passed}/{} · {} {}",
-                    report.verdicts.len(),
-                    report.reviewer,
-                    report.review_mode
+                let all_passed = passed == report.verdicts.len();
+                lines.push((
+                    format!(
+                        "  {} {passed}/{} · {} {}",
+                        glyphs.get(if all_passed {
+                            Glyph::Confirmed
+                        } else {
+                            Glyph::Failed
+                        }),
+                        report.verdicts.len(),
+                        report.reviewer,
+                        report.review_mode
+                    ),
+                    theme.state(if all_passed {
+                        Slot::Confirmed
+                    } else {
+                        Slot::Failed
+                    }),
                 ));
                 if selected {
                     for verdict in &report.verdicts {
-                        let glyph = if verdict.verdict == "pass" {
-                            "✓"
-                        } else {
-                            "✕"
-                        };
-                        lines.push(format!("  {glyph} {}", verdict.check));
+                        let passed = verdict.verdict == "pass";
+                        lines.push((
+                            format!(
+                                "  {} {}",
+                                glyphs.get(if passed {
+                                    Glyph::Confirmed
+                                } else {
+                                    Glyph::Failed
+                                }),
+                                verdict.check
+                            ),
+                            theme.state(if passed {
+                                Slot::Confirmed
+                            } else {
+                                Slot::Failed
+                            }),
+                        ));
                     }
                 }
             }
             if selected {
                 if let Some(history) = task.history.last() {
-                    lines.push(format!("  {} {}", history.actor, history.action));
+                    lines.push((format!("  {} {}", history.actor, history.action), meta));
                 }
                 if !score.message.is_empty() {
-                    lines.push(format!("  ERROR: {}", score.message));
+                    lines.push((
+                        format!("  {} ERROR: {}", glyphs.get(Glyph::Failed), score.message),
+                        theme.state(Slot::Failed),
+                    ));
                 }
             }
         }
         if lines.len() == 1 {
-            lines.push("  no tasks".to_owned());
+            lines.push(("  no tasks".to_owned(), meta));
         }
         // Truncate with an ellipsis inside a one-cell right gutter so the
         // last column no longer clips mid-word at the screen edge (bug B2).
         let usable = usize::from(column.width.saturating_sub(1));
         let clipped = lines
-            .iter()
-            .map(|line| clip_ellipsis(line, usable))
+            .into_iter()
+            .map(|(line, style)| Line::styled(clip_ellipsis(&line, usable), style))
             .collect::<Vec<_>>();
-        frame.render_widget(
-            Paragraph::new(clipped.join("\n")).style(Style::default().fg(theme.text)),
-            column,
-        );
+        frame.render_widget(Paragraph::new(clipped).style(body), column);
     }
     frame.render_widget(
         Paragraph::new(format!(
@@ -961,7 +981,7 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
             score.session_id,
             leader = leader_label
         ))
-        .style(Style::default().fg(theme.dim)),
+        .style(theme.state(Slot::Muted)),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
     );
 }
@@ -982,19 +1002,34 @@ fn clip_ellipsis(text: &str, width: usize) -> String {
     clipped
 }
 
-/// Sparkle frames for the ambient HOME avatar; the middle frame doubles as
-/// the static reduced-motion glyph.
-const AVATAR_FRAMES: [&str; 8] = ["·", "✢", "✳", "✻", "✽", "✻", "✳", "✢"];
-const AVATAR_STATIC: &str = "✻";
+/// The braille spinner the design gives the conductor while it is thinking.
+/// Under reduced motion it settles to the register's `⠿` (see [`avatar`]).
+const AVATAR_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+/// The same spinner for a terminal that cannot draw braille.
+const AVATAR_FRAMES_ASCII: [&str; 8] = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
 const HOME_TITLE: &str = "PI ORCHESTRA";
 const HOME_TAGLINE: &str = "one conductor · a bench of workers · sessions survive detach";
 const SINGLE_HARNESS_TAGLINE: &str = "one harness · sequential roles · sessions survive detach";
+
+/// The conductor's ambient spinner frame, or its settled glyph when motion is
+/// reduced. Never animation-only: the settled form is a real register glyph,
+/// so a still frame still says "conductor".
+fn avatar(glyphs: Glyphs, motion: Option<usize>) -> &'static str {
+    match motion {
+        Some(tick) => match glyphs.tier() {
+            GlyphTier::Unicode => AVATAR_FRAMES[tick % AVATAR_FRAMES.len()],
+            GlyphTier::Ascii => AVATAR_FRAMES_ASCII[tick % AVATAR_FRAMES_ASCII.len()],
+        },
+        None => glyphs.get(Glyph::Pulse),
+    }
+}
 
 /// Render the animated masthead card and return the row below it.
 fn render_home_masthead(
     frame: &mut Frame<'_>,
     area: Rect,
     theme: Theme,
+    glyphs: Glyphs,
     motion: Option<usize>,
     single_harness: bool,
 ) -> u16 {
@@ -1005,17 +1040,15 @@ fn render_home_masthead(
         card_width,
         4.min(area.height.saturating_sub(1)),
     );
-    let (avatar, avatar_color) = match motion {
-        Some(tick) => (
-            AVATAR_FRAMES[tick % AVATAR_FRAMES.len()],
-            if tick % 2 == 0 {
-                theme.pulse
-            } else {
-                theme.focus
-            },
-        ),
-        None => (AVATAR_STATIC, theme.focus),
+    let avatar_color = match motion {
+        Some(tick) if tick % 2 == 0 => theme.glow(),
+        _ => theme.brain(),
     };
+    let avatar = format!(
+        "{} {}",
+        glyphs.get(Glyph::Conductor),
+        avatar(glyphs, motion)
+    );
     let sweep = motion.map(|tick| tick % (HOME_TITLE.len() + 8));
     let mut title = vec![Span::styled(
         format!(" {avatar}  "),
@@ -1028,7 +1061,7 @@ fn render_home_masthead(
         title.push(Span::styled(
             glyph.to_string(),
             Style::default()
-                .fg(if lit { theme.pulse } else { theme.focus })
+                .fg(if lit { theme.glow() } else { theme.brain() })
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -1043,15 +1076,15 @@ fn render_home_masthead(
                     HOME_TAGLINE
                 }
             ),
-            Style::default().fg(theme.dim),
+            Style::default().fg(theme.muted()),
         )),
     ])
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_set(border::ROUNDED)
-            .border_style(Style::default().fg(theme.dim))
-            .style(Style::default().bg(theme.stage)),
+            .border_style(Style::default().fg(theme.border()))
+            .style(Style::default().bg(theme.surface())),
     );
     frame.render_widget(masthead, card);
     card.bottom().saturating_add(1)
@@ -1066,10 +1099,11 @@ fn availability_lines(
     harnesses: &[HarnessSummary],
     discovered: &[HarnessDiscovery],
     theme: Theme,
+    glyphs: Glyphs,
 ) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(
         "  BENCH AVAILABILITY",
-        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
     )];
     let id_width = harnesses
         .iter()
@@ -1078,26 +1112,30 @@ fn availability_lines(
         .unwrap_or(0)
         .max(6);
     for harness in harnesses {
-        let (status, style) = if !harness.available {
+        let (glyph, status, style) = if !harness.available {
             (
+                Glyph::Unavailable,
                 "NOT ON PATH · unavailable",
-                Style::default().fg(theme.attention),
+                theme.state(Slot::Unavail),
             )
         } else if harness.dispatch_verified {
             (
+                Glyph::Available,
                 "on PATH · dispatch verified",
-                Style::default().fg(theme.focus),
+                theme.state(Slot::Avail),
             )
         } else {
             (
+                Glyph::Available,
                 "on PATH · interactive pane only",
-                Style::default().fg(theme.dim),
+                theme.state(Slot::Muted),
             )
         };
         lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", glyphs.get(glyph)), style),
             Span::styled(
-                format!("  {:<id_width$}  ", harness.id),
-                Style::default().fg(theme.text),
+                format!("{:<id_width$}  ", harness.id),
+                Style::default().fg(theme.fg()),
             ),
             Span::styled(status.to_owned(), style),
         ]));
@@ -1105,7 +1143,7 @@ fn availability_lines(
     if !discovered.is_empty() {
         lines.push(Line::styled(
             "  DISCOVERED ON PATH",
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
         ));
         let name_width = discovered
             .iter()
@@ -1114,22 +1152,24 @@ fn availability_lines(
             .unwrap_or(0)
             .max(6);
         for harness in discovered {
-            let (status, style) = if harness.available {
+            let (glyph, status, style) = if harness.available {
                 let label = harness.version.as_deref().map_or_else(
                     || "on PATH · available".to_owned(),
                     |version| format!("on PATH · {version}"),
                 );
-                (label, Style::default().fg(theme.focus))
+                (Glyph::Available, label, theme.state(Slot::Avail))
             } else {
                 (
+                    Glyph::Unavailable,
                     "NOT ON PATH · unavailable".to_owned(),
-                    Style::default().fg(theme.attention),
+                    theme.state(Slot::Unavail),
                 )
             };
             lines.push(Line::from(vec![
+                Span::styled(format!("  {} ", glyphs.get(glyph)), style),
                 Span::styled(
-                    format!("  {:<name_width$}  ", harness.name),
-                    Style::default().fg(theme.text),
+                    format!("{:<name_width$}  ", harness.name),
+                    Style::default().fg(theme.fg()),
                 ),
                 Span::styled(status, style),
             ]));
@@ -1138,25 +1178,54 @@ fn availability_lines(
     lines
 }
 
-/// Plain-language pane health for one shelf card.
-fn session_health(session: &SessionSummary) -> String {
+/// Plain-language pane health for one shelf card, paired with the glyph and
+/// slot that say the same thing without words or colour.
+fn session_health(session: &SessionSummary) -> (Glyph, Slot, String) {
     match session.conductor.as_str() {
-        "live" => format!(
-            "{}/{} workers live · READY",
-            session.workers_live, session.workers_total
+        // The design sheet gives `⏻` to both "durable session" and "conductor
+        // down". On the shelf those are the two states a reader most needs to
+        // tell apart, so a healthy card takes the bench's `●` instead —
+        // distinguishability outranks a literal reading of the register.
+        "live" => (
+            Glyph::WorkerSeated,
+            Slot::Avail,
+            format!(
+                "{}/{} workers live · READY",
+                session.workers_live, session.workers_total
+            ),
         ),
-        "down" => format!(
-            "{}/{} workers · CONDUCTOR DOWN · R recovers",
-            session.workers_live, session.workers_total
+        "down" => (
+            Glyph::ConductorDown,
+            Slot::Failed,
+            format!(
+                "{}/{} workers · CONDUCTOR DOWN · R recovers",
+                session.workers_live, session.workers_total
+            ),
         ),
-        "dead" if session.workers_live == 0 => "ALL PANES DEAD · daemon restarted".to_owned(),
-        "dead" => format!(
-            "{}/{} workers · CONDUCTOR DEAD",
-            session.workers_live, session.workers_total
+        "dead" if session.workers_live == 0 => (
+            Glyph::Failed,
+            Slot::Failed,
+            "ALL PANES DEAD · daemon restarted".to_owned(),
+        ),
+        "dead" => (
+            Glyph::Failed,
+            Slot::Failed,
+            format!(
+                "{}/{} workers · CONDUCTOR DEAD",
+                session.workers_live, session.workers_total
+            ),
         ),
         // A daemon predating pane-health reporting.
-        _ if session.attention > 0 => format!("ATTENTION {}", session.attention),
-        _ => format!("{} workers", session.workers.len()),
+        _ if session.attention > 0 => (
+            Glyph::Pending,
+            Slot::Pending,
+            format!("ATTENTION {}", session.attention),
+        ),
+        _ => (
+            Glyph::Detached,
+            Slot::Muted,
+            format!("{} workers", session.workers.len()),
+        ),
     }
 }
 
@@ -1257,18 +1326,17 @@ fn render_home(
     frame: &mut Frame<'_>,
     state: &HomeState,
     theme: Theme,
+    glyphs: Glyphs,
     motion: Option<usize>,
     leader: &str,
 ) {
     let area = frame.area();
-    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    frame.render_widget(Block::new().style(Style::default().bg(theme.bg())), area);
     let single_harness = state.data.single_harness.is_some();
-    let body_top = render_home_masthead(frame, area, theme, motion, single_harness);
-    let text = Style::default().fg(theme.text);
-    let dim = Style::default().fg(theme.dim);
-    let focus = Style::default()
-        .fg(theme.focus)
-        .add_modifier(Modifier::BOLD);
+    let body_top = render_home_masthead(frame, area, theme, glyphs, motion, single_harness);
+    let text = Style::default().fg(theme.fg());
+    let dim = theme.state(Slot::Muted);
+    let focus = theme.state(Slot::Brain);
     let mut lines: Vec<Line<'_>> = Vec::new();
     if let Some(flow) = &state.flow {
         lines.push(Line::styled(
@@ -1288,7 +1356,7 @@ fn render_home(
                 lines.push(Line::styled(
                     format!("  {line}"),
                     Style::default()
-                        .fg(theme.focus)
+                        .fg(theme.brain())
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -1300,8 +1368,12 @@ fn render_home(
                 for (index, brain) in flow.brain_choices.iter().enumerate() {
                     let chosen = index == flow.brain_index;
                     lines.push(Line::styled(
-                        format!("  {}  {brain}", if chosen { "BRASS" } else { "     " }),
-                        if chosen { focus } else { text },
+                        format!(
+                            "  {} {}  {brain}",
+                            if chosen { "›" } else { " " },
+                            glyphs.get(Glyph::Conductor)
+                        ),
+                        if chosen { theme.selection() } else { text },
                     ));
                 }
                 lines.push(Line::styled(
@@ -1321,13 +1393,20 @@ fn render_home(
                 for (index, worker) in flow.worker_choices.iter().enumerate() {
                     let selected = flow.selected_workers.contains(worker);
                     let chosen = index == flow.worker_index;
+                    // ● seated, ○ an empty seat: the bench metaphor, and the
+                    // only cue that survives a colourless terminal.
                     lines.push(Line::styled(
                         format!(
-                            "  {}  [{}] {worker}",
-                            if chosen { "BRASS" } else { "     " },
+                            "  {} {}  [{}] {worker}",
+                            if chosen { "›" } else { " " },
+                            glyphs.get(if selected {
+                                Glyph::WorkerSeated
+                            } else {
+                                Glyph::WorkerIdle
+                            }),
                             if selected { "PRESELECTED" } else { "EDITABLE" }
                         ),
-                        if chosen { focus } else { text },
+                        if chosen { theme.selection() } else { text },
                     ));
                 }
                 lines.push(Line::styled(
@@ -1370,7 +1449,7 @@ fn render_home(
                 } else {
                     lines.push(Line::styled(
                         "  NOT A DIRECTORY — fix the path before launch",
-                        Style::default().fg(theme.attention),
+                        Style::default().fg(theme.failed()),
                     ));
                 }
                 lines.push(Line::styled(
@@ -1383,7 +1462,7 @@ fn render_home(
         lines.extend([
             Line::styled(
                 "  WELCOME TO THE BENCH",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
             ),
             Line::default(),
             Line::styled(
@@ -1421,7 +1500,7 @@ fn render_home(
             Line::default(),
             Line::styled(
                 "  FIRST KEYS",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
             ),
             Line::from(vec![
                 Span::styled("  n      ", focus),
@@ -1451,37 +1530,35 @@ fn render_home(
             &state.data.harnesses,
             &state.data.discovered,
             theme,
+            glyphs,
         ));
     } else {
         lines.push(Line::styled(
             "  SESSION SHELF",
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
         ));
         for (index, session) in state.data.sessions.iter().enumerate() {
             let chosen = index == state.selected;
-            let marker = if chosen { "BRASS" } else { "     " };
-            let health = session_health(session);
-            let alarmed = session.conductor == "down" || session.conductor == "dead";
+            let (glyph, slot, health) = session_health(session);
             lines.push(Line::styled(
-                format!("  {marker}  ╭ {} · {health}", session.id),
+                format!(
+                    "  {} {} ╭ {} · {health}",
+                    if chosen { "›" } else { " " },
+                    glyphs.get(glyph),
+                    session.id
+                ),
                 if chosen {
-                    focus
-                } else if alarmed {
-                    Style::default().fg(theme.attention)
+                    theme.selection()
                 } else {
-                    text
+                    theme.state(slot)
                 },
             ));
             lines.push(Line::styled(
                 format!(
-                    "         ╰ {}  ·  {}  ·  {}",
+                    "      ╰ {}  ·  {}  ·  {}",
                     session.brain, session.cwd, session.updated_at
                 ),
-                if chosen {
-                    Style::default().fg(theme.focus)
-                } else {
-                    dim
-                },
+                if chosen { focus } else { dim },
             ));
         }
         lines.push(Line::default());
@@ -1491,6 +1568,7 @@ fn render_home(
             &state.data.harnesses,
             &state.data.discovered,
             theme,
+            glyphs,
         ));
     }
     if !state.message.is_empty() {
@@ -1506,7 +1584,7 @@ fn render_home(
             .saturating_sub(body_top.min(area.bottom().saturating_sub(1))),
     );
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(theme.text).bg(theme.stage)),
+        Paragraph::new(lines).style(Style::default().fg(theme.fg()).bg(theme.bg())),
         body,
     );
     render_legend(
@@ -1519,19 +1597,23 @@ fn render_home(
 
 fn render_legend(frame: &mut Frame<'_>, area: Rect, text: &str, theme: Theme) {
     frame.render_widget(
-        Paragraph::new(format!(" {text}")).style(Style::default().fg(theme.dim).bg(theme.stage)),
+        Paragraph::new(format!(" {text}")).style(theme.state(Slot::Muted).bg(theme.bg())),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
     );
 }
 
 fn render_help(frame: &mut Frame<'_>, theme: Theme, leader: &str) {
     let area = frame.area();
-    frame.render_widget(Block::new().style(Style::default().bg(theme.stage)), area);
+    // Help floats over the stage, so it takes the overlay fill.
+    frame.render_widget(
+        Block::new().style(Style::default().bg(theme.overlay())),
+        area,
+    );
     frame.render_widget(
         Paragraph::new(format!(
             "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n  Change the leader in ~/.orchestra/harnesses.json (app.leader_key).\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
         ))
-        .style(Style::default().fg(theme.text).bg(theme.stage)),
+        .style(Style::default().fg(theme.fg()).bg(theme.overlay())),
         area,
     );
     render_legend(frame, area, "Esc / ? close help", theme);
@@ -1546,23 +1628,33 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         ShellView::Home => {
             let motion =
                 (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
-            render_home(frame, &shell.home, shell.theme, motion, &shell.leader.label);
+            render_home(
+                frame,
+                &shell.home,
+                shell.theme,
+                shell.glyphs,
+                motion,
+                &shell.leader.label,
+            );
         }
         ShellView::Stage => {
             let motion =
                 (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
+            let baton = shell.stage.as_ref().map_or(baton::State::Idle, |stage| {
+                stage.baton_state(shell.reduced_motion)
+            });
             if let Some(stage) = shell.stage.as_mut() {
-                render_stage(frame, stage, motion);
+                render_stage(frame, stage, motion, baton);
             }
         }
         ShellView::Score => {
             if let Some(score) = shell.score.as_mut() {
-                render_score(frame, score, shell.theme, &shell.leader.label);
+                render_score(frame, score, shell.theme, shell.glyphs, &shell.leader.label);
             }
         }
         ShellView::Runs => {
             orc_tui::draw(frame, &mut shell.runs);
-            render_runs_reports(frame, &shell.reports, shell.theme);
+            render_runs_reports(frame, &shell.reports, shell.theme, shell.glyphs);
             // One line, consistent with what the embedded App actually
             // answers in its current view.
             let legend = match shell.runs.view {
@@ -1585,6 +1677,7 @@ fn render_runs_reports(
     frame: &mut Frame<'_>,
     reports: &[orc_core::report::FinalReport],
     theme: Theme,
+    glyphs: Glyphs,
 ) {
     let Some(report) = reports.first() else {
         return;
@@ -1594,11 +1687,12 @@ fn render_runs_reports(
         .iter()
         .filter(|verdict| verdict.verdict == "pass")
         .count();
-    let glyph = if passed == report.verdicts.len() {
-        "✓"
+    let all_passed = passed == report.verdicts.len();
+    let glyph = glyphs.get(if all_passed {
+        Glyph::Confirmed
     } else {
-        "✕"
-    };
+        Glyph::Failed
+    });
     let line = format!(
         " REPORTS {glyph} {} {passed}/{} · {} {} · {}",
         report.task,
@@ -1613,7 +1707,11 @@ fn render_runs_reports(
             &line,
             usize::from(area.width.saturating_sub(1)),
         ))
-        .style(Style::default().fg(theme.text)),
+        .style(theme.state(if all_passed {
+            Slot::Confirmed
+        } else {
+            Slot::Failed
+        })),
         Rect::new(area.x, area.bottom().saturating_sub(2), area.width, 1),
     );
 }
@@ -1632,9 +1730,24 @@ pub fn run_initial(
 ) -> Result<()> {
     let mut commands = BenchClient::connect(&socket)?;
     let home = commands.home()?;
-    let selected_theme = ThemeName::named(&home.theme);
+    // The daemon's configured theme wins; the CLI flag is the fallback for a
+    // daemon that has no opinion yet. One theme for every screen, so STAGE and
+    // HOME can never disagree about which palette is live.
+    let selected_theme = if home.theme.trim().is_empty() {
+        theme
+    } else {
+        ThemeName::named(&home.theme)
+    };
+    // Probed, never assumed: what this terminal can actually render.
+    let resolved = Theme::new(selected_theme, ColorTier::detect());
+    let glyphs = Glyphs::new(GlyphTier::detect());
     let reduced_motion = home.reduced_motion;
     let leader = LeaderKey::parse(&home.leader_key);
+    let mut runs_app = orc_tui::App::new(Some(selected_theme.as_str()))
+        .map_err(|error| AppError::Daemon(format!("RUNS ledger unavailable: {error}")))?;
+    // The embedded ledger borrows this crate's theme map rather than its own
+    // two-theme set, so RUNS is nocturne when everything else is.
+    runs_app.theme = resolved.runs_theme();
     let mut shell = ShellState {
         view: if runs {
             ShellView::Runs
@@ -1649,9 +1762,9 @@ pub fn run_initial(
         },
         stage: None,
         score: None,
-        theme: selected_theme.into(),
-        runs: orc_tui::App::new(Some(selected_theme.as_str()))
-            .map_err(|error| AppError::Daemon(format!("RUNS ledger unavailable: {error}")))?,
+        theme: resolved,
+        glyphs,
+        runs: runs_app,
         reports: orc_core::report::list_reports(None).unwrap_or_default(),
         help: false,
         reduced_motion,
@@ -1660,7 +1773,7 @@ pub fn run_initial(
         watch_session: Arc::new(Mutex::new(None)),
     };
     if let Some(session_id) = initial_session {
-        attach_stage(&mut commands, &mut shell, session_id, theme)?;
+        attach_stage(&mut commands, &mut shell, session_id)?;
     }
     let (events_tx, events_rx) = mpsc::sync_channel(64);
     spawn_screen_watch(socket, Arc::clone(&shell.watch_session), events_tx.clone());
@@ -1681,7 +1794,7 @@ pub fn run_initial(
     let mut terminal = ratatui::init();
     spawn_raw_terminal_events(events_tx.clone());
     spawn_resize_events(events_tx);
-    let result = run_shell_loop(&mut terminal, &mut commands, &mut shell, &events_rx, theme);
+    let result = run_shell_loop(&mut terminal, &mut commands, &mut shell, &events_rx);
     ratatui::restore();
     execute!(
         io::stdout(),
@@ -1697,15 +1810,19 @@ fn attach_stage(
     commands: &mut BenchClient,
     shell: &mut ShellState,
     session_id: String,
-    theme: ThemeName,
 ) -> Result<()> {
     let session = commands.attach_session(session_id.clone())?;
     let tasks = commands.task_board(session_id.clone())?;
     if let Ok(mut watched) = shell.watch_session.lock() {
         *watched = Some(session_id.clone());
     }
-    let mut stage =
-        StageState::for_session(session_id.clone(), session.panes, session.layout, theme);
+    let mut stage = StageState::for_session(
+        session_id.clone(),
+        session.panes,
+        session.layout,
+        shell.theme,
+        shell.glyphs,
+    );
     stage.raw_router.leader_byte = shell.leader.byte;
     stage.leader_label = shell.leader.label.clone();
     stage.confirmed_panes = tasks
@@ -1722,7 +1839,7 @@ fn attach_stage(
             .last()
             .is_some_and(|history| history.action == "delivery_confirmed")
     }) {
-        stage.set_baton_kind(BatonKind::Dispatch);
+        stage.mark_output();
     }
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
@@ -1749,21 +1866,25 @@ fn run_shell_loop(
     commands: &mut BenchClient,
     shell: &mut ShellState,
     events: &Receiver<UiEvent>,
-    theme: ThemeName,
 ) -> Result<()> {
     let mut redraw = true;
     let mut requested_sizes = HashMap::new();
     loop {
-        if !shell.reduced_motion
-            && let Some(stage) = shell.stage.as_mut()
-        {
+        // The decay timer runs under reduced motion too: it is state (is the
+        // baton live or idle?), not animation, and the static rails still have
+        // to switch between the two.
+        if let Some(stage) = shell.stage.as_mut() {
             stage.advance();
         }
-        let animating = shell.stage.as_ref().is_some_and(|stage| {
-            !shell.reduced_motion
-                && shell.view == ShellView::Stage
-                && (!stage.pulse.done() || stage.has_live_trigger())
-        });
+        let stage_live = shell.view == ShellView::Stage
+            && shell
+                .stage
+                .as_ref()
+                .is_some_and(|stage| !stage.pulse.done());
+        let animating = !shell.reduced_motion
+            && shell.stage.as_ref().is_some_and(|stage| {
+                shell.view == ShellView::Stage && (!stage.pulse.done() || stage.has_live_trigger())
+            });
         let home_ambient = !shell.reduced_motion && !shell.help && shell.view == ShellView::Home;
         // The RUNS embed repaints on a modest tick so quota/history updates
         // arriving on the App's internal channel become visible without a
@@ -1773,7 +1894,7 @@ fn run_shell_loop(
         if runs_ambient {
             let _ = shell.runs.refresh();
         }
-        if redraw || animating || home_ambient || runs_ambient {
+        if redraw || animating || home_ambient || runs_ambient || stage_live {
             let mut stdout = io::stdout();
             stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
             if shell.view == ShellView::Stage
@@ -1786,6 +1907,10 @@ fn run_shell_loop(
         }
         let wait = if animating {
             Duration::from_millis(16)
+        } else if stage_live {
+            // Reduced motion: the rail is static, so this cadence only exists
+            // so the decay to the idle rail is noticed promptly.
+            Duration::from_millis(500)
         } else if home_ambient {
             Duration::from_millis(120)
         } else if runs_ambient {
@@ -1826,25 +1951,28 @@ fn run_shell_loop(
                                     .and(task.assignee_run.clone())
                             })
                             .collect();
-                        let kind = score
+                        // A task event is traffic on the filament too, so it
+                        // pulses the baton exactly as a stdout tick does.
+                        if score
                             .tasks
                             .iter()
                             .filter_map(|task| task.history.last())
-                            .find_map(|history| match history.action.as_str() {
-                                "delivery_confirmed" => Some(BatonKind::Dispatch),
-                                "delivery_failed" => Some(BatonKind::Failed),
-                                "done" => Some(BatonKind::Complete),
-                                _ => None,
+                            .any(|history| {
+                                matches!(
+                                    history.action.as_str(),
+                                    "delivery_confirmed" | "delivery_failed" | "done"
+                                )
                             })
-                            .unwrap_or(BatonKind::Settle);
-                        stage.set_baton_kind(kind);
+                        {
+                            stage.mark_output();
+                        }
                     }
                 }
                 let _ = shell.runs.refresh();
                 redraw = true;
             }
             Some(UiEvent::Raw(bytes)) => {
-                if handle_raw_event(&bytes, commands, shell, theme)? {
+                if handle_raw_event(&bytes, commands, shell)? {
                     return Ok(());
                 }
                 redraw = true;
@@ -2050,7 +2178,6 @@ fn handle_raw_event(
     bytes: &[u8],
     commands: &mut BenchClient,
     shell: &mut ShellState,
-    theme: ThemeName,
 ) -> Result<bool> {
     // STAGE forwards raw bytes verbatim to the focused pane; every other view
     // consumes focus reports so they can never masquerade as typed keys.
@@ -2108,7 +2235,7 @@ fn handle_raw_event(
         }
         ShellView::Home => {
             for key in raw_home_keys(bytes) {
-                if handle_home_key(key, commands, shell, theme)? {
+                if handle_home_key(key, commands, shell)? {
                     return Ok(true);
                 }
             }
@@ -2447,7 +2574,6 @@ fn handle_home_key(
     key: KeyEvent,
     commands: &mut BenchClient,
     shell: &mut ShellState,
-    theme: ThemeName,
 ) -> Result<bool> {
     let home = &mut shell.home;
     if home.flow.is_none() {
@@ -2470,7 +2596,7 @@ fn handle_home_key(
                     .get(home.selected)
                     .map(|session| session.id.clone())
                 {
-                    match attach_stage(commands, shell, session_id, theme) {
+                    match attach_stage(commands, shell, session_id) {
                         Ok(()) => shell.home.message.clear(),
                         // A refused attach stays on HOME with the reason in
                         // place instead of exiting the client.
@@ -2567,7 +2693,7 @@ fn handle_home_key(
                     Ok(session_id) => {
                         home.flow = None;
                         home.message.clear();
-                        match attach_stage(commands, shell, session_id, theme) {
+                        match attach_stage(commands, shell, session_id) {
                             Ok(()) => {}
                             Err(AppError::Daemon(message)) => {
                                 shell.home.message = format!("attach failed: {message}");
@@ -2611,24 +2737,34 @@ fn send_focused(commands: &mut BenchClient, state: &StageState, bytes: Vec<u8>) 
     Ok(())
 }
 
-fn render_stage(frame: &mut Frame<'_>, state: &mut StageState, motion: Option<usize>) {
+fn render_stage(
+    frame: &mut Frame<'_>,
+    state: &mut StageState,
+    motion: Option<usize>,
+    baton_state: baton::State,
+) {
     let area = frame.area();
     // The trigger rainbow steps one colour per motion tick; `None` (reduced
     // motion) freezes the gradient at phase 0 so it stays colourful but still.
     let phase = motion.unwrap_or(0);
     frame.render_widget(
-        Block::new().style(Style::default().bg(state.theme.stage)),
+        Block::new().style(Style::default().bg(state.theme.bg())),
         area,
     );
     state.pane_areas = stage_areas(area, state);
     if area.width >= 100 && state.panes.len() >= 2 && !state.zoomed {
-        let baton = Rect::new(
-            area.x + area.width / 2 - 3,
-            area.y + 2,
-            8,
-            area.height.saturating_sub(4),
+        // The rail spans the gap `stage_areas` leaves between the conductor
+        // and the bench, one column clear of the conductor's drop shadow, and
+        // centred on the stage's vertical middle.
+        let rail = Rect::new(
+            area.x
+                .saturating_add(2)
+                .saturating_add(conductor_width(area)),
+            area.y.saturating_add(area.height / 2),
+            BATON_RAIL,
+            1,
         );
-        render_baton(frame, baton, state);
+        render_baton(frame, rail, state, baton_state);
     }
     let areas = state.pane_areas.clone();
     if state.zoomed {
@@ -2640,10 +2776,13 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState, motion: Option<us
                 frame,
                 pane_area,
                 pane,
-                true,
-                state.confirmed_panes.contains(&pane.id),
+                PaneChrome {
+                    focus: true,
+                    confirmed: state.confirmed_panes.contains(&pane.id),
+                    phase,
+                },
                 state.theme,
-                phase,
+                state.glyphs,
             );
         }
     } else {
@@ -2653,10 +2792,13 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState, motion: Option<us
                 frame,
                 pane_area,
                 pane,
-                index == state.focus,
-                state.confirmed_panes.contains(&pane.id),
+                PaneChrome {
+                    focus: index == state.focus,
+                    confirmed: state.confirmed_panes.contains(&pane.id),
+                    phase,
+                },
                 state.theme,
-                phase,
+                state.glyphs,
             );
         }
     }
@@ -2670,12 +2812,26 @@ fn render_stage(frame: &mut Frame<'_>, state: &mut StageState, motion: Option<us
         frame.render_widget(
             Paragraph::new(format!(" {}", state.message)).style(
                 Style::default()
-                    .fg(state.theme.attention)
-                    .bg(state.theme.stage),
+                    .fg(state.theme.failed())
+                    .bg(state.theme.bg()),
             ),
             Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
         );
     }
+}
+
+/// The baton rail's own width: twelve cells plus its `◆`/`●` endpoints and a
+/// space either side.
+const BATON_RAIL: u16 = baton::CELLS as u16 + 4;
+
+/// Columns reserved between the conductor pane and the bench: the rail, plus
+/// the one column the conductor's drop shadow claims. The rail and the layout
+/// must agree about this, so both read these constants.
+const BATON_GAP: u16 = BATON_RAIL + 1;
+
+/// The conductor pane's width in the wide STAGE layout.
+fn conductor_width(area: Rect) -> u16 {
+    area.width.saturating_sub(3) * 53 / 100
 }
 
 fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
@@ -2731,8 +2887,8 @@ fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
             })
             .collect();
     }
-    let brain_width = inner.width * 53 / 100;
-    let worker_x = inner.x + brain_width + 5;
+    let brain_width = conductor_width(area);
+    let worker_x = inner.x + brain_width + BATON_GAP;
     let worker_width = inner.right().saturating_sub(worker_x);
     let workers = state.panes.len().saturating_sub(1) as u16;
     let worker_height = inner.height.saturating_sub(workers.saturating_sub(1)) / workers.max(1);
@@ -2758,64 +2914,69 @@ fn stage_areas(area: Rect, state: &StageState) -> Vec<Rect> {
     areas
 }
 
+/// The drop shadow that lifts a pane off the stage.
+///
+/// The palette's darkest slot *is* the stage, so there is no colour darker
+/// than the backdrop to cast with. The shadow is drawn in the dim frame slot
+/// instead, which reads as a soft edge and keeps the elevation cue without
+/// inventing a hex outside the map.
 fn render_shadow(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+    let style = Style::default()
+        .fg(theme.border())
+        .bg(theme.bg())
+        .add_modifier(Modifier::DIM);
     let buffer = frame.buffer_mut();
     let right = area.right();
     for row in area.y.saturating_add(1)..area.bottom().saturating_add(1) {
         if let Some(cell) = buffer.cell_mut((right, row)) {
             cell.set_symbol("▐");
-            cell.set_style(Style::default().fg(theme.shadow).bg(theme.stage));
+            cell.set_style(style);
         }
     }
     let bottom = area.bottom();
     for col in area.x.saturating_add(1)..area.right() {
         if let Some(cell) = buffer.cell_mut((col, bottom)) {
             cell.set_symbol("▄");
-            cell.set_style(Style::default().fg(theme.shadow).bg(theme.stage));
+            cell.set_style(style);
         }
     }
 }
 
-fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState) {
-    let mut points = Vec::with_capacity(65);
-    for index in 0..=64 {
-        let t = f64::from(index) / 64.0;
-        let inverse = 1.0 - t;
-        let x = 5.0 * inverse.powi(3)
-            + 25.0 * 3.0 * inverse.powi(2) * t
-            + 75.0 * 3.0 * inverse * t.powi(2)
-            + 95.0 * t.powi(3);
-        let y = 50.0 * inverse.powi(3)
-            + 85.0 * 3.0 * inverse.powi(2) * t
-            + 15.0 * 3.0 * inverse * t.powi(2)
-            + 50.0 * t.powi(3);
-        points.push((x, y));
+/// Draw the baton: `◆` conductor, twelve rail cells, `●` bench.
+///
+/// One row, one direction, exactly the cells [`baton::cells`] returns — the
+/// whole frame is decided by the passed state, so a snapshot pins a frame
+/// instead of racing the clock.
+fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState, baton_state: baton::State) {
+    if area.width < BATON_RAIL || area.height == 0 {
+        return;
     }
-    let (_, width, reverse) = baton_profile(state.baton_kind);
-    let alpha = if reverse {
-        1.0 - state.pulse.alpha()
-    } else {
-        state.pulse.alpha()
-    };
-    let pulse_index = ((points.len() - 1) as f32 * alpha) as usize;
-    let start = pulse_index.saturating_sub(width.saturating_sub(1));
-    let end = (pulse_index + 1).min(points.len());
-    let pulse = &points[start..end];
+    let theme = state.theme;
+    let glyphs = state.glyphs;
+    let conductor = glyphs.get(Glyph::Conductor);
+    let bench = glyphs.get(Glyph::WorkerSeated);
+    // The ASCII column's endpoints are three cells wide, which will not fit
+    // beside twelve rail cells in the gap the layout reserves. The rail is
+    // what carries the meaning, so the endpoints are what gets dropped.
+    let endpoints =
+        baton::CELLS + conductor.chars().count() + bench.chars().count() + 2 <= area.width.into();
+    let mut spans = Vec::with_capacity(baton::CELLS + 4);
+    if endpoints {
+        spans.push(Span::styled(conductor.to_owned(), theme.state(Slot::Brain)));
+        spans.push(Span::raw(" "));
+    }
+    for cell in baton::cells(baton_state) {
+        spans.push(Span::styled(
+            cell.symbol(glyphs).to_owned(),
+            theme.state(cell.slot()),
+        ));
+    }
+    if endpoints {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(bench.to_owned(), theme.state(Slot::Worker)));
+    }
     frame.render_widget(
-        Canvas::default()
-            .marker(Marker::Braille)
-            .x_bounds([0.0, 100.0])
-            .y_bounds([0.0, 100.0])
-            .paint(|context| {
-                context.draw(&Points {
-                    coords: &points,
-                    color: state.theme.dim,
-                });
-                context.draw(&Points {
-                    coords: pulse,
-                    color: state.theme.pulse,
-                });
-            }),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.bg())),
         area,
     );
 }
@@ -2826,21 +2987,6 @@ struct TriggerSpan {
     col: u16,
     len: u16,
 }
-
-/// The per-character gradient a highlighted trigger cycles through, column by
-/// column, so a spell shimmers like Claude Code's `ultrathink` rather than
-/// sitting in a flat accent block. Meaning never rides on the rainbow alone:
-/// the token stays **bold** and keeps its `◆ LABEL` title badge, both of which
-/// survive a monochrome / `NO_COLOR` terminal — the colour is decoration on top.
-const TRIGGER_RAINBOW: [Color; 7] = [
-    Color::Rgb(255, 107, 107), // red
-    Color::Rgb(255, 169, 77),  // orange
-    Color::Rgb(255, 224, 102), // yellow
-    Color::Rgb(99, 230, 190),  // green
-    Color::Rgb(77, 171, 247),  // blue
-    Color::Rgb(177, 151, 252), // indigo
-    Color::Rgb(247, 131, 172), // violet
-];
 
 /// Scan one grid row of a hosted pane for **every** trigger token, mapping the
 /// grammar's character offsets back onto terminal columns.
@@ -2903,45 +3049,100 @@ fn conductor_triggers(pane: &PaneSnapshot) -> (Vec<TriggerSpan>, Vec<Trigger>) {
     (spans, seen)
 }
 
+/// The marker that opens a trigger badge in a pane title.
+///
+/// The badge glyph is `◆`, which is also the conductor's anchor at the start
+/// of every brain pane's title — so "a badge is present" is this whole marker,
+/// never the bare glyph. Tests assert on this so the two can never be confused.
+fn trigger_badge_mark() -> String {
+    format!("· {} ", Trigger::GLYPH)
+}
+
+/// The `· ◆ DELEGATE` badge naming every spell detected in a conductor pane,
+/// or the empty string when there is none. A glyph and a label, so the trigger
+/// is legible with no colour at all.
+fn trigger_badge(triggers: &[Trigger]) -> String {
+    if triggers.is_empty() {
+        return String::new();
+    }
+    let labels = triggers
+        .iter()
+        .map(|trigger| trigger.label())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(" {}{labels}", trigger_badge_mark())
+}
+
+/// The glyph and slot a pane's role and reported state earn in its title.
+///
+/// The conductor is `◆` and a worker is `●` whatever else is true; a pane the
+/// daemon reports as down or detached takes the state glyph instead, because
+/// that is the more urgent fact about it.
+fn pane_state(pane: &PaneSnapshot) -> (Glyph, Slot) {
+    match pane.state.as_deref() {
+        Some("conductor_down") => (Glyph::ConductorDown, Slot::Failed),
+        Some("dead") => (Glyph::Failed, Slot::Failed),
+        Some("detached") => (Glyph::Detached, Slot::Muted),
+        _ if pane.role.as_deref() == Some("brain") => (Glyph::Conductor, Slot::Brain),
+        _ => (Glyph::WorkerSeated, Slot::Worker),
+    }
+}
+
+/// How one pane is drawn this frame: whether it holds focus, whether its
+/// task's delivery is confirmed, and where the trigger rainbow's gradient has
+/// slid to.
+#[derive(Clone, Copy)]
+struct PaneChrome {
+    focus: bool,
+    confirmed: bool,
+    phase: usize,
+}
+
 fn render_pane(
     frame: &mut Frame<'_>,
     area: Rect,
     pane: &PaneSnapshot,
-    focus: bool,
-    confirmed: bool,
+    chrome: PaneChrome,
     theme: Theme,
-    phase: usize,
+    glyphs: Glyphs,
 ) {
+    let PaneChrome {
+        focus,
+        confirmed,
+        phase,
+    } = chrome;
     let (trigger_spans, triggers) = conductor_triggers(pane);
-    // A glyph + label badge so the trigger is legible without color.
-    let badge = if triggers.is_empty() {
-        String::new()
+    let badge = trigger_badge(&triggers);
+    let (state_glyph, state_slot) = pane_state(pane);
+    let border_color = if focus {
+        theme.border_hi()
     } else {
-        let labels = triggers
-            .iter()
-            .map(|trigger| trigger.label())
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!(" · {} {}", Trigger::GLYPH, labels)
+        theme.border()
     };
-    let border_color = if focus { theme.focus } else { theme.dim };
     let block = Block::default()
         .title(format!(
-            " {}  {}{}{} ",
+            " {} {}  {}{}{} ",
+            glyphs.get(state_glyph),
             pane.title.to_uppercase(),
             pane.state.as_deref().unwrap_or("LIVE"),
-            if confirmed { " · TASK CONFIRMED" } else { "" },
+            if confirmed {
+                format!(" · {} TASK CONFIRMED", glyphs.get(Glyph::Confirmed))
+            } else {
+                String::new()
+            },
             badge,
         ))
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .title_style(
-            Style::default()
-                .fg(if focus { theme.focus } else { theme.text })
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(theme.stage).fg(theme.text));
+        .title_style(if confirmed {
+            theme.state(Slot::Confirmed)
+        } else if focus {
+            theme.state(state_slot)
+        } else {
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
+        })
+        .style(Style::default().bg(theme.surface()).fg(theme.fg()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if pane.state.as_deref() == Some("conductor_down") {
@@ -2949,16 +3150,23 @@ fn render_pane(
             .down_at
             .map_or(0, |down| epoch_now().saturating_sub(down));
         let overlay = Rect::new(
-            inner.x + inner.width.saturating_sub(34) / 2,
+            inner.x + inner.width.saturating_sub(38) / 2,
             inner.y + inner.height.saturating_sub(3) / 2,
-            inner.width.min(34),
+            inner.width.min(38),
             3.min(inner.height),
         );
+        // Calm and recoverable, never alarming: an overlay fill with the
+        // failure slot as text, not a slab of alarm colour.
         frame.render_widget(
-            Paragraph::new(format!("CONDUCTOR DOWN\n{elapsed}s elapsed · R resume")).style(
-                Style::default()
-                    .fg(theme.text)
-                    .bg(theme.attention)
+            Paragraph::new(format!(
+                "{} CONDUCTOR DOWN\n{elapsed}s elapsed · {} R resume",
+                glyphs.get(Glyph::ConductorDown),
+                glyphs.get(Glyph::RecoveryHint)
+            ))
+            .style(
+                theme
+                    .state(Slot::Failed)
+                    .bg(theme.overlay())
                     .add_modifier(Modifier::BOLD),
             ),
             overlay,
@@ -2977,8 +3185,8 @@ fn render_pane(
                 continue;
             };
             let mut style = Style::default()
-                .fg(ratatui_color(source.foreground, theme.text))
-                .bg(ratatui_color(source.background, theme.stage));
+                .fg(theme.pane_color(source.foreground, Slot::Fg))
+                .bg(theme.pane_color(source.background, Slot::Surface));
             if source.bold {
                 style = style.add_modifier(Modifier::BOLD);
             }
@@ -3026,14 +3234,6 @@ fn epoch_now() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-const fn ratatui_color(color: TerminalColor, default: Color) -> Color {
-    match color {
-        TerminalColor::Default => default,
-        TerminalColor::Indexed(index) => Color::Indexed(index),
-        TerminalColor::Rgb(red, green, blue) => Color::Rgb(red, green, blue),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use orc_proto::{
@@ -3044,12 +3244,18 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::{
-        AVATAR_FRAMES, AVATAR_STATIC, BatonKind, HarnessDiscovery, HomeData, HomeState,
-        LeaderAction, LeaderKey, NewSessionFlow, RawRouter, SINGLE_HARNESS_MESSAGE, ScoreState,
-        ShellState, ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton_profile,
-        render_help, render_home, render_score, render_shell, render_stage, route_raw_mouse,
-        route_runs_key, score_mouse,
+        AVATAR_FRAMES, HarnessDiscovery, HomeData, HomeState, LeaderAction, LeaderKey,
+        NewSessionFlow, RawRouter, SINGLE_HARNESS_MESSAGE, ScoreState, ShellState, ShellView,
+        SingleHarnessPlan, StageState, Theme, ThemeName, baton, render_help, render_home,
+        render_score, render_shell, render_stage, route_raw_mouse, route_runs_key, score_mouse,
     };
+    use crate::glyph::{Glyph, GlyphTier, Glyphs};
+    use crate::theme::{ColorTier, Slot};
+
+    /// Tests render with the Unicode register and a truecolor palette unless
+    /// they are specifically exercising a degradation tier, so no snapshot
+    /// depends on the machine's locale or `TERM`.
+    const GLYPHS: Glyphs = Glyphs::new(GlyphTier::Unicode);
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use orc_pty::cells_from_stream;
     use orc_pty::trigger::Trigger;
@@ -3144,6 +3350,7 @@ mod tests {
             stage: None,
             score: None,
             theme: theme_name.into(),
+            glyphs: GLYPHS,
             runs: orc_tui::App::with_runs(
                 vec![
                     ledger_run("worker-live", "running", Some("bench-session")),
@@ -3319,10 +3526,10 @@ mod tests {
             for theme in [ThemeName::Ember, ThemeName::Phosphor] {
                 let backend = TestBackend::new(width, height);
                 let mut terminal = Terminal::new(backend).expect("test terminal");
-                let mut state = StageState::new(panes(), theme);
+                let mut state = StageState::new(panes(), theme.into(), GLYPHS);
                 state.confirmed_panes.insert("pane-1".to_owned());
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None))
+                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
                     .expect("render stage");
                 let text = terminal
                     .backend()
@@ -3397,10 +3604,15 @@ mod tests {
                 for theme_name in ThemeName::ALL {
                     let backend = TestBackend::new(120, 40);
                     let mut terminal = Terminal::new(backend).expect("test terminal");
-                    let mut state =
-                        StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
+                    let mut state = StageState::new(
+                        vec![conductor_pane(stream.as_bytes())],
+                        theme_name.into(),
+                        GLYPHS,
+                    );
                     terminal
-                        .draw(|frame| render_stage(frame, &mut state, None))
+                        .draw(|frame| {
+                            render_stage(frame, &mut state, None, baton::State::Sweeping(1))
+                        })
                         .expect("render stage");
                     let buffer = terminal.backend().buffer();
                     assert_eq!(
@@ -3410,7 +3622,7 @@ mod tests {
                     );
                     let text = rendered_text(buffer);
                     assert!(
-                        text.contains(Trigger::GLYPH),
+                        text.contains(&super::trigger_badge_mark()),
                         "{trigger:?} prompt={prompt:?} in {theme_name:?}: missing glyph badge"
                     );
                     assert!(
@@ -3438,9 +3650,10 @@ mod tests {
             for theme_name in ThemeName::ALL {
                 let backend = TestBackend::new(120, 40);
                 let mut terminal = Terminal::new(backend).expect("test terminal");
-                let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
+                let mut state =
+                    StageState::new(vec![conductor_pane(stream)], theme_name.into(), GLYPHS);
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None))
+                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -3449,7 +3662,7 @@ mod tests {
                     "{stream:?} in {theme_name:?}: highlighted spans"
                 );
                 assert!(
-                    rendered_text(buffer).contains(Trigger::GLYPH),
+                    rendered_text(buffer).contains(&super::trigger_badge_mark()),
                     "{stream:?} in {theme_name:?}: missing glyph badge"
                 );
             }
@@ -3473,10 +3686,13 @@ mod tests {
             for theme_name in ThemeName::ALL {
                 let backend = TestBackend::new(120, 40);
                 let mut terminal = Terminal::new(backend).expect("test terminal");
-                let mut state =
-                    StageState::new(vec![conductor_pane(stream.as_bytes())], theme_name);
+                let mut state = StageState::new(
+                    vec![conductor_pane(stream.as_bytes())],
+                    theme_name.into(),
+                    GLYPHS,
+                );
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None))
+                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -3485,7 +3701,7 @@ mod tests {
                     "{stream:?} in {theme_name:?}: false-positive highlight"
                 );
                 assert!(
-                    !rendered_text(buffer).contains(Trigger::GLYPH),
+                    !rendered_text(buffer).contains(&super::trigger_badge_mark()),
                     "{stream:?} in {theme_name:?}: false-positive badge"
                 );
             }
@@ -3501,9 +3717,9 @@ mod tests {
         for theme_name in ThemeName::ALL {
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).expect("test terminal");
-            let mut state = StageState::new(vec![pane.clone()], theme_name);
+            let mut state = StageState::new(vec![pane.clone()], theme_name.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut state, None))
+                .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             assert_eq!(
@@ -3542,9 +3758,10 @@ mod tests {
                 flow: None,
                 message: String::new(),
             },
-            stage: Some(StageState::new(panes, theme_name)),
+            stage: Some(StageState::new(panes, theme_name.into(), GLYPHS)),
             score: None,
             theme: theme_name.into(),
+            glyphs: GLYPHS,
             runs: orc_tui::App::with_runs(Vec::new(), tui_theme),
             reports: Vec::new(),
             help: false,
@@ -3580,7 +3797,7 @@ mod tests {
                 );
                 let text = rendered_text(&buffer);
                 assert!(
-                    text.contains(Trigger::GLYPH),
+                    text.contains(&super::trigger_badge_mark()),
                     "{theme_name:?} reduced motion: glyph badge"
                 );
                 assert!(
@@ -3604,15 +3821,18 @@ mod tests {
         let render = |motion: Option<usize>| {
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).expect("test terminal");
-            let mut state =
-                StageState::new(vec![conductor_pane(b"delegate: go\r\n")], ThemeName::Ember);
+            let mut state = StageState::new(
+                vec![conductor_pane(b"delegate: go\r\n")],
+                ThemeName::Ember.into(),
+                GLYPHS,
+            );
             terminal
-                .draw(|frame| render_stage(frame, &mut state, motion))
+                .draw(|frame| render_stage(frame, &mut state, motion, baton::State::Sweeping(1)))
                 .expect("render stage");
             terminal.backend().buffer().clone()
         };
         // The highlighted token's per-cell colours, left to right.
-        let token_colours = |buffer: &ratatui::buffer::Buffer| -> Vec<super::Color> {
+        let token_colours = |buffer: &ratatui::buffer::Buffer| -> Vec<ratatui::style::Color> {
             buffer
                 .content()
                 .iter()
@@ -3652,9 +3872,10 @@ mod tests {
         for theme_name in ThemeName::ALL {
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).expect("test terminal");
-            let mut state = StageState::new(vec![conductor_pane(stream)], theme_name);
+            let mut state =
+                StageState::new(vec![conductor_pane(stream)], theme_name.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut state, None))
+                .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             // Only the keyword+colon lights up -- never the colored prompt glyph.
@@ -3665,7 +3886,7 @@ mod tests {
             );
             let text = rendered_text(buffer);
             assert!(
-                text.contains(Trigger::GLYPH),
+                text.contains(&super::trigger_badge_mark()),
                 "{theme_name:?}: missing glyph badge"
             );
             assert!(
@@ -3676,21 +3897,283 @@ mod tests {
     }
 
     #[test]
-    fn baton_event_kinds_have_distinct_bounded_profiles() {
-        let profiles = [
-            baton_profile(BatonKind::Settle),
-            baton_profile(BatonKind::Dispatch),
-            baton_profile(BatonKind::Complete),
-            baton_profile(BatonKind::Failed),
-        ];
+    fn no_color_keeps_every_state_distinguishable_by_glyph_bold_and_reverse() {
+        // AC3. `NO_COLOR` is a real probe of a real environment, so this drives
+        // the tier the same way a user would, then proves the screens still
+        // separate their states with no colour left to spend.
+        let mono = super::theme::ColorTier::from_env(|key| match key {
+            "NO_COLOR" => Some(String::new()),
+            "TERM" => Some("xterm-256color".to_owned()),
+            "COLORTERM" => Some("truecolor".to_owned()),
+            _ => None,
+        });
+        assert_eq!(mono, ColorTier::Monochrome, "NO_COLOR must win");
+        let theme = Theme::new(ThemeName::Nocturne, mono);
+        for slot in Slot::ALL {
+            assert_eq!(
+                super::theme::describe(theme.slot(slot)),
+                "reset",
+                "{slot:?} still emits colour under NO_COLOR"
+            );
+        }
+
+        // SCORE carries the five board states at once.
+        let card = |id: &str, status: &str, blocked: bool| TaskSummary {
+            id: id.to_owned(),
+            title: format!("{status} brief"),
+            status: status.to_owned(),
+            assignee: Some("pi-m3".to_owned()),
+            assignee_run: None,
+            isolated: true,
+            isolation: None,
+            blocked,
+            tokens: None,
+            diff: None,
+            history: Vec::new(),
+        };
+        let mut score = ScoreState {
+            session_id: "mono".to_owned(),
+            reports: std::collections::HashMap::new(),
+            tasks: vec![
+                card("T1", "backlog", false),
+                card("T2", "assigned", true),
+                card("T3", "running", false),
+                card("T4", "review", false),
+                card("T5", "done", false),
+            ],
+            selected: 0,
+            message: String::new(),
+            dragging: None,
+            width: 100,
+            leader: false,
+        };
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("mono SCORE terminal");
+        terminal
+            .draw(|frame| render_score(frame, &mut score, theme, GLYPHS, "ctrl-g"))
+            .expect("render mono SCORE");
+        let buffer = terminal.backend().buffer().clone();
+        let text = rendered_text(&buffer);
+        for glyph in [
+            Glyph::Pending,
+            Glyph::InProgress,
+            Glyph::Confirmed,
+            Glyph::Failed,
+        ] {
+            assert!(
+                text.contains(GLYPHS.get(glyph)),
+                "SCORE lost {glyph:?} under NO_COLOR"
+            );
+        }
+        // Nothing on screen carries colour, and the selected card is the only
+        // thing carrying reverse video.
         assert!(
-            profiles
+            buffer
+                .content()
                 .iter()
-                .all(|(millis, width, _)| *millis <= 1_100 && *width <= 3)
+                .all(|cell| super::theme::describe(cell.fg) == "reset"
+                    && super::theme::describe(cell.bg) == "reset"),
+            "a NO_COLOR screen emitted colour"
         );
-        assert_ne!(profiles[0], profiles[1]);
-        assert_ne!(profiles[1], profiles[2]);
-        assert_ne!(profiles[2], profiles[3]);
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::REVERSED)),
+            "the selection is invisible under NO_COLOR"
+        );
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::BOLD)),
+            "emphasis is invisible under NO_COLOR"
+        );
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::DIM)),
+            "recessive metadata is indistinguishable under NO_COLOR"
+        );
+
+        // HOME carries availability and session health.
+        let mut data = HomeData {
+            sessions: vec![
+                SessionSummary {
+                    id: "live-one".to_owned(),
+                    brain: "codex".to_owned(),
+                    workers: vec!["pi-m3".to_owned()],
+                    cwd: "/repo".to_owned(),
+                    updated_at: "2026-07-29T09:00:00Z".to_owned(),
+                    attention: 0,
+                    workers_live: 1,
+                    workers_total: 1,
+                    conductor: "live".to_owned(),
+                },
+                SessionSummary {
+                    id: "down-one".to_owned(),
+                    brain: "codex".to_owned(),
+                    workers: vec!["pi-m3".to_owned()],
+                    cwd: "/repo".to_owned(),
+                    updated_at: "2026-07-29T08:00:00Z".to_owned(),
+                    attention: 0,
+                    workers_live: 0,
+                    workers_total: 1,
+                    conductor: "down".to_owned(),
+                },
+            ],
+            harnesses: vec![
+                HarnessSummary {
+                    id: "codex".to_owned(),
+                    roles: vec!["brain".to_owned()],
+                    resumable: true,
+                    available: true,
+                    dispatch_verified: true,
+                },
+                HarnessSummary {
+                    id: "gone".to_owned(),
+                    roles: vec!["worker".to_owned()],
+                    resumable: false,
+                    available: false,
+                    dispatch_verified: false,
+                },
+            ],
+            discovered: Vec::new(),
+            default_workers: Vec::new(),
+            max_parallel_workers: 3,
+            single_harness: None,
+            theme: "nocturne".to_owned(),
+            reduced_motion: true,
+            leader_key: "ctrl-g".to_owned(),
+        };
+        data.sessions[1].conductor = "down".to_owned();
+        let home = HomeState {
+            data,
+            selected: 0,
+            flow: None,
+            message: String::new(),
+        };
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("mono HOME terminal");
+        terminal
+            .draw(|frame| render_home(frame, &home, theme, GLYPHS, None, "ctrl-g"))
+            .expect("render mono HOME");
+        let text = rendered_text(terminal.backend().buffer());
+        // Live vs down, and on-PATH vs not, both separate on the glyph alone.
+        assert!(
+            text.contains(GLYPHS.get(Glyph::WorkerSeated)),
+            "live session"
+        );
+        assert!(
+            text.contains(GLYPHS.get(Glyph::ConductorDown)),
+            "down session"
+        );
+        assert!(text.contains(GLYPHS.get(Glyph::Available)), "on PATH");
+        assert!(text.contains(GLYPHS.get(Glyph::Unavailable)), "not on PATH");
+        assert_ne!(
+            GLYPHS.get(Glyph::WorkerSeated),
+            GLYPHS.get(Glyph::ConductorDown),
+            "live and down must not share a glyph"
+        );
+    }
+
+    /// The baton row STAGE actually painted, as text.
+    fn baton_row(buffer: &ratatui::buffer::Buffer, width: u16) -> String {
+        buffer
+            .content()
+            .chunks(usize::from(width))
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
+            .find(|row: &String| row.contains('▓') || row.contains('·') || row.contains('━'))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn stage_paints_the_spec_baton_between_the_conductor_and_the_bench() {
+        // AC4: what STAGE draws is the design sheet's discrete frame, endpoints
+        // and all — not an approximation of it.
+        let width = 120;
+        for (state, want) in [
+            (baton::State::Sweeping(0), "◆ ▓▒░───────── ●"),
+            (baton::State::Sweeping(3), "◆ ──────▓▒░─── ●"),
+            (baton::State::Idle, "◆ ············ ●"),
+            (baton::State::Steady, "◆ ━━━━━━━━━━━━ ●"),
+        ] {
+            let backend = TestBackend::new(width, 40);
+            let mut terminal = Terminal::new(backend).expect("baton terminal");
+            let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+            terminal
+                .draw(|frame| render_stage(frame, &mut stage, None, state))
+                .expect("render baton");
+            assert!(
+                baton_row(terminal.backend().buffer(), width).contains(want),
+                "{state:?}: STAGE did not paint {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reduced_motion_freezes_the_baton_and_full_motion_moves_it() {
+        // AC4: reduced motion gets static rails. The rail is a pure function of
+        // the state value, so a reduced-motion client can only ever paint the
+        // two static forms — never a packet.
+        let width = 120;
+        let render = |state: baton::State| {
+            let backend = TestBackend::new(width, 40);
+            let mut terminal = Terminal::new(backend).expect("baton terminal");
+            let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+            terminal
+                .draw(|frame| render_stage(frame, &mut stage, None, state))
+                .expect("render baton");
+            baton_row(terminal.backend().buffer(), width)
+        };
+        let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        stage.mark_output();
+        assert_eq!(
+            stage.baton_state(true),
+            baton::State::Steady,
+            "a live pane under reduced motion gets the solid rail"
+        );
+        assert_eq!(
+            render(stage.baton_state(true)),
+            render(baton::State::Steady)
+        );
+        // Full motion at the same instant is a travelling packet instead.
+        assert!(matches!(
+            stage.baton_state(false),
+            baton::State::Sweeping(_)
+        ));
+        // Two different sweep frames really do paint differently.
+        assert_ne!(
+            render(baton::State::Sweeping(0)),
+            render(baton::State::Sweeping(3))
+        );
+    }
+
+    #[test]
+    fn output_pulses_the_baton_and_silence_decays_it() {
+        let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        // A fresh stage has not seen output yet, so it starts live and decays.
+        stage.advance();
+        stage.mark_output();
+        assert!(matches!(
+            stage.baton_state(false),
+            baton::State::Sweeping(_)
+        ));
+        // Advancing past the decay window with no further output idles it.
+        stage
+            .pulse
+            .process(baton::DECAY + std::time::Duration::from_millis(1));
+        assert_eq!(stage.baton_state(false), baton::State::Idle);
+        assert_eq!(stage.baton_state(true), baton::State::Idle);
+        // A new snapshot with a fresh sequence is an output tick.
+        let mut next = panes();
+        next[0].sequence = 2;
+        stage.apply_snapshot(next);
+        assert!(matches!(
+            stage.baton_state(false),
+            baton::State::Sweeping(_)
+        ));
     }
 
     #[test]
@@ -3791,7 +4274,14 @@ mod tests {
                 };
                 terminal
                     .draw(|frame| {
-                        render_home(frame, &state, Theme::from(theme_name), Some(5), "ctrl-b")
+                        render_home(
+                            frame,
+                            &state,
+                            Theme::from(theme_name),
+                            GLYPHS,
+                            Some(5),
+                            "ctrl-b",
+                        )
                     })
                     .expect("render empty HOME");
                 let text = terminal
@@ -3824,7 +4314,14 @@ mod tests {
                 }
                 terminal
                     .draw(|frame| {
-                        render_home(frame, &state, Theme::from(theme_name), None, "ctrl-b")
+                        render_home(
+                            frame,
+                            &state,
+                            Theme::from(theme_name),
+                            GLYPHS,
+                            None,
+                            "ctrl-b",
+                        )
                     })
                     .expect("render reduced-motion HOME");
                 let text = terminal
@@ -3834,7 +4331,8 @@ mod tests {
                     .iter()
                     .map(|cell| cell.symbol())
                     .collect::<String>();
-                assert!(text.contains(AVATAR_STATIC));
+                assert!(text.contains(GLYPHS.get(Glyph::Pulse)));
+                assert!(text.contains(GLYPHS.get(Glyph::Conductor)));
                 assert!(text.contains("PI ORCHESTRA"));
                 state.data.sessions.push(SessionSummary {
                     id: "session-one".to_owned(),
@@ -3860,7 +4358,14 @@ mod tests {
                 });
                 terminal
                     .draw(|frame| {
-                        render_home(frame, &state, Theme::from(theme_name), Some(0), "ctrl-b")
+                        render_home(
+                            frame,
+                            &state,
+                            Theme::from(theme_name),
+                            GLYPHS,
+                            Some(0),
+                            "ctrl-b",
+                        )
                     })
                     .expect("render HOME shelf");
                 let text = terminal
@@ -3917,7 +4422,14 @@ mod tests {
                 let mut terminal = Terminal::new(backend).expect("single-harness HOME terminal");
                 terminal
                     .draw(|frame| {
-                        render_home(frame, &state, Theme::from(theme_name), None, "ctrl-g")
+                        render_home(
+                            frame,
+                            &state,
+                            Theme::from(theme_name),
+                            GLYPHS,
+                            None,
+                            "ctrl-g",
+                        )
                     })
                     .expect("render single-harness launch");
                 let rows = terminal
@@ -3983,17 +4495,21 @@ mod tests {
                 last_seen: None,
             },
         ];
-        let text =
-            super::availability_lines(&harnesses, &discovered, Theme::from(ThemeName::Ember))
+        let text = super::availability_lines(
+            &harnesses,
+            &discovered,
+            Theme::from(ThemeName::Ember),
+            GLYPHS,
+        )
+        .iter()
+        .map(|line| {
+            line.spans
                 .iter()
-                .map(|line| {
-                    line.spans
-                        .iter()
-                        .map(|span| span.content.as_ref())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
         // The configured availability strip is still rendered first.
         assert!(text.contains("BENCH AVAILABILITY"));
         // The discovered section reflects the registry and hides nothing.
@@ -4045,7 +4561,14 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("cwd step terminal");
             terminal
                 .draw(|frame| {
-                    render_home(frame, &state, Theme::from(ThemeName::Ember), None, "ctrl-g")
+                    render_home(
+                        frame,
+                        &state,
+                        Theme::from(ThemeName::Ember),
+                        GLYPHS,
+                        None,
+                        "ctrl-g",
+                    )
                 })
                 .expect("render cwd step");
             let text = terminal
@@ -4153,7 +4676,15 @@ mod tests {
             leader: false,
         };
         terminal
-            .draw(|frame| render_score(frame, &mut state, Theme::from(ThemeName::Ember), "ctrl-g"))
+            .draw(|frame| {
+                render_score(
+                    frame,
+                    &mut state,
+                    Theme::from(ThemeName::Ember),
+                    GLYPHS,
+                    "ctrl-g",
+                )
+            })
             .expect("render score gutter");
         let buffer = terminal.backend().buffer();
         // The DONE column occupies the right fifth; its rows must end in a
@@ -4217,7 +4748,7 @@ mod tests {
 
     #[test]
     fn raw_mouse_is_forwarded_content_relative() {
-        let mut state = StageState::new(panes(), ThemeName::Ember);
+        let mut state = StageState::new(panes(), ThemeName::Ember.into(), GLYPHS);
         state.pane_areas = vec![ratatui::layout::Rect::new(10, 5, 40, 20)];
         state.panes.truncate(1);
         let translated = route_raw_mouse(b"\x1b[<0;13;8M", &mut state)
@@ -4264,7 +4795,7 @@ mod tests {
                 };
                 terminal
                     .draw(|frame| {
-                        render_score(frame, &mut state, Theme::from(theme_name), "ctrl-g")
+                        render_score(frame, &mut state, Theme::from(theme_name), GLYPHS, "ctrl-g")
                     })
                     .expect("render SCORE");
                 let text = terminal

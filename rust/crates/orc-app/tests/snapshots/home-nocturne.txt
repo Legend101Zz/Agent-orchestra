@@ -1,0 +1,77 @@
+HOME nocturne truecolor 100x30
+--- text ---
+                                                                                                    
+  ╭──────────────────────────────────────────────────────────────────╮                              
+  │ ◆ ⠿  PI ORCHESTRA                                                │                              
+  │     one conductor · a bench of workers · sessions survive detach │                              
+  ╰──────────────────────────────────────────────────────────────────╯                              
+                                                                                                    
+  SESSION SHELF                                                                                     
+  › ● ╭ bench-alpha · 2/2 workers live · READY                                                      
+      ╰ codex  ·  /repo  ·  2026-07-29T09:00:00Z                                                    
+    ⏻ ╭ bench-beta · 1/2 workers · CONDUCTOR DOWN · R recovers                                      
+      ╰ claude  ·  /repo  ·  2026-07-29T08:00:00Z                                                   
+                                                                                                    
+  enter attach · n new session · V RUNS                                                             
+                                                                                                    
+  BENCH AVAILABILITY                                                                                
+  ● codex   on PATH · dispatch verified                                                             
+  ○ pi-m3   NOT ON PATH · unavailable                                                               
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ n new · enter attach · V views · ? help · q quit                                                   
+--- styles ---
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aabccccccccccccccccccddddddddddddddddddddddddddddddddddddddddddddddddbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aabeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeedbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+fffffffffffffffggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhgggggggggggggggggggggggggggggggggggggggggggggggggggggg
+iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiigggggggggggggggggggggggggggggggggggggggggggggggggggg
+jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjgggggggggggggggggggggggggggggggggggggg
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ffffffffffffffffffffgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+llllgggggggglllllllllllllllllllllllllllggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+mmmmggggggggmmmmmmmmmmmmmmmmmmmmmmmmmggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+--- legend ---
+a fg=reset bg=#0a0c11 mod=-
+b fg=#262c3a bg=#10131b mod=-
+c fg=#5ad1c8 bg=#10131b mod=bold
+d fg=reset bg=#10131b mod=-
+e fg=#727b8f bg=#10131b mod=-
+f fg=#c4cad6 bg=#0a0c11 mod=bold
+g fg=#c4cad6 bg=#0a0c11 mod=-
+h fg=#c4cad6 bg=#1c2740 mod=bold
+i fg=#5ad1c8 bg=#0a0c11 mod=bold
+j fg=#e07a80 bg=#0a0c11 mod=bold
+k fg=#727b8f bg=#0a0c11 mod=dim
+l fg=#6fd08c bg=#0a0c11 mod=bold
+m fg=#565e70 bg=#0a0c11 mod=dim

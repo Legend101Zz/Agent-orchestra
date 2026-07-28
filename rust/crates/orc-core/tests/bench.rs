@@ -62,9 +62,12 @@ fn harness_defaults_are_editable_additive_and_sessions_write_atomically() {
 }
 
 #[test]
-fn registry_default_has_only_ember_phosphor_compatible_theme() {
+fn registry_default_names_the_flagship_theme() {
+    // A fresh install opens in the flagship theme from the visual identity;
+    // ember and phosphor stay selectable and a config that names either is
+    // never rewritten (see the legacy round-trip below).
     let registry = HarnessRegistry::default();
-    assert_eq!(registry.app.theme, "ember");
+    assert_eq!(registry.app.theme, "nocturne");
     assert_eq!(registry.app.leader_key, "ctrl-g");
 }
 
