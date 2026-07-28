@@ -1401,8 +1401,9 @@ hand back to the implementer.
   a parallel worker bench.
 - Reviewer routing now prefers a genuinely different adapter family. With one
   family it uses the executor again, or a different profile only when the
-  registry contains more than one distinct provider/model pair; either path is
-  persisted as `self_review`, never artificial diversity.
+  registry contains more than one distinct provider/model pair or explicit
+  additive `account` label; either path is persisted as `self_review`, never
+  artificial diversity.
 - Added fixture acceptance coverage for the exact launch notice, HOME at
   150x44 and 72x30 in both current themes, multi-model routing gates, and the
   full isolated implementer -> reviewer -> final-report lifecycle with one

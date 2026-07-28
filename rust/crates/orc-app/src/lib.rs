@@ -3901,6 +3901,7 @@ mod tests {
                         brain_profiles: vec!["solo".to_owned()],
                         worker_profiles: vec!["solo".to_owned()],
                         models: Vec::new(),
+                        accounts: Vec::new(),
                     }),
                     theme: theme_name.as_str().to_owned(),
                     reduced_motion: false,

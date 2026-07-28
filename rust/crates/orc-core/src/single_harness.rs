@@ -27,6 +27,15 @@ pub struct ModelProfile {
     pub model: String,
 }
 
+/// One explicitly labeled account profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountProfile {
+    /// Registry key used to route work.
+    pub key: String,
+    /// User-supplied account identity label.
+    pub account: String,
+}
+
 /// The one capable adapter family and its usable profiles.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SingleHarnessPlan {
@@ -38,6 +47,8 @@ pub struct SingleHarnessPlan {
     pub worker_profiles: Vec<String>,
     /// Explicit provider/model profiles in this family.
     pub models: Vec<ModelProfile>,
+    /// Explicit account profiles in this family.
+    pub accounts: Vec<AccountProfile>,
 }
 
 impl SingleHarnessPlan {
@@ -47,6 +58,17 @@ impl SingleHarnessPlan {
         self.models
             .iter()
             .map(|profile| (&profile.provider, &profile.model))
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 1
+    }
+
+    /// Whether the registry explicitly exposes more than one account label.
+    #[must_use]
+    pub fn has_multiple_accounts(&self) -> bool {
+        self.accounts
+            .iter()
+            .map(|profile| &profile.account)
             .collect::<BTreeSet<_>>()
             .len()
             > 1
@@ -68,6 +90,18 @@ pub fn provider_model_args(config: &HarnessConfig) -> Option<(&str, &str)> {
         }
     }
     provider.zip(model)
+}
+
+/// Read an explicit account identity from the registry's additive profile
+/// metadata. The label is routing identity only: the user-configured profile
+/// command/args remain responsible for selecting that account.
+#[must_use]
+pub fn account_label(config: &HarnessConfig) -> Option<&str> {
+    config
+        .extra
+        .get("account")
+        .and_then(serde_json::Value::as_str)
+        .filter(|account| !account.trim().is_empty())
 }
 
 fn brain_available(config: &HarnessConfig) -> bool {
@@ -131,11 +165,22 @@ pub fn detect(registry: &HarnessRegistry, cwd: Option<&Path>) -> Option<SingleHa
             })
         })
         .collect();
+    let accounts = worker_profiles
+        .iter()
+        .filter_map(|key| {
+            let config = registry.harnesses.get(key)?;
+            Some(AccountProfile {
+                key: key.clone(),
+                account: account_label(config)?.to_owned(),
+            })
+        })
+        .collect();
     Some(SingleHarnessPlan {
         adapter: adapter.clone(),
         brain_profiles,
         worker_profiles,
         models,
+        accounts,
     })
 }
 
@@ -155,9 +200,9 @@ pub fn distinct_families(registry: &HarnessRegistry, left: &str, right: &str) ->
 }
 
 /// Pick another profile only when one harness family explicitly lists more
-/// than one distinct model.
+/// than one distinct model or user-supplied account label.
 #[must_use]
-pub fn alternate_model_profile(
+pub fn alternate_profile(
     registry: &HarnessRegistry,
     executor: &str,
     candidates: &[String],
@@ -177,13 +222,36 @@ pub fn alternate_model_profile(
         .iter()
         .map(|(_, (provider, model))| (*provider, *model))
         .collect::<BTreeSet<_>>();
+    if distinct.len() > 1 {
+        let executor_model = provider_model_args(executor_config);
+        if let Some(key) = modeled
+            .into_iter()
+            .find(|(key, model)| key.as_str() != executor && Some(*model) != executor_model)
+            .map(|(key, _)| key.clone())
+        {
+            return Some(key);
+        }
+    }
+    let accounted = candidates
+        .iter()
+        .filter_map(|key| {
+            let config = registry.harnesses.get(key)?;
+            (config.adapter == *family)
+                .then(|| account_label(config).map(|account| (key, account)))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let distinct = accounted
+        .iter()
+        .map(|(_, account)| *account)
+        .collect::<BTreeSet<_>>();
     if distinct.len() <= 1 {
         return None;
     }
-    let executor_model = provider_model_args(executor_config);
-    modeled
+    let executor_account = account_label(executor_config);
+    accounted
         .into_iter()
-        .find(|(key, model)| key.as_str() != executor && Some(*model) != executor_model)
+        .find(|(key, account)| key.as_str() != executor && Some(*account) != executor_account)
         .map(|(key, _)| key.clone())
 }
 
@@ -227,6 +295,7 @@ mod tests {
         assert_eq!(plan.adapter, "solo");
         assert_eq!(plan.worker_profiles, ["solo-a", "solo-b"]);
         assert!(plan.has_multiple_models());
+        assert!(!plan.has_multiple_accounts());
 
         registry
             .harnesses
@@ -248,7 +317,7 @@ mod tests {
         };
         let candidates = vec!["solo-a".to_owned(), "solo-a-copy".to_owned()];
         assert_eq!(
-            alternate_model_profile(&registry, "solo-a", &candidates),
+            alternate_profile(&registry, "solo-a", &candidates),
             None,
             "duplicate profile keys must not manufacture multi-model routing"
         );
@@ -262,12 +331,39 @@ mod tests {
             "solo-b".to_owned(),
         ];
         assert_eq!(
-            alternate_model_profile(&registry, "solo-a", &candidates).as_deref(),
+            alternate_profile(&registry, "solo-a", &candidates).as_deref(),
             Some("solo-b")
         );
         assert!(
             !distinct_families(&registry, "solo-a", "solo-b"),
             "different models of one adapter are not independent harnesses"
         );
+    }
+
+    #[test]
+    fn alternate_account_routing_requires_two_explicit_account_labels() {
+        let mut first = profile("solo", Some("a"));
+        first
+            .extra
+            .insert("account".to_owned(), serde_json::json!("personal"));
+        let mut second = profile("solo", Some("a"));
+        second
+            .extra
+            .insert("account".to_owned(), serde_json::json!("work"));
+        let registry = HarnessRegistry {
+            harnesses: BTreeMap::from([
+                ("solo-personal".to_owned(), first),
+                ("solo-work".to_owned(), second),
+            ]),
+            ..HarnessRegistry::default()
+        };
+        let candidates = vec!["solo-personal".to_owned(), "solo-work".to_owned()];
+        assert_eq!(
+            alternate_profile(&registry, "solo-personal", &candidates).as_deref(),
+            Some("solo-work")
+        );
+        let plan = detect(&registry, None).expect("one harness family");
+        assert!(!plan.has_multiple_models());
+        assert!(plan.has_multiple_accounts());
     }
 }

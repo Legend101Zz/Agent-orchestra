@@ -152,10 +152,11 @@ verdict under the entry.*
 With only one capable CLI, pi-orchestra now says exactly what is unavailable,
 then runs the implementer and reviewer roles in sequence with the same durable
 worktree, evidence, retries, and final receipt. If that CLI has more than one
-registered model, review may use a different model profile but still says
-`self_review`; duplicate model entries never manufacture diversity. I did NOT
-build parallel deliberation or pretend two profiles are two harnesses; this
-completes the honest fallback and unblocks the V1 launch README in issue #14.
+registered model or explicitly labeled account, review may use a different
+profile but still says `self_review`; duplicate labels never manufacture
+diversity. I did NOT build parallel deliberation or guess account-selection
+flags; this completes the honest fallback and unblocks the V1 launch README in
+issue #14.
 
 ### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
 `opencode` was fully wired to run (it has an invocation template, `spawn_guard`

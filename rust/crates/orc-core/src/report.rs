@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::bench::{load_harness_registry, read_session};
 use crate::dispatch::DispatchRecord;
 use crate::registry::{atomic_write_json, home, now_iso};
-use crate::single_harness::{alternate_model_profile, distinct_families, worker_capable};
+use crate::single_harness::{alternate_profile, distinct_families, worker_capable};
 use crate::tasks::{Task, TaskActor, TaskCheckVerdict, TaskReportLink, attach_report, read_task};
 
 /// One independently judged acceptance check.
@@ -194,7 +194,7 @@ pub fn choose_reviewer(
             self_review: false,
         });
     }
-    let model_order = preferred
+    let profile_order = preferred
         .filter(|preferred| unique.contains(*preferred))
         .map_or_else(
             || capable.to_vec(),
@@ -209,7 +209,7 @@ pub fn choose_reviewer(
                     .collect()
             },
         );
-    if let Some(reviewer) = alternate_model_profile(registry, executor, &model_order) {
+    if let Some(reviewer) = alternate_profile(registry, executor, &profile_order) {
         return Ok(ReviewerSelection {
             reviewer,
             self_review: true,
