@@ -27,7 +27,7 @@ ship-log entries are part of finishing an issue.*
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *next* | — |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | 👀 | `issue-11-isolation-review-report` |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
@@ -136,6 +136,15 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-28 — Isolated work, independent review, and final receipts, issue #11 (code-puppy)
+Contracted tasks now run in their own Git worktrees, so a worker cannot change
+the main checkout, and completion requires a per-check review whose result,
+usage, cost, and run receipts are saved and visible in task details, SCORE, and
+RUNS. When another capable worker exists pi-orchestra chooses it as reviewer;
+with only one it labels the result honestly as self-review. I did NOT build DAG
+replanning or silently merge or delete unmerged work; this unblocks adversarial
+review, local acceptance testing, and the single-worker fallback in issue #12.
 
 ### 2026-07-27 — The brain can keep working while workers run, issue #30 (code-puppy)
 Handing off a task now returns as soon as the worker has received it, so the

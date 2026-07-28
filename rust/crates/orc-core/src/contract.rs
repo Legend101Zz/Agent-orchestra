@@ -311,6 +311,7 @@ mod tests {
                 },
                 extra: BTreeMap::new(),
             }),
+            report: None,
             created_at: "2026-07-24T00:00:00Z".to_owned(),
             updated_at: "2026-07-24T00:00:00Z".to_owned(),
             history: Vec::new(),

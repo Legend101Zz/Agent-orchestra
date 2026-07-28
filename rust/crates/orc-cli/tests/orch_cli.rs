@@ -50,11 +50,24 @@ fn write_fixture_registry(home: &Path) {
     let script = bin.join("fake-worker.sh");
     fs::write(
         &script,
-        "#!/bin/sh\necho \"fake-worker-stdout ${@: -1}\"\nexit 0\n",
+        r#"#!/bin/sh
+case "$*" in
+  *"Acceptance checks:"*)
+    echo '{"verdicts":[{"check":"it builds","verdict":"pass","evidence":"fixture review passed"}]}'
+    ;;
+  *)
+    echo "fake-worker-stdout ${@: -1}"
+    ;;
+esac
+exit 0
+"#,
     )
     .expect("write fake worker");
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod fake worker");
     let mut registry = HarnessRegistry::default();
+    for config in registry.harnesses.values_mut() {
+        config.roles.retain(|role| role == "brain");
+    }
     registry.harnesses.insert(
         "fake-worker".to_owned(),
         HarnessConfig {
@@ -77,6 +90,25 @@ fn write_fixture_registry(home: &Path) {
 fn write_fixture_session(home: &Path) -> String {
     let cwd = home.join("cwd");
     fs::create_dir_all(&cwd).expect("create cwd");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&cwd)
+            .args(args)
+            .output()
+            .expect("run git fixture command");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "orch-cli@example.invalid"]);
+    git(&["config", "user.name", "Orch CLI Test"]);
+    fs::write(cwd.join("README.md"), "fixture\n").expect("write fixture");
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "fixture"]);
     let mut session =
         create_session("codex", &["fake-worker".to_owned()], &cwd).expect("create session");
     session.panes.push(SessionPaneRecord {
@@ -338,12 +370,36 @@ fn cli_full_lifecycle_over_the_verbs() {
         &["orch", "review", &task_id, "--session", &session, "--json"],
     );
     assert_eq!(reviewed["tasks"][0]["status"], "review");
+    assert_eq!(reviewed["dispatches"][0]["purpose"], "review");
+
+    let review_awaited = pio_ok(
+        &home,
+        &[
+            "orch",
+            "await",
+            &task_id,
+            "--session",
+            &session,
+            "--timeout",
+            "10",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        review_awaited["dispatches"][0]["execution_status"],
+        "succeeded"
+    );
 
     let finished = pio_ok(
         &home,
         &["orch", "finish", &task_id, "--session", &session, "--json"],
     );
     assert_eq!(finished["tasks"][0]["status"], "done");
+    assert_eq!(
+        finished["tasks"][0]["report"]["verdicts"][0]["verdict"],
+        "pass"
+    );
+    assert_eq!(finished["tasks"][0]["report"]["review_mode"], "self_review");
 
     // A second task exercises cancel (drop).
     let second = pio_ok(

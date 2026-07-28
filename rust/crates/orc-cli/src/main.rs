@@ -778,6 +778,29 @@ fn print_contract(contract: &TaskContract) {
     }
 }
 
+fn print_report(report: &orc_core::tasks::TaskReportLink) {
+    println!(
+        "  report:    {} · executor {} · reviewer {}",
+        report.review_mode, report.executor, report.reviewer
+    );
+    for (index, verdict) in report.verdicts.iter().enumerate() {
+        println!(
+            "  verdict {}: {} · {}",
+            index + 1,
+            verdict.verdict,
+            verdict.check
+        );
+        println!("    evidence: {}", verdict.evidence);
+    }
+    if let Some(tokens) = report.tokens_total {
+        println!("  usage:     {tokens} tokens");
+    }
+    if let Some(cost) = &report.cost_usd {
+        println!("  cost:      ${cost}");
+    }
+    println!("  receipt:   {}", report.path);
+}
+
 fn dispatch_task(command: TaskCommand) -> Result<i32> {
     match command {
         TaskCommand::Add {
@@ -820,6 +843,9 @@ fn dispatch_task(command: TaskCommand) -> Result<i32> {
             print_task(&task, json)?;
             if !json && let Some(contract) = &task.contract {
                 print_contract(contract);
+            }
+            if !json && let Some(report) = &task.report {
+                print_report(report);
             }
         }
         TaskCommand::Brief { id, session, json } => {
