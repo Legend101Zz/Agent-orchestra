@@ -7,12 +7,15 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{HarnessConfig, HarnessRegistry, write_harness_registry};
 use orc_core::single_harness::SINGLE_HARNESS_MESSAGE;
 use serde_json::Value;
+
+const MANDATED_SINGLE_HARNESS_MESSAGE: &str = "One capable harness detected. Parallel cross-harness deliberation is unavailable. Running a sequential plan with self-review.";
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -22,12 +25,14 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn root(label: &str) -> PathBuf {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "pio-single-harness-{label}-{}-{nonce}",
+        "pio-single-harness-{label}-{}-{nonce}-{sequence}",
         std::process::id()
     ))
 }
@@ -46,8 +51,8 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
-fn fixture() -> (PathBuf, PathBuf) {
-    let home = root("home");
+fn fixture(label: &str) -> (PathBuf, PathBuf) {
+    let home = root(label);
     let cwd = home.join("repo");
     let bin = home.join("bin");
     fs::create_dir_all(&cwd).expect("create fixture repo");
@@ -136,7 +141,11 @@ fn pio_json(home: &Path, args: &[&str]) -> Value {
 
 #[test]
 fn launch_with_one_fixture_harness_prints_the_exact_spec_message() {
-    let (home, cwd) = fixture();
+    assert_eq!(
+        SINGLE_HARNESS_MESSAGE, MANDATED_SINGLE_HARNESS_MESSAGE,
+        "the product notice must remain byte-exact against issue #12"
+    );
+    let (home, cwd) = fixture("launch");
     let output = pio(
         &home,
         &[
@@ -159,14 +168,14 @@ fn launch_with_one_fixture_harness_prints_the_exact_spec_message() {
     let _: Value = serde_json::from_slice(&output.stdout).expect("session JSON stays parseable");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        format!("{SINGLE_HARNESS_MESSAGE}\n")
+        format!("{MANDATED_SINGLE_HARNESS_MESSAGE}\n")
     );
     let _ = fs::remove_dir_all(home);
 }
 
 #[test]
 fn one_harness_runs_the_isolated_implementer_then_self_reviewer_pipeline() {
-    let (home, cwd) = fixture();
+    let (home, cwd) = fixture("pipeline");
     let created = pio_json(
         &home,
         &[

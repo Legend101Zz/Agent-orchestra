@@ -1414,3 +1414,19 @@ hand back to the implementer.
 - Product/test edits stayed inside `orc-core/`, `orc-app/`, and `orc-cli/`.
   `progress.md` and `LOG.md` are the two workflow-required bookkeeping
   exceptions mandated by AGENTS.md and the issue execution prompt.
+
+## Session — 2026-07-29 (code-puppy): #12 review fixes
+
+- Preserved the reviewer's `c101597` bookkeeping commit, then fixed both
+  blockers from the issue #12 adversarial review.
+- Made the two CLI acceptance fixtures collision-proof with distinct labels
+  and a process-local atomic sequence, so macOS clock granularity cannot make
+  concurrent tests share a Git repository.
+- Pinned the full mandated honesty sentence in test-owned literal text and
+  compared both the production constant and emitted stderr against it.
+- Verified the complete two-test target 15/15 times under active CPU load.
+  Temporarily changing `unavailable` to `available` made the exact-message test
+  fail, then the required production sentence was restored.
+- All five required Rust gates pass from `rust/` with isolated target
+  `/tmp/pio-issue12-reviewfix-target.igrvQm`, including the full workspace test
+  suite with no retry or exclusion.
