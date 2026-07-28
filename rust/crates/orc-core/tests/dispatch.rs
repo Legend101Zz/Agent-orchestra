@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use orc_core::bench::{
     HarnessConfig, HarnessRegistry, create_session, load_harness_registry, write_harness_registry,
 };
+use orc_core::contract::TaskContract;
 use orc_core::dispatch::{self, DeliveryStatus, DispatchActor, DispatchRecord, DispatchRequest};
 use orc_core::registry::atomic_write_json;
 use orc_core::tasks::{NewTask, TaskActor, TaskStatus, assign_task, start_task};
@@ -448,7 +449,19 @@ fn dispatch_from_a_temporary_git_worktree_runs_with_assigned_runner_and_succeeds
     fs::write(repo.join("story.txt"), "one\n").expect("write initial");
     git(&repo, &["add", "story.txt"]);
     git(&repo, &["commit", "-m", "initial"]);
-    let (_cwd, _registry) = setup_session_with_harness(&home, "git");
+    let (_cwd, registry) = setup_session_with_harness(&home, "git");
+    let worker_script = registry.harnesses["fake-worker"]
+        .args
+        .first()
+        .map(PathBuf::from)
+        .expect("fake worker script");
+    fs::write(
+        &worker_script,
+        "#!/bin/sh\npwd > worker-cwd.txt\necho reviewable-output\n",
+    )
+    .expect("write cwd worker");
+    fs::set_permissions(&worker_script, fs::Permissions::from_mode(0o755))
+        .expect("chmod cwd worker");
 
     // SAFETY: this test serializes the process-wide registry root.
     unsafe { std::env::set_var("ORC_HOME", &home) };
@@ -461,7 +474,14 @@ fn dispatch_from_a_temporary_git_worktree_runs_with_assigned_runner_and_succeeds
         TaskActor::Brain,
         NewTask {
             title: "git worktree dispatch".to_owned(),
-            isolate: true,
+            isolate: false,
+            contract: Some(TaskContract {
+                objective: "Write only inside the isolated task tree.".to_owned(),
+                allowed_paths: vec!["worker-cwd.txt".to_owned()],
+                forbidden: vec!["do not touch the main checkout".to_owned()],
+                acceptance_checks: vec!["main checkout stays untouched".to_owned()],
+                ..TaskContract::default()
+            }),
             ..NewTask::default()
         },
     )
@@ -500,5 +520,81 @@ fn dispatch_from_a_temporary_git_worktree_runs_with_assigned_runner_and_succeeds
     assert_eq!(record.run.as_deref(), Some("W-git"));
     assert!(record.command_line.contains("show me diff"));
     assert!(worktree_path.is_dir(), "worktree must remain intact");
+    assert_eq!(
+        record.cwd.as_deref(),
+        Some(worktree_path.to_string_lossy().as_ref())
+    );
+    assert!(
+        worktree_path.join("worker-cwd.txt").is_file(),
+        "worker output must land in its owned worktree"
+    );
+    assert!(
+        !repo.join("worker-cwd.txt").exists(),
+        "main checkout must stay untouched"
+    );
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn contracted_dispatch_refuses_to_fall_back_to_the_main_session_cwd() {
+    let _guard = lock();
+    let home = fresh_home("contract-no-worktree");
+    let (cwd, _registry) = setup_session_with_harness(&home, "contract-no-worktree");
+    let session_path = fs::read_dir(home.join("sessions"))
+        .expect("sessions")
+        .filter_map(Result::ok)
+        .next()
+        .expect("session")
+        .path()
+        .join("session.json");
+    let session: serde_json::Value =
+        serde_json::from_slice(&fs::read(session_path).expect("session bytes"))
+            .expect("session json");
+    let session_id = session["id"].as_str().expect("session id");
+    let task = orc_core::tasks::add_task(
+        session_id,
+        TaskActor::Brain,
+        NewTask {
+            title: "must isolate".to_owned(),
+            contract: Some(TaskContract {
+                objective: "Never execute in the shared cwd.".to_owned(),
+                allowed_paths: vec!["artifact.txt".to_owned()],
+                forbidden: vec!["do not use the main tree".to_owned()],
+                acceptance_checks: vec!["shared cwd remains untouched".to_owned()],
+                ..TaskContract::default()
+            }),
+            ..NewTask::default()
+        },
+    )
+    .expect("add contracted task");
+    assert_eq!(task.worktree.as_ref().unwrap().state, "unavailable");
+    assign_task(
+        session_id,
+        &task.id,
+        "fake-worker".to_owned(),
+        None,
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(session_id, &task.id, TaskActor::Brain).expect("start");
+    let error = dispatch::dispatch(&DispatchRequest {
+        session: session_id.to_owned(),
+        task: task.id,
+        actor: DispatchActor::Brain,
+        harness: "fake-worker".to_owned(),
+        pane_id: None,
+        run: None,
+        prompt: "must not run".to_owned(),
+        timeout_sec: Some(30),
+    })
+    .expect_err("contracted task without isolation must be refused");
+    assert!(
+        error.to_string().contains("ISOLATION REQUIRED"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        fs::read_dir(&cwd).expect("shared cwd").next().is_none(),
+        "worker must not write into the shared cwd"
+    );
     let _ = fs::remove_dir_all(home);
 }

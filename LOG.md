@@ -27,7 +27,7 @@ ship-log entries are part of finishing an issue.*
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | Delegation silently timed out on any real task — the worker's output deadlocked the pipe | ✅ | merged (PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | Let the brain keep working while a worker runs, and hand it the answer not the transcript | ✅ | merged (PR #31) |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ⬜ *next* | — |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
@@ -46,10 +46,19 @@ stores the worker's *answer* plus token usage instead of a JSON firehose.
 Together with #28 (the pipe-buffer deadlock) this closes out a run of three
 defects that had made delegation useless for real work since #8 landed.
 
-**Next: #11**, then #12 and #14; #13 anytime. #11 (worktree isolation +
-independent review + receipt) rewrites `dispatch.rs`, which is exactly why it
-was sequenced after #30 — its per-check report depends on how a dispatch reaches
-its terminal state, and that shape is now settled. Still open by choice:
+**#11 merged (2026-07-28, PR #32) — every contracted task is isolated,
+independently reviewed, and produces a final receipt.** Contracted tasks now
+run in their own Git worktree so a worker cannot touch the main checkout;
+`orch review` dispatches to a different capable harness when one exists, or
+labels the result an honest `self_review` with just one; `orch finish` refuses
+to move a task to `done` while any acceptance check is verdicted `fail`. Along
+the way, issue #33 (Claude) fixed a gap found while testing #11 locally:
+`pio harness list` discovered `opencode` but never made it usable, and `pi-m3`
+was a single hardcoded model profile with no way to register another — both
+now work (`discover()` auto-registers any known-adapter harness; `pio harness
+add` registers new named model profiles with validated or manual input).
+
+**Next: #12 and #14; #13 anytime.** Still open by choice:
 `render_brief` is wired into `orch delegate` but not `dispatch send`. Start #13
 before more TUI churn lands to avoid merge pain.**
 
@@ -152,6 +161,24 @@ now does that, auto-probing the harness's own model list (`pi --list-models`,
 choices, falling back to trusting manual input when the probe itself fails. I
 did NOT add a way to edit/remove profiles, change role or capability-probe
 semantics, or build model-flag support for any adapter besides `pi`.
+
+### 2026-07-28 — Isolated work, independent review, and final receipts, issue #11 (code-puppy)
+Contracted tasks now run in their own Git worktrees, so a worker cannot change
+the main checkout, and completion requires a per-check review whose result,
+usage, cost, and run receipts are saved and visible in task details, SCORE, and
+RUNS. When another capable worker exists pi-orchestra chooses it as reviewer;
+with only one it labels the result honestly as self-review. I did NOT build DAG
+replanning or silently merge or delete unmerged work; this unblocks adversarial
+review, local acceptance testing, and the single-worker fallback in issue #12.
+**Review (Claude, 2026-07-28): 🔨 FIX — worktree isolation, verdict-strictness,
+and self-review fallback all independently re-verified correct (incl. an
+adversarial fail-verdict lifecycle test proving `finish` really blocks on a
+failed check); required before ACCEPT: commit that fail-verdict test into the
+suite, since nothing currently in the PR exercises it.**
+**Re-review (Claude, 2026-07-28): 🧪 ACCEPT — the fail-verdict regression test
+landed; mutation-tested it by disabling the completion guard and confirming
+the test catches it, then re-ran all five gates clean. Ready to test locally
+and merge.**
 
 ### 2026-07-27 — The brain can keep working while workers run, issue #30 (code-puppy)
 Handing off a task now returns as soon as the worker has received it, so the

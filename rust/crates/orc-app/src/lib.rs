@@ -755,6 +755,7 @@ enum ShellView {
 struct ScoreState {
     session_id: String,
     tasks: Vec<TaskSummary>,
+    reports: HashMap<String, orc_core::report::FinalReport>,
     selected: usize,
     message: String,
     dragging: Option<String>,
@@ -823,6 +824,7 @@ struct ShellState {
     score: Option<ScoreState>,
     theme: Theme,
     runs: orc_tui::App,
+    reports: Vec<orc_core::report::FinalReport>,
     help: bool,
     reduced_motion: bool,
     /// Wall-clock origin for the ambient HOME animation.
@@ -877,6 +879,29 @@ fn render_score(frame: &mut Frame<'_>, score: &mut ScoreState, theme: Theme, lea
             }
             if task.blocked {
                 lines.push("  BLOCKED: dependencies".to_owned());
+            }
+            if let Some(report) = score.reports.get(&task.id) {
+                let passed = report
+                    .verdicts
+                    .iter()
+                    .filter(|verdict| verdict.verdict == "pass")
+                    .count();
+                lines.push(format!(
+                    "  {passed}/{} · {} {}",
+                    report.verdicts.len(),
+                    report.reviewer,
+                    report.review_mode
+                ));
+                if selected {
+                    for verdict in &report.verdicts {
+                        let glyph = if verdict.verdict == "pass" {
+                            "✓"
+                        } else {
+                            "✕"
+                        };
+                        lines.push(format!("  {glyph} {}", verdict.check));
+                    }
+                }
             }
             if selected {
                 if let Some(history) = task.history.last() {
@@ -1415,6 +1440,7 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         }
         ShellView::Runs => {
             orc_tui::draw(frame, &mut shell.runs);
+            render_runs_reports(frame, &shell.reports, shell.theme);
             // One line, consistent with what the embedded App actually
             // answers in its current view.
             let legend = match shell.runs.view {
@@ -1431,6 +1457,43 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
             render_legend(frame, frame.area(), legend, shell.theme);
         }
     }
+}
+
+fn render_runs_reports(
+    frame: &mut Frame<'_>,
+    reports: &[orc_core::report::FinalReport],
+    theme: Theme,
+) {
+    let Some(report) = reports.first() else {
+        return;
+    };
+    let passed = report
+        .verdicts
+        .iter()
+        .filter(|verdict| verdict.verdict == "pass")
+        .count();
+    let glyph = if passed == report.verdicts.len() {
+        "✓"
+    } else {
+        "✕"
+    };
+    let line = format!(
+        " REPORTS {glyph} {} {passed}/{} · {} {} · {}",
+        report.task,
+        report.verdicts.len(),
+        report.reviewer,
+        report.review_mode,
+        report.title
+    );
+    let area = frame.area();
+    frame.render_widget(
+        Paragraph::new(clip_ellipsis(
+            &line,
+            usize::from(area.width.saturating_sub(1)),
+        ))
+        .style(Style::default().fg(theme.text)),
+        Rect::new(area.x, area.bottom().saturating_sub(2), area.width, 1),
+    );
 }
 
 /// Run the interactive HOME/STAGE shell until the leader-key detach command.
@@ -1467,6 +1530,7 @@ pub fn run_initial(
         theme: selected_theme.into(),
         runs: orc_tui::App::new(Some(selected_theme.as_str()))
             .map_err(|error| AppError::Daemon(format!("RUNS ledger unavailable: {error}")))?,
+        reports: orc_core::report::list_reports(None).unwrap_or_default(),
         help: false,
         reduced_motion,
         epoch: Instant::now(),
@@ -1479,6 +1543,7 @@ pub fn run_initial(
     let (events_tx, events_rx) = mpsc::sync_channel(64);
     spawn_screen_watch(socket, Arc::clone(&shell.watch_session), events_tx.clone());
     spawn_runs_watch(events_tx.clone());
+    spawn_reports_watch(events_tx.clone());
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -1539,6 +1604,12 @@ fn attach_stage(
     }
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
+        reports: shell
+            .reports
+            .iter()
+            .filter(|report| report.session == session_id)
+            .map(|report| (report.task.clone(), report.clone()))
+            .collect(),
         tasks,
         session_id,
         selected: 0,
@@ -1663,6 +1734,15 @@ fn run_shell_loop(
             Some(UiEvent::WatchFailed(message)) => return Err(AppError::Connection(message)),
             Some(UiEvent::RunsChanged) => {
                 let _ = shell.runs.refresh_now();
+                shell.reports = orc_core::report::list_reports(None).unwrap_or_default();
+                if let Some(score) = shell.score.as_mut() {
+                    score.reports = shell
+                        .reports
+                        .iter()
+                        .filter(|report| report.session == score.session_id)
+                        .map(|report| (report.task.clone(), report.clone()))
+                        .collect();
+                }
                 redraw = true;
             }
             None => {}
@@ -1781,6 +1861,10 @@ fn spawn_screen_watch(
 
 fn spawn_runs_watch(sender: SyncSender<UiEvent>) {
     spawn_runs_watch_path(orc_core::registry::home().join("runs"), sender);
+}
+
+fn spawn_reports_watch(sender: SyncSender<UiEvent>) {
+    spawn_runs_watch_path(orc_core::registry::home().join("reports"), sender);
 }
 
 fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
@@ -2878,6 +2962,38 @@ mod tests {
         }
     }
 
+    fn final_report() -> orc_core::report::FinalReport {
+        orc_core::report::FinalReport {
+            version: 1,
+            session: "score-session".to_owned(),
+            task: "T0001".to_owned(),
+            title: "review worktree".to_owned(),
+            executor: "pi-m3".to_owned(),
+            reviewer: "codex".to_owned(),
+            review_mode: "independent".to_owned(),
+            verdicts: vec![
+                orc_core::report::AcceptanceVerdict {
+                    check: "main clean".to_owned(),
+                    verdict: "pass".to_owned(),
+                    evidence: "git status empty".to_owned(),
+                },
+                orc_core::report::AcceptanceVerdict {
+                    check: "gates green".to_owned(),
+                    verdict: "pass".to_owned(),
+                    evidence: "cargo test passed".to_owned(),
+                },
+            ],
+            usage: orc_core::report::ReportUsage {
+                total: Some(42),
+                cost_usd: Some(0.001),
+                ..orc_core::report::ReportUsage::default()
+            },
+            receipts: vec!["dispatch:D-review".to_owned()],
+            created_at: "2026-07-28T12:00:00+00:00".to_owned(),
+            extra: std::collections::BTreeMap::new(),
+        }
+    }
+
     fn runs_shell(theme_name: ThemeName) -> ShellState {
         let theme = if theme_name == ThemeName::Phosphor {
             orc_tui::PHOSPHOR
@@ -2912,6 +3028,7 @@ mod tests {
                 ],
                 theme,
             ),
+            reports: Vec::new(),
             help: false,
             reduced_motion: false,
             epoch: std::time::Instant::now(),
@@ -2950,6 +3067,26 @@ mod tests {
                 assert!(!text.contains("read-only"), "{width}x{height}");
             }
         }
+    }
+
+    #[test]
+    fn runs_surfaces_the_latest_final_report() {
+        let backend = TestBackend::new(150, 44);
+        let mut terminal = Terminal::new(backend).expect("test RUNS report terminal");
+        let mut shell = runs_shell(ThemeName::Ember);
+        shell.reports = vec![final_report()];
+        terminal
+            .draw(|frame| render_shell(frame, &mut shell))
+            .expect("render RUNS report");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("REPORTS ✓ T0001 2/2"));
+        assert!(text.contains("codex independent"));
     }
 
     #[test]
@@ -3284,6 +3421,7 @@ mod tests {
             score: None,
             theme: theme_name.into(),
             runs: orc_tui::App::with_runs(Vec::new(), tui_theme),
+            reports: Vec::new(),
             help: false,
             reduced_motion,
             epoch: std::time::Instant::now(),
@@ -3790,6 +3928,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("score gutter terminal");
         let mut state = ScoreState {
             session_id: "gutter-session".to_owned(),
+            reports: std::collections::HashMap::new(),
             tasks: vec![TaskSummary {
                 id: "T0001".to_owned(),
                 title: "a title long enough to reach past its narrow column".to_owned(),
@@ -3891,6 +4030,10 @@ mod tests {
                 let mut terminal = Terminal::new(backend).expect("test SCORE terminal");
                 let mut state = ScoreState {
                     session_id: "score-session".to_owned(),
+                    reports: std::collections::HashMap::from([(
+                        "T0001".to_owned(),
+                        final_report(),
+                    )]),
                     tasks: vec![TaskSummary {
                         id: "T0001".to_owned(),
                         title: "review worktree".to_owned(),
@@ -3931,6 +4074,8 @@ mod tests {
                 assert!(text.contains("T0001"));
                 assert!(text.contains("BLOCKED"));
                 assert!(text.contains("+4 -1"));
+                assert!(text.contains("2/2"));
+                assert!(text.contains("✓ main"));
             }
         }
         assert_eq!(score_mouse(b"\x1b[<0;12;4M"), Some((0, 12, 4, 'M')));

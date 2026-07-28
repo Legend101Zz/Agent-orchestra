@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::contract::{TaskContract, render_brief};
 use crate::dispatch::{self, DispatchActor, DispatchRecord, DispatchRequest};
 use crate::registry::find_run;
+use crate::report;
 use crate::tasks::{self, NewTask, Task, TaskActor, TaskStatus};
 
 /// Default bound on how long [`await_delegation`] waits for a terminal delivery.
@@ -578,14 +579,133 @@ pub fn await_delegation(request: AwaitRequest) -> Result<OrchOutcome> {
 
 /// Move a running task into review.
 pub fn review(request: TaskRef) -> Result<OrchOutcome> {
-    let task = tasks::review_task(&request.session, &request.task, request.actor.into())?;
-    Ok(OrchOutcome::task_only(Verb::Review, task))
+    let task = tasks::read_task(&request.session, &request.task)?;
+    if task.contract.is_none() {
+        let task = tasks::review_task(&request.session, &request.task, request.actor.into())?;
+        return Ok(OrchOutcome::task_only(Verb::Review, task));
+    }
+    if TaskStatus::parse(&task.status)? != TaskStatus::Running {
+        bail!(
+            "contracted task {} must be running before acceptance review",
+            task.id
+        )
+    }
+    let executor = dispatch::list_dispatches(&request.session)?
+        .into_iter()
+        .find(|record| record.task == task.id && !record.is_review())
+        .ok_or_else(|| anyhow!("task {} has no executor dispatch receipt", task.id))?;
+    if !executor.is_terminal()
+        || executor.execution_status.as_deref() != Some("succeeded")
+        || executor.exit_code.is_some_and(|code| code != 0)
+    {
+        bail!(
+            "task {} executor has not completed successfully; await it before review",
+            task.id
+        )
+    }
+    let selection = report::select_reviewer(&task)?;
+    let prompt = report::render_review_brief(&task, &selection)?;
+    let record = dispatch::dispatch_review(&DispatchRequest {
+        session: request.session.clone(),
+        task: task.id.clone(),
+        actor: request.actor.into(),
+        harness: selection.reviewer.clone(),
+        pane_id: None,
+        run: None,
+        prompt,
+        timeout_sec: None,
+    })?;
+    let task = if record.is_confirmed() {
+        tasks::review_task(&request.session, &request.task, request.actor.into())?
+    } else {
+        tasks::read_task(&request.session, &request.task)?
+    };
+    let mode = if selection.self_review {
+        "self-review (only one capable harness)"
+    } else {
+        "independent review"
+    };
+    let note = Some(if record.is_confirmed() {
+        format!(
+            "{} dispatched to {}; await its terminal verdicts before finish",
+            mode, selection.reviewer
+        )
+    } else {
+        format!(
+            "{} could not confirm delivery to {}; task remains {}",
+            mode, selection.reviewer, task.status
+        )
+    });
+    Ok(OrchOutcome {
+        verb: Verb::Review.tool_name().to_owned(),
+        tasks: vec![task],
+        dispatches: vec![record],
+        note,
+    })
 }
 
 /// Mark a reviewed task done.
 pub fn finish(request: TaskRef) -> Result<OrchOutcome> {
+    let current = tasks::read_task(&request.session, &request.task)?;
+    if current.contract.is_none() {
+        let task = tasks::done_task(&request.session, &request.task, request.actor.into())?;
+        return Ok(OrchOutcome::task_only(Verb::Finish, task));
+    }
+    if TaskStatus::parse(&current.status)? != TaskStatus::Review {
+        bail!(
+            "contracted task {} must be in review before finish",
+            current.id
+        )
+    }
+    let dispatches = dispatch::list_dispatches(&request.session)?
+        .into_iter()
+        .filter(|record| record.task == current.id)
+        .collect::<Vec<_>>();
+    let reviewer = dispatches
+        .iter()
+        .find(|record| record.is_review())
+        .ok_or_else(|| anyhow!("task {} has no reviewer dispatch receipt", current.id))?;
+    if !reviewer.is_terminal() {
+        bail!(
+            "task {} reviewer is still running; await it before finish",
+            current.id
+        )
+    }
+    if reviewer.execution_status.as_deref() != Some("succeeded")
+        || reviewer.exit_code.is_some_and(|code| code != 0)
+    {
+        bail!("task {} reviewer did not complete successfully", current.id)
+    }
+    let (reported, report) = report::persist_report(
+        &request.session,
+        &request.task,
+        reviewer,
+        &dispatches,
+        request.actor.into(),
+    )?;
+    let failed = report
+        .verdicts
+        .iter()
+        .filter(|verdict| verdict.verdict == "fail")
+        .count();
+    if failed > 0 {
+        bail!(
+            "task {} remains review: {failed} acceptance check(s) failed; report {}",
+            reported.id,
+            report::report_path(&request.session, &request.task).display()
+        )
+    }
     let task = tasks::done_task(&request.session, &request.task, request.actor.into())?;
-    Ok(OrchOutcome::task_only(Verb::Finish, task))
+    Ok(OrchOutcome {
+        verb: Verb::Finish.tool_name().to_owned(),
+        tasks: vec![task],
+        dispatches: vec![reviewer.clone()],
+        note: Some(format!(
+            "all {} acceptance checks passed; report {}",
+            report.verdicts.len(),
+            report::report_path(&request.session, &request.task).display()
+        )),
+    })
 }
 
 /// Drop a task (auditable) and stop a linked live worker run best-effort.

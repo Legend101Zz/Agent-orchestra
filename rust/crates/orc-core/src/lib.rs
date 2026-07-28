@@ -16,6 +16,7 @@ pub mod probe;
 pub mod quota;
 pub mod ratelimit;
 pub mod registry;
+pub mod report;
 pub mod runner;
 pub mod search;
 pub mod spawn_guard;

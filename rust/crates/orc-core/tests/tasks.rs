@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{HarnessRegistry, create_session, write_harness_registry};
+use orc_core::contract::TaskContract;
 use orc_core::registry::atomic_write_json;
 use orc_core::tasks::{
     NewTask, TaskActor, TaskStatus, add_task, assign_task, diff_task, done_task, drop_task,
@@ -197,7 +198,14 @@ fn isolated_tasks_diff_merge_and_drop_only_owned_worktrees() {
         TaskActor::Human,
         NewTask {
             title: "change story".to_owned(),
-            isolate: true,
+            isolate: false,
+            contract: Some(TaskContract {
+                objective: "Change only the isolated story.".to_owned(),
+                allowed_paths: vec!["story.txt".to_owned()],
+                forbidden: vec!["do not edit the main checkout".to_owned()],
+                acceptance_checks: vec!["main checkout stays untouched".to_owned()],
+                ..TaskContract::default()
+            }),
             ..NewTask::default()
         },
     )
@@ -207,6 +215,11 @@ fn isolated_tasks_diff_merge_and_drop_only_owned_worktrees() {
     let worktree_path = std::path::PathBuf::from(worktree.path.as_ref().unwrap());
     assert!(worktree_path.is_dir());
     fs::write(worktree_path.join("story.txt"), "one\ntwo\n").unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.join("story.txt")).unwrap(),
+        "one\n",
+        "contracted work must land only in the task worktree"
+    );
     let diff = diff_task(&session.id, &task.id).unwrap();
     assert_eq!(diff.insertions, 1);
     assert_eq!(diff.deletions, 0);

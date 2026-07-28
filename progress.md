@@ -1318,6 +1318,27 @@ hand back to the implementer.
   from the new location; verified all four links resolve and the hook responds.
 - **Remaining for V1: #11, #12, #13, #14.** Next: #11.
 
+## Session — 2026-07-28 (code-puppy): #11 isolation, review, and final reports
+
+- Refreshed `main`, confirmed dependency #5 is closed, and implemented issue
+  #11 on `issue-11-isolation-review-report`.
+- Contracted tasks now create and dispatch only inside owned Git worktrees;
+  unavailable isolation fails explicitly instead of falling back to the session
+  checkout.
+- Added review dispatches that prefer a different capable harness and identify
+  the one-worker fallback as `self_review`. Finishing a contracted task now
+  requires one evidenced verdict per acceptance check and persists a final
+  report under `~/.orchestra/reports/`.
+- Surfaced the report, reviewer mode, per-check evidence, token usage, cost, and
+  run receipts in `task show`, SCORE, and RUNS.
+- Added automated coverage for main-checkout isolation, reviewer diversity and
+  honest fallback, full executor-review-finish lifecycle, report persistence,
+  CLI display, app display, and the MCP lifecycle fixture. The user explicitly
+  expanded allowed paths to `rust/crates/orc-mcp/tests/tools.rs` for the fixture.
+- All five required Rust gates pass: formatting, strict Clippy, the full
+  workspace test suite, warning-free rustdoc, and the locked release build.
+- Merged by Mrigesh as PR #32; `main` is `cf4e859` and issue #11 auto-closed.
+
 ## Session — 2026-07-28 (Claude): #33 opened + implemented — harness auto-registration + model profiles
 
 - While Mrigesh was locally testing #11 (branch `issue-11-isolation-review-report`),
@@ -1363,4 +1384,3 @@ hand back to the implementer.
   way to edit or remove profiles, or build a generic model-flag abstraction
   for adapters other than `pi` — that remains explicit future work if a
   concrete need shows up.
-
