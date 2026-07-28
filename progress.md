@@ -1384,3 +1384,9 @@ hand back to the implementer.
   way to edit or remove profiles, or build a generic model-flag abstraction
   for adapters other than `pi` — that remains explicit future work if a
   concrete need shows up.
+- Merged by Mrigesh as PR #34; `main` is `fc3729c` and issue #33 auto-closed.
+  `LOG.md` status board updated (#11 → ✅ PR #32, #33 → ✅ PR #34), the stale
+  "Next: #11" headline rewritten to reflect both merges, and `task_plan.md`
+  updated the same way (added #33 as a side-fix row, moved #11 into the merged
+  list, rewrote the "Next" pointer to #12/#14/#13).
+- **Remaining for V1: #12, #13, #14.**

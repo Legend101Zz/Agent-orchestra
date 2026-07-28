@@ -31,7 +31,7 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
-| [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | 👀 | `issue-33-harness-registration` |
+| [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
@@ -52,11 +52,12 @@ run in their own Git worktree so a worker cannot touch the main checkout;
 `orch review` dispatches to a different capable harness when one exists, or
 labels the result an honest `self_review` with just one; `orch finish` refuses
 to move a task to `done` while any acceptance check is verdicted `fail`. Along
-the way, issue #33 (Claude) fixed a gap found while testing #11 locally:
-`pio harness list` discovered `opencode` but never made it usable, and `pi-m3`
-was a single hardcoded model profile with no way to register another — both
-now work (`discover()` auto-registers any known-adapter harness; `pio harness
-add` registers new named model profiles with validated or manual input).
+the way, issue #33 (Claude, merged 2026-07-28 as PR #34) fixed a gap found
+while testing #11 locally: `pio harness list` discovered `opencode` but never
+made it usable, and `pi-m3` was a single hardcoded model profile with no way
+to register another — both now work (`discover()` auto-registers any
+known-adapter harness; `pio harness add` registers new named model profiles
+with validated or manual input).
 
 **Next: #12 and #14; #13 anytime.** Still open by choice:
 `render_brief` is wired into `orch delegate` but not `dispatch send`. Start #13

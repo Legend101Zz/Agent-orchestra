@@ -31,31 +31,35 @@ record. (Issue numbers are filled in as issues are created.)
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | V1-6 `orch_*` control surface: normalized CLI verbs + MCP server | #5 (✅ merged 2026-07-27, PR #26) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | V1-7 Trigger grammar in hosted panes (PTY detect + highlight) | — (✅ merged 2026-07-24, PR #23) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 (✅ merged 2026-07-27, PR #27) |
-| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 |
+| [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 (✅ merged 2026-07-28, PR #32) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
+| [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28 and #30 are merged.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30 and #11 are merged.**
 The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
 that had made every non-trivial delegation fail since #8; #30 (PR #31) then
 separated *delivery* from *execution* — `orch delegate` returns once the brief is
 received, a detached supervisor holds the #7 slot lease for the worker's real
 lifetime, a dead supervisor reconciles to `orphaned` instead of wedging the
 board, and the record stores the extracted answer plus usage rather than raw
-transport JSON.
+transport JSON. #11 (PR #32) then closed out V1's core delegation-safety story:
+every contracted task now runs in its own Git worktree, completion requires an
+independently reviewed verdict per acceptance check (or an honest
+`self_review` with one harness), and `orch finish` refuses `done` while any
+check is `fail`. Opened along the way, #33 (PR #34) fixed a real gap hit while
+testing #11 locally — `opencode` was fully wired but unreachable through
+`session create`, and `pi-m3` was a single hardcoded `pi` model with no way to
+register another.
 
-**Next: #11**, then **#12** and **#14**; **#13** anytime. #11 (worktree isolation
-+ independent review + receipt) was deliberately sequenced after #30 because both
-rewrite `dispatch.rs` and #11's per-check report depends on how a dispatch
-reaches its terminal state — that shape is now settled, so #11 can build on it
-rather than around it.
+**Next: #12** and **#14**; **#13** anytime. Parallel-safe: #12 and #13 from
+fresh `main`; start #13 before more TUI churn lands to avoid merge conflicts.
 
 Still open by choice: `render_brief` is wired into `orch delegate` but not
-`dispatch send` (`orch` is the canonical path). Parallel-safe: #12 and #13 from
-fresh `main`; start #13 before more TUI churn lands to avoid merge conflicts.
+`dispatch send` (`orch` is the canonical path).
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).
