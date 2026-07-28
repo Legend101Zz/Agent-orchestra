@@ -1318,3 +1318,49 @@ hand back to the implementer.
   from the new location; verified all four links resolve and the hook responds.
 - **Remaining for V1: #11, #12, #13, #14.** Next: #11.
 
+## Session — 2026-07-28 (Claude): #33 opened + implemented — harness auto-registration + model profiles
+
+- While Mrigesh was locally testing #11 (branch `issue-11-isolation-review-report`),
+  `pio session create --worker opencode` failed with `unknown worker harness:
+  opencode` right after `pio harness list` had just reported it "available".
+  Traced the root cause: `discover()` only ever wrote presence/version into
+  `HarnessRegistry.discovered`; only the four hardcoded defaults (`claude`,
+  `codex`, `hermes`, `pi-m3`) ever existed in `HarnessRegistry.harnesses`, the
+  map everything else actually validates against. Separately, `pi-m3` is just
+  one hardcoded profile of the generic `pi` binary pinned to
+  `--provider minimax --model MiniMax-M3`, with no way to register another
+  (e.g. `pi-claude`) short of hand-editing `~/.orchestra/harnesses.json`.
+- Opened issue #33, wrote a design spec
+  (`docs/superpowers/specs/2026-07-28-harness-registration-design.md`) and an
+  implementation plan (`docs/superpowers/plans/2026-07-28-harness-registration.md`)
+  via the brainstorming/writing-plans flow, both approved by Mrigesh before
+  any code, then implemented on branch `issue-33-harness-registration` from
+  fresh `main`.
+- `discover()` now auto-registers a minimal profile (both roles, empty
+  `dispatch_args` so `invocation.rs`'s template synthesis drives dispatch) for
+  any `KNOWN_HARNESSES` name with a working invocation template and no
+  existing entry — never overwriting a hand-configured or previously
+  auto-registered profile. Added an end-to-end test reproducing the exact
+  reported failure (`harness list` then `session create --worker opencode`)
+  and proving it now succeeds.
+- Added `orc_core::harness_models`: one parser per adapter that can list its
+  own models — `pi --list-models`'s table, `opencode models`'s bare
+  `provider/model` lines (both verified by hand against the real binaries
+  first). Any other adapter reports `NoProber` plainly; nothing is guessed.
+- Added `pio harness add <key> --like <existing> --provider --model
+  [--list-models]`: copies command/adapter/roles from an existing profile,
+  validates the pair against the harness's own model list when a prober
+  exists (rejecting bad pairs with the real valid choices and writing
+  nothing), and falls back to trusting manual input when the probe itself
+  fails or the adapter has none. Provider/model profiles are only supported
+  for the `pi` adapter in this issue — any other adapter is rejected outright
+  with a clear message, not guessed at.
+- `pio harness list`'s plain-text output gained a "registered profiles"
+  section showing each profile's command, roles, and configured
+  provider/model where set; `--json` output is unchanged on purpose (existing
+  tests assert it stays the flat 5-row `KNOWN_HARNESSES` array).
+- All five gates pass. I did NOT touch role/capability-probe semantics, add a
+  way to edit or remove profiles, or build a generic model-flag abstraction
+  for adapters other than `pi` — that remains explicit future work if a
+  concrete need shows up.
+

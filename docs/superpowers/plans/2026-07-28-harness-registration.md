@@ -1,6 +1,6 @@
 # Harness Auto-Registration + Model Profiles Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Any `KNOWN_HARNESSES` name (e.g. `opencode`) becomes usable via `session create`/`orch delegate` the moment it's found on `PATH`, and a new `pio harness add` command lets a multi-model harness like `pi` be registered under additional named model profiles (e.g. `pi-claude`), with auto-probing of the harness's own model list where possible and a validated manual fallback otherwise.
 
@@ -34,7 +34,7 @@
 - Produces: `pub(crate) fn has_invocation_template(adapter: &str) -> bool` in `orc_core::invocation`, used by `discovery.rs`.
 - Produces: private `fn register_default_profile(harnesses: &mut BTreeMap<String, HarnessConfig>, name: &str)` in `discovery.rs`, unit-tested directly (same pattern as the existing `record_discovery` test).
 
-- [ ] **Step 1: Add the crate-visible template-check helper**
+- [x] **Step 1: Add the crate-visible template-check helper**
 
 In `rust/crates/orc-core/src/invocation.rs`, immediately after the closing brace of `fn template_for` (the function ends right before the doc comment for `resolve_worker_invocation`, around line 187), insert:
 
@@ -50,7 +50,7 @@ pub(crate) fn has_invocation_template(adapter: &str) -> bool {
 }
 ```
 
-- [ ] **Step 2: Write the failing unit test for gap-filling registration**
+- [x] **Step 2: Write the failing unit test for gap-filling registration**
 
 In `rust/crates/orc-core/src/discovery.rs`, add `HarnessConfig` to the existing `use crate::bench::{...}` import (it currently imports `DiscoveredHarness, HarnessRegistry, load_harness_registry, read_harness_registry, write_harness_registry` — add `HarnessConfig` to that list, alphabetically after `DiscoveredHarness`).
 
@@ -108,12 +108,12 @@ Then, after the last test (`present_returns_every_known_harness_and_merges_histo
     }
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `cd rust && cargo test -p orc-core --lib discovery::tests::register_default_profile_fills_gaps_and_never_overwrites -- --exact`
 Expected: FAIL to compile — `register_default_profile` does not exist yet.
 
-- [ ] **Step 4: Implement `register_default_profile` and wire it into `discover()`**
+- [x] **Step 4: Implement `register_default_profile` and wire it into `discover()`**
 
 In `rust/crates/orc-core/src/discovery.rs`, add this private function after `record_discovery` (before `probe_version`):
 
@@ -200,12 +200,12 @@ pub fn discover(probe_versions: bool) -> Result<Vec<HarnessDiscovery>> {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd rust && cargo test -p orc-core --lib discovery::tests -- --exact`
 Expected: all `discovery::tests::*` PASS, including the new one.
 
-- [ ] **Step 6: Fix the now-inaccurate doc comment on `HarnessRegistry.discovered`**
+- [x] **Step 6: Fix the now-inaccurate doc comment on `HarnessRegistry.discovered`**
 
 In `rust/crates/orc-core/src/bench.rs`, the `discovered` field doc (around line 147-152) currently reads:
 
@@ -231,7 +231,7 @@ Change the second paragraph to reflect Part A:
     pub discovered: BTreeMap<String, DiscoveredHarness>,
 ```
 
-- [ ] **Step 7: Write the failing end-to-end test proving the reported bug is fixed**
+- [x] **Step 7: Write the failing end-to-end test proving the reported bug is fixed**
 
 In `rust/crates/orc-cli/tests/harness_cli.rs`, add (after `harness_list_shows_all_five_with_three_present_and_two_unavailable`):
 
@@ -284,12 +284,12 @@ fn harness_list_then_session_create_can_use_a_newly_discovered_harness() {
 }
 ```
 
-- [ ] **Step 8: Run the test to verify it fails, then run all discovery/harness tests to verify it passes**
+- [x] **Step 8: Run the test to verify it fails, then run all discovery/harness tests to verify it passes**
 
 Run (before Step 4/6, if you're doing this test-first — otherwise confirm it now passes since Steps 1-6 are already done): `cd rust && cargo test -p orc-cli --test harness_cli -- --exact`
 Expected: all tests in `harness_cli.rs` PASS, including `harness_list_then_session_create_can_use_a_newly_discovered_harness`.
 
-- [ ] **Step 9: Run the full workspace test suite and commit**
+- [x] **Step 9: Run the full workspace test suite and commit**
 
 Run: `cd rust && cargo test --workspace`
 Expected: all green.
@@ -326,7 +326,7 @@ EOF
 - Consumes: `crate::quota::command_output_with_timeout(command: &mut std::process::Command, timeout: Duration) -> std::io::Result<Option<std::process::Output>>` (already `pub(crate)` in `orc-core`, same crate).
 - Produces: `pub enum ModelProbe { NoProber, Failed(String), Models(Vec<(String, String)>) }` and `pub fn probe(adapter: &str, command: &str) -> ModelProbe`, both consumed by Task 3.
 
-- [ ] **Step 1: Write the failing parser unit tests**
+- [x] **Step 1: Write the failing parser unit tests**
 
 Create `rust/crates/orc-core/src/harness_models.rs` with just the test module first:
 
@@ -389,14 +389,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Add `pub mod harness_models;` to `rust/crates/orc-core/src/lib.rs` (alphabetically, between `pub mod dispatch_supervisor;` and `pub mod inbox;`).
 
 Run: `cd rust && cargo test -p orc-core --lib harness_models -- --exact`
 Expected: FAIL to compile — none of `parse_pi_table`, `parse_opencode_lines`, `probe`, `ModelProbe` exist yet.
 
-- [ ] **Step 3: Implement the module**
+- [x] **Step 3: Implement the module**
 
 Insert the implementation above the `#[cfg(test)]` block in `rust/crates/orc-core/src/harness_models.rs`:
 
@@ -498,12 +498,12 @@ fn parse_opencode_lines(text: &str) -> Vec<(String, String)> {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd rust && cargo test -p orc-core --lib harness_models -- --exact`
 Expected: all 4 tests PASS.
 
-- [ ] **Step 5: Run the full workspace test suite and commit**
+- [x] **Step 5: Run the full workspace test suite and commit**
 
 Run: `cd rust && cargo test --workspace`
 Expected: all green.
@@ -537,7 +537,7 @@ EOF
 - Consumes: `orc_core::harness_models::{probe, ModelProbe}` (Task 2), `orc_core::bench::{HarnessConfig, load_harness_registry, write_harness_registry}` (existing).
 - Produces: `pio harness add <key> --like <existing-key> [--provider <p>] [--model <m>] [--list-models] [--json]`, consumed only by end users / Task 4's display work (no other task calls into this).
 
-- [ ] **Step 1: Add the `Add` variant to `HarnessCommand`**
+- [x] **Step 1: Add the `Add` variant to `HarnessCommand`**
 
 In `rust/crates/orc-cli/src/main.rs`, in the `HarnessCommand` enum (currently `List` and `Cap`), add a third variant after `Cap`:
 
@@ -570,7 +570,7 @@ In `rust/crates/orc-cli/src/main.rs`, in the `HarnessCommand` enum (currently `L
     },
 ```
 
-- [ ] **Step 2: Write the failing CLI tests**
+- [x] **Step 2: Write the failing CLI tests**
 
 In `rust/crates/orc-cli/tests/harness_cli.rs`, add this helper near `fake_harness`/`failing_harness`:
 
@@ -785,12 +785,12 @@ fn harness_add_rejects_an_unknown_like_key() {
 }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `cd rust && cargo test -p orc-cli --test harness_cli -- --exact harness_add`
 Expected: FAIL to compile — `HarnessCommand::Add` isn't handled in `dispatch_harness`, and `pio` doesn't recognize `add`.
 
-- [ ] **Step 4: Implement the `Add` handler**
+- [x] **Step 4: Implement the `Add` handler**
 
 In `rust/crates/orc-cli/src/main.rs`, add `HarnessConfig` to the existing `use orc_core::bench::{...}` import line (currently `create_session, list_sessions, load_harness_registry, write_harness_registry` — add `HarnessConfig` alphabetically first), and add `use orc_core::harness_models::{self, ModelProbe};` near the other `use orc_core::...` lines.
 
@@ -911,12 +911,12 @@ fn print_model_probe(key: &str, probe: &ModelProbe, json: bool) -> Result<i32> {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd rust && cargo test -p orc-cli --test harness_cli -- --exact harness_add`
 Expected: all 6 new tests PASS.
 
-- [ ] **Step 6: Run clippy and the full workspace test suite, then commit**
+- [x] **Step 6: Run clippy and the full workspace test suite, then commit**
 
 Run: `cd rust && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 Expected: both clean.
@@ -954,7 +954,7 @@ EOF
 - Consumes: `orc_core::bench::{HarnessConfig, load_harness_registry}` (existing/Task 1).
 - Produces: nothing consumed by later tasks — this is the last task.
 
-- [ ] **Step 1: Write the failing test for the new display**
+- [x] **Step 1: Write the failing test for the new display**
 
 In `rust/crates/orc-cli/tests/harness_cli.rs`, add:
 
@@ -990,12 +990,12 @@ fn harness_list_shows_registered_profiles_with_their_model() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd rust && cargo test -p orc-cli --test harness_cli -- --exact harness_list_shows_registered_profiles_with_their_model`
 Expected: FAIL — no "registered profiles:" text is printed yet.
 
-- [ ] **Step 3: Implement the display**
+- [x] **Step 3: Implement the display**
 
 In `rust/crates/orc-cli/src/main.rs`, in `dispatch_harness`'s `HarnessCommand::List { json } => { ... }` arm, the current non-json branch ends with the `for harness in &harnesses { ... }` loop. Add a call right after that loop, still inside the `else` block:
 
@@ -1063,12 +1063,12 @@ fn provider_model_args(config: &HarnessConfig) -> Option<(&str, &str)> {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd rust && cargo test -p orc-cli --test harness_cli -- --exact`
 Expected: every test in `harness_cli.rs` PASSes, including the new one and the existing `harness_list_shows_all_five_with_three_present_and_two_unavailable` (still asserting `rows.len() == 5`).
 
-- [ ] **Step 5: Run every gate from AGENTS.md**
+- [x] **Step 5: Run every gate from AGENTS.md**
 
 ```bash
 cd "/Volumes/Mrigesh SSD/Agent-orchestra/rust"
@@ -1081,7 +1081,7 @@ cargo build --release --locked
 
 Expected: all five clean.
 
-- [ ] **Step 6: Update `progress.md` and `LOG.md`, commit, push, open the PR**
+- [x] **Step 6: Update `progress.md` and `LOG.md`, commit, push, open the PR**
 
 Append a dated entry to `progress.md` (top-level, following the existing format) summarizing: the bug (opencode discovered but unusable), Part A's fix, Part B's `pio harness add` with pi/opencode probing and validated-or-manual registration, and that all gates pass.
 

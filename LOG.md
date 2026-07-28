@@ -31,6 +31,7 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ⬜ *unblocked* | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
+| [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | 👀 | `issue-33-harness-registration` |
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
@@ -136,6 +137,21 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-28 — Any known harness works out of the box; register new pi model profiles, issue #33 (Claude)
+`opencode` was fully wired to run (it has an invocation template, `spawn_guard`
+already knew its concurrency cap) but was unreachable — `session create
+--worker opencode` failed even right after `harness list` reported it
+available, because discovery only recorded presence, never made it a usable
+profile. Any `KNOWN_HARNESSES` name with a working invocation template now
+becomes usable automatically the moment it's found on `PATH`. Separately,
+`pi-m3` was a single hardcoded model of the generic `pi` binary with no way to
+register another; `pio harness add <key> --like <existing> --provider --model`
+now does that, auto-probing the harness's own model list (`pi --list-models`,
+`opencode models`) when possible and rejecting bad pairs with the real valid
+choices, falling back to trusting manual input when the probe itself fails. I
+did NOT add a way to edit/remove profiles, change role or capability-probe
+semantics, or build model-flag support for any adapter besides `pi`.
 
 ### 2026-07-27 — The brain can keep working while workers run, issue #30 (code-puppy)
 Handing off a task now returns as soon as the worker has received it, so the

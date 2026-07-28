@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::{
-    create_session, list_sessions, load_harness_registry, write_harness_registry,
+    HarnessConfig, create_session, list_sessions, load_harness_registry, write_harness_registry,
 };
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
@@ -1108,6 +1108,7 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
                         println!("{:<10} NOT ON PATH · unavailable", harness.name);
                     }
                 }
+                print_registered_profiles()?;
             }
             Ok(0)
         }
@@ -1232,6 +1233,48 @@ fn dispatch_harness(command: HarnessCommand) -> Result<i32> {
             Ok(0)
         }
     }
+}
+
+/// Print every registered harness profile with its configured provider/model
+/// when one is set (currently only the `pi` adapter's `--provider <p>
+/// --model <m>` shape, written by `harness add` and the `pi-m3` default).
+fn print_registered_profiles() -> Result<()> {
+    let registry = load_harness_registry()?;
+    if registry.harnesses.is_empty() {
+        return Ok(());
+    }
+    println!("\nregistered profiles:");
+    for (key, config) in &registry.harnesses {
+        let roles = config.roles.join("+");
+        match provider_model_args(config) {
+            Some((provider, model)) => {
+                println!(
+                    "  {key:<12} {} ({roles}) \u{b7} {provider}/{model}",
+                    config.command
+                );
+            }
+            None => {
+                println!("  {key:<12} {} ({roles})", config.command);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extract `(provider, model)` from a profile's `args` when they carry the
+/// `--provider <p> --model <m>` shape this module writes.
+fn provider_model_args(config: &HarnessConfig) -> Option<(&str, &str)> {
+    let mut iter = config.args.iter();
+    let mut provider = None;
+    let mut model = None;
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--provider" => provider = iter.next().map(String::as_str),
+            "--model" => model = iter.next().map(String::as_str),
+            _ => {}
+        }
+    }
+    provider.zip(model)
 }
 
 fn print_model_probe(key: &str, probe: &ModelProbe, json: bool) -> Result<i32> {

@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::locate_executable;
 use crate::bench::{
-    DiscoveredHarness, HarnessConfig, HarnessRegistry, load_harness_registry, read_harness_registry,
-    write_harness_registry,
+    DiscoveredHarness, HarnessConfig, HarnessRegistry, load_harness_registry,
+    read_harness_registry, write_harness_registry,
 };
 use crate::quota::command_output_with_timeout;
 use crate::registry::now_iso;

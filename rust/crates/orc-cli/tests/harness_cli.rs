@@ -502,3 +502,33 @@ fn harness_add_rejects_an_unknown_like_key() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn harness_list_shows_registered_profiles_with_their_model() {
+    let root = root("list-profiles");
+    let home = root.join("orchestra");
+    let bin = root.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+
+    let plain = run(&home, &bin, &["harness", "list"]);
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let text = String::from_utf8_lossy(&plain.stdout);
+    assert!(text.contains("registered profiles:"));
+    // pi-m3 is one of the four defaults, written the first time the
+    // registry is created (by load_harness_registry inside discover()).
+    assert!(
+        text.contains("pi-m3") && text.contains("minimax/MiniMax-M3"),
+        "{text}"
+    );
+    // --json output is unchanged: still exactly the 5 KNOWN_HARNESSES rows.
+    let json = run(&home, &bin, &["harness", "list", "--json"]);
+    let rows: Vec<Value> = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(rows.len(), 5);
+
+    let _ = fs::remove_dir_all(&root);
+}
