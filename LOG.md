@@ -61,6 +61,14 @@ worth photographing, and the three themes are stable enough to photograph.
 > places: pressing `t` on RUNS swaps to a hard-coded palette, saves it, and makes
 > nocturne unreachable; the trigger rainbow ignores `NO_COLOR`; and the grep gate
 > doesn't look inside subdirectories.
+>
+> **Addendum — one of those three is your call, Mrigesh.** The rainbow's explicit
+> RGB is your own approved exception from #9 (see 2026-07-24 entry below), so that
+> part is settled. What's new is that #13 added the colour-tier probe and the claim
+> that monochrome "drops colour entirely" — and the rainbow ignores it, so a
+> `NO_COLOR` terminal still gets nine 24-bit colour codes. Decide whether the
+> ultrathink exception extends to `NO_COLOR` (then soften the claim) or the rainbow
+> goes bold-only there (then gate it). Gating breaks no existing test — checked.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
