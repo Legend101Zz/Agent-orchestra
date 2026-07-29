@@ -31,10 +31,73 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
-| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | 👀 | `issue-38-stage-circuit` |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
+
+**#38 pushed (2026-07-30, `issue-38-stage-circuit`) — the line between the
+brain and the workers is now real wiring, and dragging a pane stopped
+fighting you.**
+
+First, the thing you noticed: **the moving packet was freezing mid-way and
+then restarting from the beginning.** That was #13's fourth review finding,
+which shipped unfixed. The animation maths was always right — the app just
+stopped repainting at the exact moment the line should have faded back to
+its resting dots, so it kept whatever half-finished frame was on screen until
+the next burst of output. It now always paints the frame it worked out.
+
+Second, **one line became one line per worker.** Before, there was a single
+horizontal dash floating at the middle of the screen no matter how many
+workers you had — with three, it pointed at the gap between two of them, and
+it couldn't tell you *which* worker was talking, because any pane producing
+anything lit the same line. Now it looks like an n8n canvas: a socket on the
+conductor, a spine running down the gap, and a branch into each worker. Each
+branch carries its own worker's traffic, so you can see at a glance who is
+busy. It also follows the panes when you move them — the old line was drawn
+from a formula, so after one drag it pointed at empty space.
+
+Third, **dragging.** You couldn't actually resize with the mouse at all
+before — only move a pane by its title bar, which is probably why it felt
+broken. You can now grab any edge or corner. And the reason it hitched: every
+single frame of a drag, the app stopped to ask the daemon to resize the
+terminal (which makes the CLI inside redraw its entire screen) *and* rewrote
+`session.json` to disk. Sixty times a second, with the interface frozen
+waiting each time. Measured: **119 of those round-trips across one second of
+dragging. It is now 2, both after you let go.** The outline follows your
+mouse instantly because that is just the app redrawing itself.
+
+Fourth, **you can now see a message move.** Previously a dispatch going out, a
+result coming back, and a worker simply printing a line all looked identical
+— the code literally treated a task event as a stdout tick. Now a message is
+its own thing: a single arrow that crosses once and lands, `▶` going out and
+`◀` coming back, colour-coded gold for confirmed and coral for failed, and
+noticeably snappier than the ambient flow. When it arrives, the receiving
+pane stamps a short-lived badge — `TASK DISPATCHED`, `TASK CONFIRMED`,
+`TASK FAILED` — which fades after about a second and leaves nothing behind.
+
+**One thing needed your decision and you gave it.** The design sheet says the
+baton goes one direction only, conductor → worker. A result coming *back*
+contradicts that. Rather than let the code quietly overrule the sheet, you
+chose to keep the baton rule exactly as written and add a second, separate
+thing beside it — the ambient line means "this worker is producing", the
+arrow means "this specific thing was sent". A nice side effect: the identity
+HTML needed no changes at all.
+
+**At small terminal sizes it now tells you the truth.** Below about 100
+columns the panes stack and there is no gap to route through — the old code
+just stopped drawing the line, silently, at sizes *above* the design's own
+80×24 minimum. Each worker now gets a short rail inlaid in its own top border
+instead. You lose the routing, not the information, and it says so.
+
+Also worth knowing: two more real bugs turned up while doing this. Letting go
+of the mouse over a pane's title bar used to *start* a new drag instead of
+ending one. And a pane you moved was often never actually saved, so it would
+jump back. Both fixed.
+
+Six workers all producing at once repaints in **0.157 ms** — the budget is 16.
+
+*Not yet tested locally by you: `./install.sh` from the branch and drive it.*
 
 **#37 pushed (2026-07-29, `issue-37-theme-persistence`) — you can change the
 theme from inside the app, and it stays changed.** Press your leader chord then
