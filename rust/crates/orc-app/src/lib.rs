@@ -520,6 +520,12 @@ struct StageState {
     /// When the current sweep began, so the packet's frame is a function of
     /// wall-clock rather than of how often the shell happened to repaint.
     sweep_start: Instant,
+    /// The rail state the shell last actually *painted*, as opposed to the one
+    /// it last computed. The repaint loop compares this against the resolved
+    /// state and forces a draw when they differ, which is what stops the
+    /// packet freezing mid-sweep at the moment the decay timer expires.
+    /// `None` until the first paint, so the first frame always draws.
+    painted_baton: Option<baton::State>,
     theme: Theme,
     glyphs: Glyphs,
     session_id: Option<String>,
@@ -547,6 +553,7 @@ impl StageState {
             ),
             last_tick: now,
             sweep_start: now,
+            painted_baton: None,
             theme,
             glyphs,
             session_id: None,
@@ -616,9 +623,35 @@ impl StageState {
         baton::State::resolve(reduced_motion, since_output, self.sweep_start.elapsed())
     }
 
-    /// Whether any conductor pane currently shows a trigger. The shell keeps
-    /// repainting while this holds so the trigger rainbow keeps flowing after
-    /// the baton pulse has settled.
+    /// Whether the rail resolves to something other than what is on screen.
+    ///
+    /// The repaint loop's other reasons to draw are all "something is still
+    /// moving". None of them covers the frame on which motion *stops*: when
+    /// the decay timer expires, the live flags go false in the same iteration
+    /// that the rail first resolves to [`baton::State::Idle`], so without this
+    /// the idle rail is computed and never painted and the packet stays
+    /// stranded mid-sweep until the next burst. Comparing against the last
+    /// painted state also covers the identical Steady→Idle transition under
+    /// reduced motion, where there is no animation cadence to fall back on.
+    fn baton_needs_repaint(&self, reduced_motion: bool) -> bool {
+        self.painted_baton != Some(self.baton_state(reduced_motion))
+    }
+
+    /// Record the rail state that was just drawn to the terminal.
+    ///
+    /// Called from the render path with the exact value handed to
+    /// [`render_stage`], so "last painted" means painted, not computed.
+    fn record_painted_baton(&mut self, state: baton::State) {
+        self.painted_baton = Some(state);
+    }
+
+    /// Whether any conductor pane currently shows a trigger.
+    ///
+    /// This drives the trigger rainbow's own cadence and nothing else. It is
+    /// deliberately *not* an input to the baton: a pane displaying `delegate:`
+    /// with no output has produced no traffic, so the rail decays to idle like
+    /// any other silent pane. Pinned by
+    /// `a_trigger_animates_the_rainbow_but_never_the_rail`.
     fn has_live_trigger(&self) -> bool {
         self.panes
             .iter()
@@ -1667,6 +1700,10 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
             });
             if let Some(stage) = shell.stage.as_mut() {
                 render_stage(frame, stage, motion, baton);
+                // What reached the terminal, recorded at the only place that
+                // knows it did: `run_shell_loop` compares against this to
+                // decide whether the rail still owes the screen a frame.
+                stage.record_painted_baton(baton);
             }
         }
         ShellView::Score => {
@@ -1892,6 +1929,87 @@ fn attach_stage(
     Ok(())
 }
 
+/// Why the shell may owe the screen a frame, as observed at the top of one
+/// loop iteration.
+///
+/// Split out of `run_shell_loop` so the decision is a value a test can make
+/// assertions about. The loop itself is not reachable from a test — it wants a
+/// real terminal, a real socket and a live event source — so leaving the guard
+/// inline would leave the one thing this issue's first commit changes
+/// unverifiable except by eye.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RepaintReasons {
+    /// An event arrived since the last draw.
+    pending: bool,
+    /// The baton is mid-pulse and motion is allowed: the packet is travelling.
+    animating: bool,
+    /// The baton is mid-pulse but motion is reduced: the rail is static, and
+    /// this only exists so the decay to idle is noticed promptly.
+    stage_live: bool,
+    /// The rail resolves to something other than what is on screen. This is
+    /// the only reason that fires on the frame motion *stops*.
+    stage_changed: bool,
+    /// A conductor pane is showing a trigger and motion is allowed.
+    trigger_ambient: bool,
+    home_ambient: bool,
+    runs_ambient: bool,
+}
+
+impl RepaintReasons {
+    /// Whether to draw this iteration.
+    const fn draw(self) -> bool {
+        self.pending
+            || self.animating
+            || self.stage_live
+            || self.stage_changed
+            || self.trigger_ambient
+            || self.home_ambient
+            || self.runs_ambient
+    }
+
+    /// How long the loop may sleep before looking again.
+    ///
+    /// The shortest cadence any live reason needs. `stage_changed` is absent
+    /// on purpose: it is satisfied by the draw it just asked for, so it must
+    /// not hold the loop at a fast cadence afterwards.
+    const fn wait(self) -> Duration {
+        if self.animating {
+            Duration::from_millis(16)
+        } else if self.home_ambient || self.trigger_ambient {
+            Duration::from_millis(120)
+        } else if self.stage_live || self.runs_ambient {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(30)
+        }
+    }
+}
+
+/// Read the shell's current repaint reasons. Pure apart from the clocks it
+/// samples through `StageState`.
+fn repaint_reasons(shell: &ShellState, pending: bool) -> RepaintReasons {
+    // The help overlay and the other screens do not paint the rail, so no
+    // rail-derived reason may fire there: a guard asking for a frame nobody
+    // draws is never satisfied and would spin the loop at full tilt.
+    let on_stage = !shell.help && shell.view == ShellView::Stage;
+    let stage = shell.stage.as_ref().filter(|_| on_stage);
+    let live = stage.is_some_and(|stage| !stage.pulse.done());
+    RepaintReasons {
+        pending,
+        animating: live && !shell.reduced_motion,
+        stage_live: live && shell.reduced_motion,
+        stage_changed: stage.is_some_and(|stage| stage.baton_needs_repaint(shell.reduced_motion)),
+        trigger_ambient: !shell.reduced_motion
+            && stage.is_some_and(|stage| stage.has_live_trigger()),
+        home_ambient: !shell.reduced_motion && !shell.help && shell.view == ShellView::Home,
+        // The RUNS embed repaints on a modest tick so quota/history updates
+        // arriving on the App's internal channel become visible without a
+        // keypress. This is data refresh, not animation, so it is kept under
+        // reduced_motion; App::refresh is internally rate-limited to 500 ms.
+        runs_ambient: !shell.help && shell.view == ShellView::Runs,
+    }
+}
+
 fn run_shell_loop(
     terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
     commands: &mut BenchClient,
@@ -1907,25 +2025,11 @@ fn run_shell_loop(
         if let Some(stage) = shell.stage.as_mut() {
             stage.advance();
         }
-        let stage_live = shell.view == ShellView::Stage
-            && shell
-                .stage
-                .as_ref()
-                .is_some_and(|stage| !stage.pulse.done());
-        let animating = !shell.reduced_motion
-            && shell.stage.as_ref().is_some_and(|stage| {
-                shell.view == ShellView::Stage && (!stage.pulse.done() || stage.has_live_trigger())
-            });
-        let home_ambient = !shell.reduced_motion && !shell.help && shell.view == ShellView::Home;
-        // The RUNS embed repaints on a modest tick so quota/history updates
-        // arriving on the App's internal channel become visible without a
-        // keypress. This is data refresh, not animation, so it is kept under
-        // reduced_motion; App::refresh is internally rate-limited to 500 ms.
-        let runs_ambient = !shell.help && shell.view == ShellView::Runs;
-        if runs_ambient {
+        let reasons = repaint_reasons(shell, redraw);
+        if reasons.runs_ambient {
             let _ = shell.runs.refresh();
         }
-        if redraw || animating || home_ambient || runs_ambient || stage_live {
+        if reasons.draw() {
             let mut stdout = io::stdout();
             stdout.sync_update(|_| terminal.draw(|frame| render_shell(frame, shell)))??;
             if shell.view == ShellView::Stage
@@ -1936,20 +2040,7 @@ fn run_shell_loop(
             }
             redraw = false;
         }
-        let wait = if animating {
-            Duration::from_millis(16)
-        } else if stage_live {
-            // Reduced motion: the rail is static, so this cadence only exists
-            // so the decay to the idle rail is noticed promptly.
-            Duration::from_millis(500)
-        } else if home_ambient {
-            Duration::from_millis(120)
-        } else if runs_ambient {
-            Duration::from_millis(500)
-        } else {
-            Duration::from_secs(30)
-        };
-        let event = match events.recv_timeout(wait) {
+        let event = match events.recv_timeout(reasons.wait()) {
             Ok(event) => Some(event),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(AppError::EventSource),
@@ -3400,12 +3491,14 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
 
+    use std::time::Duration;
+
     use super::{
         AVATAR_FRAMES, HarnessDiscovery, HashMap, HomeData, HomeState, LeaderAction, LeaderKey,
-        NewSessionFlow, RawRouter, SINGLE_HARNESS_MESSAGE, ScoreState, ShellState, ShellView,
-        SingleHarnessPlan, StageState, Theme, ThemeName, baton, cycle_theme, render_help,
-        render_home, render_score, render_shell, render_stage, route_leader, route_raw_mouse,
-        route_runs_key, score_mouse,
+        NewSessionFlow, RawRouter, RepaintReasons, SINGLE_HARNESS_MESSAGE, ScoreState, ShellState,
+        ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton, cycle_theme,
+        render_help, render_home, render_score, render_shell, render_stage, repaint_reasons,
+        route_leader, route_raw_mouse, route_runs_key, score_mouse,
     };
     use crate::glyph::{Glyph, GlyphTier, Glyphs};
     use crate::theme::{ColorTier, Slot};
@@ -4461,12 +4554,24 @@ mod tests {
     }
 
     /// The baton row STAGE actually painted, as text.
+    ///
+    /// Matched on a maximal run of exactly [`baton::CELLS`] rail symbols, not
+    /// on "this row contains a rail character". Both looser rules pick the
+    /// wrong row: `·` is also a pane title's separator and `─` is also the
+    /// pane border, and both sit above the rail, so a `find` on either would
+    /// return a row that merely looks right. Bounding the run at exactly
+    /// twelve is what separates the rail from a border that runs the full
+    /// width of a pane. Unicode register only — every caller renders with it.
     fn baton_row(buffer: &ratatui::buffer::Buffer, width: u16) -> String {
+        let is_rail = |ch: char| "▓▒░─·━".contains(ch);
         buffer
             .content()
             .chunks(usize::from(width))
             .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
-            .find(|row: &String| row.contains('▓') || row.contains('·') || row.contains('━'))
+            .find(|row: &String| {
+                row.split(|ch| !is_rail(ch))
+                    .any(|run| run.chars().count() == baton::CELLS)
+            })
             .unwrap_or_default()
     }
 
@@ -4556,6 +4661,174 @@ mod tests {
             stage.baton_state(false),
             baton::State::Sweeping(_)
         ));
+    }
+
+    /// Draw one shell frame through the real render path and return the rail
+    /// row it painted. Going through `render_shell` rather than `render_stage`
+    /// is the point: that is where the painted state is recorded, so the loop's
+    /// repaint decision is being fed by an actual paint.
+    fn paint_rail(shell: &mut ShellState, width: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 40)).expect("rail terminal");
+        terminal
+            .draw(|frame| render_shell(frame, shell))
+            .expect("render shell");
+        baton_row(terminal.backend().buffer(), width)
+    }
+
+    #[test]
+    fn the_idle_rail_is_painted_not_merely_computed_when_output_stops() {
+        // Carry-over from #13, fix 4. The decay was computed correctly and
+        // never rendered: on the frame `pulse.done()` flipped, every "still
+        // moving" reason went false at once and `redraw` had been cleared
+        // after the previous draw, so the loop drew nothing and left a packet
+        // stranded mid-sweep. The next burst then restarted it at frame 0.
+        //
+        // Asserted on the rendered buffer. A test that only checked
+        // `baton_state()`'s return value passed before this fix.
+        let width = 120;
+        let mut shell = stage_shell(panes(), ThemeName::Nocturne, false);
+        shell.stage.as_mut().expect("stage").mark_output();
+
+        let live = paint_rail(&mut shell, width);
+        assert!(
+            live.contains('▓'),
+            "output is flowing, so the rail carries the packet: {live:?}"
+        );
+
+        // 400 ms of silence. This is the frame the bug dropped.
+        shell
+            .stage
+            .as_mut()
+            .expect("stage")
+            .pulse
+            .process(baton::DECAY + Duration::from_millis(1));
+        let reasons = repaint_reasons(&shell, false);
+        assert_eq!(
+            reasons,
+            RepaintReasons {
+                stage_changed: true,
+                ..RepaintReasons::default()
+            },
+            "the decay frame must be drawn, and `stage_changed` must be the only \
+             reason asking for it — every other reason means 'still moving', \
+             which is exactly what has just stopped being true"
+        );
+        assert!(reasons.draw());
+
+        let decayed = paint_rail(&mut shell, width);
+        assert!(
+            decayed.contains("◆ ············ ●"),
+            "the rail decays to the dim dotted base on screen: {decayed:?}"
+        );
+
+        // Having painted it, the loop settles instead of spinning on it.
+        let settled = repaint_reasons(&shell, false);
+        assert!(
+            !settled.draw(),
+            "the idle rail is painted once: {settled:?}"
+        );
+        assert_eq!(settled.wait(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn reduced_motion_repaints_the_steady_to_idle_transition_too() {
+        // The same hole, with no animation cadence that could accidentally
+        // cover it: under reduced motion the rail only ever has two forms, and
+        // switching between them is the whole of its motion.
+        let width = 120;
+        let mut shell = stage_shell(panes(), ThemeName::Nocturne, true);
+        shell.stage.as_mut().expect("stage").mark_output();
+
+        let live = paint_rail(&mut shell, width);
+        assert!(
+            live.contains("◆ ━━━━━━━━━━━━ ●"),
+            "live under reduced motion is the solid accent rail: {live:?}"
+        );
+        assert!(
+            !repaint_reasons(&shell, false).animating,
+            "reduced motion never animates"
+        );
+
+        shell
+            .stage
+            .as_mut()
+            .expect("stage")
+            .pulse
+            .process(baton::DECAY + Duration::from_millis(1));
+        assert!(
+            repaint_reasons(&shell, false).stage_changed,
+            "Steady -> Idle owes the screen a frame under reduced motion too"
+        );
+        let decayed = paint_rail(&mut shell, width);
+        assert!(
+            decayed.contains("◆ ············ ●"),
+            "and it is painted: {decayed:?}"
+        );
+    }
+
+    #[test]
+    fn a_trigger_animates_the_rainbow_but_never_the_rail() {
+        // Pinning the second half of the carry-over note. `has_live_trigger`
+        // reads what a conductor pane *displays*; the rail reports traffic a
+        // pane *produced*. They are different signals, so a pane sitting on a
+        // `delegate:` line with no output decays to the idle rail like any
+        // other silent pane, and the trigger keeps only its own 120 ms cadence
+        // rather than holding the whole shell at the baton's 16 ms.
+        let width = 120;
+        let keyword = Trigger::ALL[0].keyword();
+        let stream = format!("{keyword}: build the thing\r\n");
+        let bench = panes().remove(1);
+        let mut shell = stage_shell(
+            vec![conductor_pane(stream.as_bytes()), bench],
+            ThemeName::Nocturne,
+            false,
+        );
+        shell.stage.as_mut().expect("stage").mark_output();
+
+        // Let the pulse decay while the trigger stays on screen.
+        let _ = paint_rail(&mut shell, width);
+        shell
+            .stage
+            .as_mut()
+            .expect("stage")
+            .pulse
+            .process(baton::DECAY + Duration::from_millis(1));
+        assert_eq!(
+            shell.stage.as_ref().expect("stage").baton_state(false),
+            baton::State::Idle,
+            "a trigger is not traffic: the rail is idle"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 40)).expect("rail terminal");
+        terminal
+            .draw(|frame| render_shell(frame, &mut shell))
+            .expect("render shell");
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            highlighted_symbols(buffer),
+            format!("{keyword}:"),
+            "the rainbow is still lit, so the trigger really is live"
+        );
+        assert!(
+            baton_row(buffer, width).contains("◆ ············ ●"),
+            "…and the rail beside it is idle all the same"
+        );
+
+        let reasons = repaint_reasons(&shell, false);
+        assert_eq!(
+            reasons,
+            RepaintReasons {
+                trigger_ambient: true,
+                ..RepaintReasons::default()
+            },
+            "the trigger is the only thing still asking for frames"
+        );
+        assert_eq!(
+            reasons.wait(),
+            Duration::from_millis(120),
+            "one colour per 120 ms is all the rainbow steps, so a trigger must \
+             not hold the loop at the baton's 16 ms cadence"
+        );
     }
 
     #[test]
