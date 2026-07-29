@@ -141,5 +141,5 @@ overwrites both.
 
 ## Evidence
 
-Recorded in `docs/notes/2026-07-29-stage-circuit-evidence.md` alongside the
+Recorded in `docs/notes/2026-07-30-stage-circuit-evidence.md` alongside the
 drag-RPC counts and the six-worker repaint measurement.

@@ -6209,6 +6209,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn six_workers_all_producing_still_repaint_inside_one_frame() {
+        // AC9. The animating cadence is 16 ms, so "stays responsive" has a
+        // number attached: a full STAGE repaint with every connector live, a
+        // message in flight and its emote showing has to fit inside one of
+        // those frames or the loop cannot keep the cadence it asks for.
+        //
+        // The ceiling is deliberately loose — this repo already has three
+        // storage-dependent wall-clock flakes on an external-SSD checkout, and
+        // a tight budget here would be a fourth. The measurement, not the
+        // bound, is the evidence; it is printed and recorded in docs/notes/.
+        const FRAMES: u32 = 200;
+        let mut state = StageState::new(bench(6), ThemeName::Nocturne.into(), GLYPHS);
+        for index in 1..7 {
+            pulse(&mut state, index);
+        }
+        state.flights = vec![InFlight {
+            worker_id: "pane-3".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now(),
+        }];
+        let mut terminal = Terminal::new(TestBackend::new(150, 44)).expect("bench terminal");
+
+        // Warm the buffers so allocation is not counted as repaint cost.
+        for _ in 0..10 {
+            let traffic = state.traffic(false);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, Some(0), &traffic))
+                .expect("warm");
+        }
+        let started = Instant::now();
+        for frame_index in 0..FRAMES {
+            let traffic = state.traffic(false);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, Some(frame_index as usize), &traffic))
+                .expect("bench");
+        }
+        let per_frame = started.elapsed() / FRAMES;
+        println!(
+            "AC9 repaint cost: 6 workers all live + 1 message in flight, 150x44, \
+             {FRAMES} frames -> {:.3} ms/frame",
+            per_frame.as_secs_f64() * 1_000.0
+        );
+        assert!(
+            per_frame < Duration::from_millis(16),
+            "a full repaint must fit the 16 ms animating cadence, took {per_frame:?}"
+        );
+    }
+
     /// Feed one SGR mouse sequence to STAGE, asserting the client consumed it.
     fn mouse(state: &mut StageState, code: u16, column: u16, row: u16, suffix: char) {
         // The wire is 1-based; `route_raw_mouse` converts back to 0-based.
