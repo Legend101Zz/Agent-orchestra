@@ -1513,6 +1513,48 @@ hand back to the implementer.
   "constrained to ember or phosphor". `orc-proto` is outside this issue's allowed
   paths; the field is a free string and carries `nocturne` fine.
 
+## Session — 2026-07-29 (Claude, reviewer): #13 reviewed, merged, and re-homed
+
+- Adversarial review of `issue-13-visual-identity-v1` against #13's contract.
+  All five gates reproduced green (250 tests, 0 failed). AC1 and AC4 verified by
+  independent mutation, not by reading the report: swapping one channel of
+  nocturne's `brain` (`0x5ad1c8 → 0x5ad1c9`) fails three tests, and `baton::cells`
+  was diffed frame-by-frame against `_fillBaton` in the identity HTML.
+- Verdict **FIX (4 items)**. Mrigesh merged anyway (PR #36, `8b47bf1`) — the look
+  is in and #14 is unblocked — so the findings were re-homed rather than dropped:
+  - **#37** ← finding 1. `t` on RUNS replaces the map-derived theme with orc-tui's
+    hardcoded `EMBER` (`#16120e`/`#ff9e3d`, in no row of the map), can never reach
+    nocturne (`Theme::other()` only flips ember↔phosphor), and errors into the
+    message line because `invoke` shells out to `pi-orchestra`, which has no
+    `config` subcommand. Issue now covers the `<leader> t` switcher *and*
+    persistence.
+  - **#38** ← finding 4. The baton freezes mid-sweep: when `pulse.done()` flips,
+    `animating`, `stage_live` and `redraw` are all false, so the loop never paints
+    the idle rail and `wait` jumps to 30 s; the next burst restarts at frame 0.
+    The decay is computed correctly and never rendered.
+  - **#39** ← findings 2 and 3. The trigger rainbow ignores `ColorTier`, so
+    `NO_COLOR` still gets nine 24-bit cells (owner decision: gate it, or soften
+    the two doc claims). The grep gate uses a flat `read_dir`, so `src/widgets/`
+    with a raw `Color::Rgb(0xff,0x00,0xaa)` passes — demonstrated.
+- Two corrections I made to my own review, both material: the rainbow's hardcoded
+  RGB is an owner-approved exception from #9 (so the defect is narrower than I
+  first framed it), and `t` does **not** persist a theme (the shell-out fails) —
+  I had mistaken an in-memory value for evidence of a successful write.
+- Found while writing local-test steps: `theme` lives in **two** files.
+  `pio config set theme` writes `config.json`; the client reads `app.theme` from
+  `harnesses.json` (`orc-daemon/src/lib.rs:456`). The CLI writes the file nothing
+  reads. Folded into #37.
+- Also found: drag-resize does a blocking socket round-trip, a `SIGWINCH`, and a
+  `session.json` read-modify-write **per repaint frame** while the mouse is down
+  (`resize_to_cards` + `persist_stage_layout` after every draw). Folded into #38.
+- **Open and unfiled:** the shipped screen layouts are thinner than the mockups in
+  the identity HTML — palette/glyphs/baton match exactly, but `_fillScreens` draws
+  HOME as three session cards with health badges and sparklines plus a two-column
+  bench grid with PATHs; what shipped is a flat list. Decide before #14.
+- Local install moved to the merged build and switched to nocturne; the stale
+  4-day-old headless session (`comreton-1784975244-0000`, conductor already down)
+  was killed by the daemon restart. Backup at `~/.orchestra.bak-pre-13-*`.
+
 ## Session — 2026-07-29 (code-puppy): #37 theme persistence + the `<leader> t` switcher
 
 - Branch `issue-37-theme-persistence` off fresh `main` (`8b47bf1`). Both halves

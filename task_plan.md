@@ -33,14 +33,25 @@ record. (Issue numbers are filled in as issues are created.)
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | V1-8 Standalone integrations v2: Claude Code skill/hook + Codex block | #8 (✅ merged 2026-07-27, PR #27) |
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 (✅ merged 2026-07-28, PR #32) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 (✅ merged 2026-07-28, PR #35) |
-| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — |
+| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — (✅ merged 2026-07-29, PR #36) |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 |
+| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11 and #12 are
-merged. Only #13 (visual identity) and #14 (README) remain in V1.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12 and #13
+are merged. #14 (README) is the last original V1 item.**
+
+#13 (PR #36) merged with its review verdict outstanding — FIX, 4 items — so
+those findings are live on `main` and were re-homed rather than dropped: #37
+(the `t` key still escapes the theme map), #38 (the baton freezes mid-sweep
+instead of decaying), #39 (the trigger rainbow ignores `NO_COLOR`; the no-hex
+gate doesn't recurse). #37 and #38 also carry the UX work Mrigesh asked for
+after testing: a real theme switcher, per-worker connectors, and drag-resize
+that doesn't round-trip the daemon every frame.
 The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
 that had made every non-trivial delegation fail since #8; #30 (PR #31) then
 separated *delivery* from *execution* — `orch delegate` returns once the brief is
@@ -61,8 +72,16 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**Next: #13** and **#14** — the last two V1 items. Start #13 before more TUI
-churn lands to avoid merge conflicts.
+**Next: #37, then #38** — both are TUI work on top of #13, so land them before
+#14's screenshots. #39 is small and independent; it can slot in anywhere.
+**#14 goes last**, once the screens are what the launch photos should show.
+
+Open and unfiled: the shipped screen *layouts* are thinner than the mockups
+in `docs/design/visual-identity/`. The palette, glyph register and baton match
+the sheet exactly, but `_fillScreens` draws HOME as three session cards with
+health badges and sparklines plus a two-column bench grid with PATHs and an
+`n / m on PATH` counter; what shipped is a flat list and a single-column
+bench. Decide before #14 — that issue is the screenshots.
 
 Still open by choice: `render_brief` is wired into `orch delegate` but not
 `dispatch send` (`orch` is the canonical path). Small debts from #12, none
