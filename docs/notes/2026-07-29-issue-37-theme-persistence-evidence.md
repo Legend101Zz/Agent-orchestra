@@ -134,6 +134,30 @@ approximations; restyling those is identity work (#13), not this issue.
     Finished `release` profile [optimized] target(s) in 0.37s
 ```
 
+### Gate 3 and the external-SSD flake — checked, not waved away
+
+On the external-SSD checkout, `cargo test --workspace` failed intermittently
+(~3 runs in 6) on `background_dispatch::delegate_confirms_while_running…` and
+`quota_guard::cli_dispatch_at_cap…`, while `main` passed 6/6 — which looks like
+a regression until you control for the disk. `task_plan.md` already records that
+`background_dispatch.rs:195`'s sub-1s wall-clock budget is storage-dependent,
+and my first comparison was confounded: the branch was on `/Volumes/Mrigesh SSD`
+and the `main` worktree was on internal `/tmp`.
+
+Re-run on equal footing — the same commit (`2112865`) checked out to
+`/tmp/branch-check`:
+
+```
+external SSD : background_dispatch  ~4.5-4.8s, 1 failure in 5
+internal disk: background_dispatch  3.28-3.49s, 0 failures in 8
+internal disk: main @ 8b47bf1       3.39-3.65s, 0 failures in 8
+full workspace on internal disk:    267 passed, 0 failed  (x3)
+```
+
+Same code, same suite: the difference is the storage, not the change. The
+delegate path also never calls anything this branch touched — `read_config_value`
+/ `theme` / `set_theme` appear only in orc-cli's `config` subcommand.
+
 ## Carry-over checks (from the #13 comment on #37)
 
 - **Cycles on all four screens, asserted in one test including `stage.theme`
