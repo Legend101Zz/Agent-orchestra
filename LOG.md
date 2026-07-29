@@ -69,6 +69,16 @@ worth photographing, and the three themes are stable enough to photograph.
 > `NO_COLOR` terminal still gets nine 24-bit colour codes. Decide whether the
 > ultrathink exception extends to `NO_COLOR` (then soften the claim) or the rainbow
 > goes bold-only there (then gate it). Gating breaks no existing test — checked.
+>
+> **Correction — finding 1 is smaller than I first wrote it.** Pressing `t` does
+> NOT persist a theme: the shell-out runs `pi-orchestra config …`, which has no
+> `config` subcommand, so it just errors into the RUNS message line. RUNS still
+> visibly leaves the palette while the other screens don't, so it stays on the fix
+> list — but it's not a config trapdoor. **Also: your `harnesses.json` says
+> `ember`, and the branch rightly never rewrites an existing config — so you will
+> NOT see nocturne on this install unless you edit that file or test with a fresh
+> `ORC_HOME`.** Separately, `pio config set theme` writes `config.json` while the
+> client reads `harnesses.json` — pre-existing, needs its own issue.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
