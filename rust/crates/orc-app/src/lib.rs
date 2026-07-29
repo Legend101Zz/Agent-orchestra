@@ -2486,7 +2486,16 @@ fn cycle_theme(shell: &mut ShellState, commands: Option<&mut BenchClient>) {
         return;
     };
     let message = match commands.set_theme(next.as_str().to_owned()) {
-        Ok(_) => String::new(),
+        // The reply carries the name the daemon actually wrote, which is what
+        // the next launch will read. Adopt it, so the screen can never show a
+        // palette the durable record disagrees with.
+        Ok(stored) => {
+            let stored = ThemeName::named(&stored);
+            if stored != next {
+                apply_theme(shell, stored);
+            }
+            String::new()
+        }
         Err(error) => format!("theme not saved: {error}"),
     };
     set_message(shell, message);
@@ -5278,6 +5287,161 @@ mod tests {
                 .expect("write matching welcome");
         });
         assert!(super::BenchClient::connect(&socket).is_ok());
+    }
+
+    /// Connect a real client to a daemon that answers the handshake, then hands
+    /// every later request to `reply` and reports the raw line it received.
+    fn client_on_scripted_daemon(
+        name: &str,
+        reply: &'static str,
+    ) -> (super::BenchClient, std::sync::mpsc::Receiver<String>) {
+        let (sent, received) = std::sync::mpsc::channel();
+        let socket = scripted_daemon(name, move |mut stream| {
+            use std::io::Write;
+            let _ = read_request_line(&stream);
+            let welcome = format!(
+                "{{\"type\":\"welcome\",\"version\":1,\"build\":\"{}\"}}\n",
+                orc_proto::BUILD_IDENTIFIER
+            );
+            if stream.write_all(welcome.as_bytes()).is_err() {
+                return;
+            }
+            // Report every subsequent request verbatim, so a test can assert on
+            // the bytes that actually crossed the socket.
+            while let Ok(line) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                read_request_line(&stream)
+            })) {
+                if line.is_empty() || sent.send(line).is_err() {
+                    return;
+                }
+                if stream.write_all(reply.as_bytes()).is_err() {
+                    return;
+                }
+            }
+        });
+        let client = super::BenchClient::connect(&socket).expect("connect to scripted daemon");
+        (client, received)
+    }
+
+    /// The seam AC1 rests on: a keystroke has to *emit* the persistence request.
+    ///
+    /// Every other client test drives the switcher with `commands: None`, which
+    /// never executes the `Some(commands)` branch — so gutting `cycle_theme`'s
+    /// daemon round trip leaves the whole suite green while the theme silently
+    /// stops surviving a relaunch. This asserts the wire bytes.
+    #[test]
+    fn leader_t_emits_set_theme_for_the_name_it_just_cycled_to() {
+        let (mut client, requests) = client_on_scripted_daemon(
+            "leader-t-persist",
+            "{\"type\":\"theme_set\",\"theme\":\"ember\"}\n",
+        );
+        let mut shell = four_screen_shell(ThemeName::Nocturne);
+        shell.view = ShellView::Home;
+
+        let chord = [shell.leader.byte];
+        assert_eq!(
+            route_leader(&chord, Some(&mut client), &mut shell),
+            Some(false)
+        );
+        assert_eq!(
+            route_leader(b"t", Some(&mut client), &mut shell),
+            Some(false)
+        );
+
+        let request = requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the client must send a request when the theme is cycled");
+        assert_eq!(
+            request.trim(),
+            r#"{"type":"set_theme","theme":"ember"}"#,
+            "the persistence request must name the theme just cycled to"
+        );
+        // The local switch still happened, on every screen.
+        assert_eq!(shell.theme.name(), ThemeName::Ember);
+        assert_eq!(
+            shell.stage.as_ref().map(|stage| stage.theme.name()),
+            Some(ThemeName::Ember)
+        );
+        assert_eq!(shell.runs.theme, Theme::from(ThemeName::Ember).runs_theme());
+        // A successful save says nothing; the screen is the feedback.
+        assert!(shell.home.message.is_empty(), "{:?}", shell.home.message);
+    }
+
+    /// Persistence is best-effort by design: the switch is local and always
+    /// succeeds, so a daemon that refuses must leave the new palette on screen
+    /// and say why — not revert, and not fail silently.
+    #[test]
+    fn a_refused_save_keeps_the_switch_and_reports_it_on_the_message_line() {
+        let (mut client, requests) = client_on_scripted_daemon(
+            "leader-t-refused",
+            "{\"type\":\"error\",\"message\":\"registry is read-only\"}\n",
+        );
+        let mut shell = four_screen_shell(ThemeName::Nocturne);
+        shell.view = ShellView::Runs;
+
+        assert!(!route_runs_key(
+            &mut shell,
+            key(KeyCode::Char('t')),
+            Some(&mut client)
+        ));
+        assert!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("a request must still be attempted")
+                .contains("set_theme")
+        );
+
+        // Applied locally on every screen despite the refusal.
+        assert_eq!(shell.theme.name(), ThemeName::Ember);
+        assert_eq!(shell.runs.theme, Theme::from(ThemeName::Ember).runs_theme());
+        assert_eq!(
+            shell.stage.as_ref().map(|stage| stage.theme.name()),
+            Some(ThemeName::Ember)
+        );
+        // And the reason lands on the screen the user is looking at.
+        assert!(
+            shell.runs.message.starts_with("theme not saved: "),
+            "expected an honest failure message, got {:?}",
+            shell.runs.message
+        );
+        assert!(
+            shell.runs.message.contains("registry is read-only"),
+            "the daemon's reason must survive: {:?}",
+            shell.runs.message
+        );
+    }
+
+    /// `ThemeSet` carries the name the daemon actually wrote, so the client
+    /// renders what a relaunch will read rather than what it optimistically
+    /// applied.
+    #[test]
+    fn the_client_adopts_the_name_the_daemon_says_it_wrote() {
+        let (mut client, requests) = client_on_scripted_daemon(
+            "leader-t-resolved",
+            "{\"type\":\"theme_set\",\"theme\":\"phosphor\"}\n",
+        );
+        let mut shell = four_screen_shell(ThemeName::Nocturne);
+        shell.view = ShellView::Home;
+
+        cycle_theme(&mut shell, Some(&mut client));
+        assert!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("a request must be sent")
+                .contains(r#""theme":"ember""#),
+            "the client asked for the next theme in its own cycle"
+        );
+
+        // The daemon says it stored phosphor, so that is what must render.
+        assert_eq!(shell.theme.name(), ThemeName::Phosphor);
+        assert_eq!(
+            shell.runs.theme,
+            Theme::from(ThemeName::Phosphor).runs_theme()
+        );
+        assert_eq!(
+            shell.stage.as_ref().map(|stage| stage.theme.name()),
+            Some(ThemeName::Phosphor)
+        );
     }
 
     #[test]

@@ -216,6 +216,67 @@ a gap: `theme()` resolves on read, so the unit assertion could not tell
 check the value **stored** in `harnesses.json`, and M12 is caught at unit level
 too.
 
+## Review fix 1 — the client→daemon seam (2026-07-29)
+
+The reviewer found the one place the suite had no teeth, and it was the seam AC1
+rests on. Reproduced before fixing: replacing `cycle_theme`'s round trip with a
+no-op, keeping the local `apply_theme`, left `cargo test --workspace` at
+**267 passed, 0 failed** — the number this note originally cited as evidence.
+`<leader> t` still recoloured every screen; the theme just stopped surviving a
+relaunch.
+
+Structural cause: every orc-app test drove the switcher with `commands: None`,
+so the `Some(commands)` branch never executed. The old mutation table bracketed
+the gap — M7 covers what a relaunch *reads*, M14 covers the daemon persisting a
+request it *receives* — and nothing covered the *send*. `BenchClient::set_theme`
+had no test at all.
+
+Three tests now close it, built on the `scripted_daemon` + `read_request_line`
+helpers already in the file, each driving the real key-press path against a live
+Unix socket rather than calling the writer directly:
+
+| Test | What it pins |
+|---|---|
+| `leader_t_emits_set_theme_for_the_name_it_just_cycled_to` | the **bytes on the wire** are `{"type":"set_theme","theme":"ember"}` |
+| `a_refused_save_keeps_the_switch_and_reports_it_on_the_message_line` | a daemon answering `error` keeps the switch on all three copies and puts `theme not saved: …` on the message line |
+| `the_client_adopts_the_name_the_daemon_says_it_wrote` | the client renders the name the daemon reports storing |
+
+The third also discharges the reviewer's non-blocking note: `ServerResponse::ThemeSet`
+documented that it carries the resolved name "so a client that asked for something
+unrecognised learns what was written", and `cycle_theme` discarded it with `Ok(_)`.
+Rather than soften the doc, the client adopts it — the screen cannot show a palette
+the durable record disagrees with.
+
+Mutation-tested four ways, each caught by exactly the test that owns it:
+
+| Mutation | Result |
+|---|---|
+| the reviewer's exact no-op (round trip removed) | all three fail (`the client must send a request when the theme is cycled: Timeout`) |
+| send a fixed name instead of the cycled one | 2 fail (wire assertion + adopt) |
+| swallow the save failure (`Err(_) => String::new()`) | 1 fails (refusal) |
+| ignore the daemon's resolved name (`Ok(_) =>`) | 1 fails (adopt) |
+
+Gate 3 is now **270 passed, 0 failed** on internal disk.
+
+### A third member of the bounded-probe flake family
+
+`doctor_cli::doctor_probes_capability_combinations_and_persists_to_registry` failed
+once under compile load and passes 6/6 in isolation. It rides `probe.rs:55`'s
+`HELP_PROBE_TIMEOUT = 5s`, the same shape as `discovery.rs:35`'s 2 s version probe
+(which the reviewer A/B'd against `origin/main`: branch 8/8, main 7/8) and
+`background_dispatch.rs:195`'s sub-1s budget. This branch touches none of
+`probe.rs`, `discovery.rs`, or `quota.rs` — `git diff 8b47bf1` over all three is
+empty. Three tests, one cause, worth its own issue.
+
+### Not changed, with reasoning
+
+`route_leader` runs ahead of the `raw_input_view` guard that holds back bare `?`
+and `V`. STAGE's `RawRouter` already arms the leader while forwarding every other
+byte to the focused pane, so intercepting the chord inside a text input is the
+*consistent* behaviour rather than the divergent one, and it keeps `<leader> q`
+reachable from inside the launch flow. The leader is always a `ctrl-<letter>` byte
+and cannot be typed as text.
+
 ## Declared deviation from the allowed paths
 
 `install.sh` is not in #37's allowed paths, but it seeded
