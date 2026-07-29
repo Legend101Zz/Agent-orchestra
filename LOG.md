@@ -21,7 +21,7 @@ ship-log entries are part of finishing an issue.*
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
-| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | 🔨 | `issue-13-visual-identity-v1` ([PR #36](https://github.com/Legend101Zz/Agent-orchestra/pull/36)) |
+| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ✅ | merged (PR #36) · 4 review findings carried to #37/#38/#39 |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
@@ -32,6 +32,7 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ⬜ | — *(after #13)* |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
+| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -102,6 +103,26 @@ worth photographing, and the three themes are stable enough to photograph.
 > actually sent or returned, and the little landing emote — are **#38**. Kept out
 > of #13 deliberately: they're a feature epic, and folding them in would make this
 > branch unmergeable. Say the word if you'd rather have it all in one.
+>
+> **MERGED 2026-07-29 (PR #36, `8b47bf1`) with all four findings still open.**
+> Your call — the look is in and #14 is unblocked. But nothing about the findings
+> changed by merging, so they're now live on `main` and each has been given a home
+> rather than left to rot:
+> - **#37** takes finding 1 — `t` on RUNS still jumps to a hard-coded palette and
+>   errors in the message line. That issue now delivers the `ctrl-b t` switcher
+>   *and* persistence together.
+> - **#38** takes finding 4 — the frozen baton. It should be that issue's first
+>   commit; there's no sense layering more motion on a loop that won't paint the
+>   frame it already computes.
+> - **#39** takes findings 2 and 3 — the `NO_COLOR` rainbow decision (still yours)
+>   and the no-hex test that doesn't look in subfolders.
+>
+> Also unclosed, and not in any issue yet: the *screen layouts* are thinner than
+> the mockups in the identity HTML. The palette, glyphs and baton match it exactly,
+> but `_fillScreens` draws HOME as three session cards side by side with health
+> badges and `▁▂▃▅▇` sparklines, plus a two-column bench grid showing each
+> harness's PATH and a `4 / 6 on PATH` counter. What shipped is a flat list and a
+> single-column bench. Worth an issue before #14, since #14 is the screenshots.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
