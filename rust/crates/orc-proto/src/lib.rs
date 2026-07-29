@@ -7,6 +7,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Protocol version implemented by this build.
+///
+/// Adding a message variant does not bump this. Both enums are externally
+/// tagged and additive, and no pair of builds can reach a new variant anyway:
+/// [`BUILD_IDENTIFIER`] is compared during the hello handshake, so a client and
+/// daemon from different commits are refused with the build-mismatch message
+/// before any command is sent. The version is reserved for a change that
+/// alters the meaning of an existing message.
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Build identity of this binary: crate version plus compile-time git commit.
@@ -376,6 +383,16 @@ pub enum ClientRequest {
     Metrics,
     /// Read HOME session and harness choices.
     Home,
+    /// Persist the client's chosen theme through the daemon.
+    ///
+    /// The terminal client owns rendering only and must never write registry
+    /// files, so `<leader> t` round-trips through the daemon rather than
+    /// editing `~/.orchestra` itself.
+    SetTheme {
+        /// Requested theme name. The daemon resolves an unknown or malformed
+        /// name to the flagship instead of failing.
+        theme: String,
+    },
     /// Create and launch one durable Bench session.
     CreateSession {
         /// Brain harness key.
@@ -474,13 +491,22 @@ pub enum ServerResponse {
         default_workers: Vec<String>,
         /// Configured worker bound.
         max_parallel_workers: usize,
-        /// Theme constrained to ember or phosphor by the client.
+        /// Configured theme: `nocturne`, `ember`, or `phosphor`. The client
+        /// resolves anything it does not recognise to the flagship.
         theme: String,
         /// Reduced-motion preference.
         reduced_motion: bool,
         /// Configured leader chord label, e.g. `ctrl-g`.
         #[serde(default = "default_leader_key")]
         leader_key: String,
+    },
+    /// The theme the daemon actually persisted.
+    ///
+    /// Carries the resolved name rather than echoing the request, so a client
+    /// that asked for something unrecognised learns what was written.
+    ThemeSet {
+        /// Resolved theme name: `nocturne`, `ember`, or `phosphor`.
+        theme: String,
     },
     /// Newly created session identifier.
     SessionCreated {
@@ -592,6 +618,49 @@ mod tests {
             serde_json::from_str(r#"{"type":"hello","version":1,"future_capability":true}"#)
                 .expect("decode additive hello");
         assert_eq!(additive, request);
+    }
+
+    /// The theme round trip is additive, and the version does not move for it.
+    ///
+    /// A new variant cannot reach an old peer: the hello handshake compares
+    /// [`BUILD_IDENTIFIER`], so mixed builds are refused before any command is
+    /// sent. What this pins is the fallback if one ever did arrive — an old
+    /// daemon *fails to parse* `set_theme` rather than silently matching it to
+    /// something else, which is what turns into the daemon's
+    /// "malformed protocol message" reply instead of a wrong mutation.
+    #[test]
+    fn set_theme_is_additive_and_does_not_move_the_protocol_version() {
+        assert_eq!(PROTOCOL_VERSION, 1, "adding a variant must not bump this");
+
+        let request = ClientRequest::SetTheme {
+            theme: "phosphor".to_owned(),
+        };
+        let encoded = serde_json::to_string(&request).expect("encode set_theme");
+        assert_eq!(encoded, r#"{"type":"set_theme","theme":"phosphor"}"#);
+        let decoded: ClientRequest = serde_json::from_str(&encoded).expect("decode set_theme");
+        assert_eq!(decoded, request);
+
+        let response = ServerResponse::ThemeSet {
+            theme: "phosphor".to_owned(),
+        };
+        let encoded = serde_json::to_string(&response).expect("encode theme_set");
+        let decoded: ServerResponse = serde_json::from_str(&encoded).expect("decode theme_set");
+        assert_eq!(decoded, response);
+
+        // Unknown fields on a known variant are still tolerated.
+        let additive: ClientRequest =
+            serde_json::from_str(r#"{"type":"set_theme","theme":"ember","future":1}"#)
+                .expect("decode additive set_theme");
+        assert_eq!(
+            additive,
+            ClientRequest::SetTheme {
+                theme: "ember".to_owned()
+            }
+        );
+
+        // An unknown *variant* is rejected, not coerced.
+        let unknown = serde_json::from_str::<ClientRequest>(r#"{"type":"set_wallpaper"}"#);
+        assert!(unknown.is_err(), "unknown variants must not decode");
     }
 
     #[test]
