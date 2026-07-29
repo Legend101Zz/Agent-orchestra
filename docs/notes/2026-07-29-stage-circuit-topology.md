@@ -85,16 +85,20 @@ Today the rail is simply **not drawn**, which is below the sheet's own 80×24
 minimum and is exactly the silent disappearance AC8 forbids.
 
 Instead each worker keeps a connector *at its own threshold*: a six-cell rail
-inlaid into its top border, immediately right of the corner, carrying that
-worker's own state.
+inlaid into its top border, carrying that worker's own state.
+
+It is right-aligned rather than tucked against the left corner because the
+title grows from the left — harness name, state, a `✓ TASK CONFIRMED` stamp and
+a trigger badge all share that run of border, and an inlay at the corner
+overwrote the pane's own name.
 
 ```
- ╭─ conductor ─────────────╮
- ╰─────────────────────────╯
- ╭╴▓▒░───╶ worker 1 ───────╮      <- live: the packet still travels
- ╰─────────────────────────╯
- ╭╴······╶ worker 2 ───────╮      <- idle: the dim dotted base
- ╰─────────────────────────╯
+ ╭─ ● CONDUCTOR LIVE ──────────────────╮
+ ╰─────────────────────────────────────╯
+ ╭─ ● WORKER-1 LIVE ──────────── ▓▒░───╮   <- live: the packet still travels
+ ╰─────────────────────────────────────╯
+ ╭─ ● WORKER-2 LIVE ──────────── ······╮   <- idle: the dim dotted base
+ ╰─────────────────────────────────────╯
 ```
 
 It costs no rows, it exists at every width down to 80×24 and at every worker

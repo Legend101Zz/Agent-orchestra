@@ -14,8 +14,8 @@ STAGE nocturne truecolor ascii-glyphs 100x30
  │                                                 │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
+ │                                                 │▐  ----#+:-----  │                           │▐ 
  │                                                 │▐                │                           │▐ 
- │                                                 │▐----#+:-----    │                           │▐ 
  │                                                 │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
@@ -45,8 +45,8 @@ afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddd
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaahhhhijjhhhhhaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
-afdddddddddddddddddddddddddddddddddddddddddddddddddfehhhhijjhhhhhaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
