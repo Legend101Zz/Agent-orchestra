@@ -1574,6 +1574,14 @@ hand back to the implementer.
   value closed it.
 - All five gates exit 0: fmt, clippy `-D warnings`, `cargo test --workspace`
   (267 passed, 0 failed), rustdoc `-D warnings`, `cargo build --release --locked`.
+- Gate 3 flaked intermittently on this checkout (`background_dispatch` and
+  `quota_guard` timing tests) and it was worth chasing rather than waving away:
+  it is the external SSD, which `task_plan.md` already records for
+  `background_dispatch.rs:195`'s sub-1s budget. Same commit checked out to
+  `/tmp` runs that suite in 3.28-3.49 s with 0 failures in 8, against
+  4.5-4.8 s and 1-in-5 on the SSD; `main` on `/tmp` is 3.39-3.65 s. Full
+  workspace on internal disk: 267 passed, 0 failed, three times. The delegate
+  path never calls anything this branch touched.
 - Noted, not fixed (out of scope): the other RUNS settings keys (`n`
   notifications, `w`/`b`/`+`/`-`) still shell out through `invoke` and will print
   the same `unrecognized subcommand` in the embed. #37's allowed paths limit
