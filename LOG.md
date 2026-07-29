@@ -30,6 +30,7 @@ ship-log entries are part of finishing an issue.*
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ⬜ | — *(after #13)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -79,6 +80,14 @@ worth photographing, and the three themes are stable enough to photograph.
 > NOT see nocturne on this install unless you edit that file or test with a fresh
 > `ORC_HOME`.** Separately, `pio config set theme` writes `config.json` while the
 > client reads `harnesses.json` — pre-existing, needs its own issue.
+>
+> **Fix 1 revised (your call, after testing locally).** Editing JSON isn't a UI, and
+> right now there is no working way to change theme from inside the app at all. So
+> instead of just stopping `t` from misbehaving on RUNS, item 1 becomes
+> **`ctrl-b t` cycles nocturne → ember → phosphor on every screen** — same defect
+> closed, but you get the feature. Session-only: the client is forbidden from
+> writing config, so it reverts to your configured default on relaunch. Persisting
+> it, plus collapsing the two `theme` files, is now **#37**.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
