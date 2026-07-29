@@ -93,3 +93,55 @@ Two related traps:
 - The binaries are NOT affected: `~/.local/bin/pio` links into
   `~/.local/share/pi-orchestra/target/release/`, which did not move.
 
+## 2026-07-29 — One theme record: `harnesses.json` is authoritative (#37)
+
+`theme` used to live in two files that nothing kept in step, so
+`pio config set theme nocturne` reported success and changed nothing on
+screen: the CLI wrote `~/.orchestra/config.json`, while the client rendered
+`registry.app.theme` from `~/.orchestra/harnesses.json`.
+
+**Decision: `harnesses.json`'s `app.theme` is the single authoritative
+record. `config.json`'s `theme` survives only as a derived mirror.**
+
+The registry wins because it is what the daemon serves on `Home`, which is
+what actually gets rendered — the other file could only ever be a claim about
+the palette. Both files survive because `config.json` predates the decision
+and other tools (and older builds) read it.
+
+How the two are kept from disagreeing, all in `orc-core/src/control.rs`:
+
+- `control::theme()` is the only read path. It answers from the registry;
+  `config.json` is consulted **only** when no registry exists yet, so a
+  machine installed before #37 keeps the choice it already had instead of
+  silently jumping to the flagship.
+- `control::set_theme()` is the only write path. It writes the registry, then
+  refreshes the derived copy in `config.json`. Both writes are atomic and
+  preserve unknown fields.
+- `control::read_config_value()` overlays the authoritative theme, so every
+  reader of `config.json` — `pio config get/list`, and the standalone
+  `orc-tui` ledger — sees the truth even if the file on disk went stale from
+  a hand-edited registry.
+- `control::set_config("theme", …)` delegates to `set_theme` rather than
+  writing the key it was handed.
+- Unknown names are resolved to the flagship **on write**, not just on read,
+  so no durable record holds a name nothing can render.
+- `install.sh` no longer seeds `"theme":"ember"` into a fresh `config.json`.
+  That seed disagreed with the registry default (`nocturne`) from the moment
+  of install and is what made the split visible in the first place.
+
+Two related notes:
+
+- **`orc_tui::Theme` now knows all three names.** It previously resolved only
+  ember and phosphor, so `Theme::named("nocturne")` silently answered EMBER.
+  Its new `NOCTURNE` is transcribed from the identity map through the same
+  slot correspondence `Theme::runs_theme()` uses, and
+  `theme::tests::the_embedded_and_standalone_ledgers_resolve_every_name_the_same_way`
+  pins the two to each other. Its `EMBER`/`PHOSPHOR` remain the older,
+  pre-#13 approximations — restyling them is identity work (#13), not this.
+- **`PROTOCOL_VERSION` did not bump for `SetTheme`/`ThemeSet`.** Both enums
+  are externally tagged and additive, and no pair of builds can reach a new
+  variant anyway: the hello handshake compares `BUILD_IDENTIFIER`, so mixed
+  builds are refused before any command is sent. Verified live against a real
+  July-12 daemon binary in both directions. The version is reserved for a
+  change to the meaning of an existing message.
+
