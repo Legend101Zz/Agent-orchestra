@@ -31,6 +31,7 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ⬜ | — *(after #13)* |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -88,6 +89,19 @@ worth photographing, and the three themes are stable enough to photograph.
 > closed, but you get the feature. Session-only: the client is forbidden from
 > writing config, so it reverts to your configured default on relaunch. Persisting
 > it, plus collapsing the two `theme` files, is now **#37**.
+>
+> **Fix 4 added — you were right about the jerky line.** The baton's frame maths is
+> correct; the repaint loop is not. When output stops, nothing schedules the final
+> redraw, so the rail is left frozen mid-packet instead of decaying to dots — then
+> the next burst restarts it at frame 0. Sweep, freeze, jump back, sweep. On a
+> bursty producer (every agent CLI) that's the normal case. Fix is one more repaint
+> on the live→idle edge.
+>
+> The bigger things you asked for — one connector per worker instead of a single
+> decorative line, drag-resize that doesn't hitch, an animation when a message is
+> actually sent or returned, and the little landing emote — are **#38**. Kept out
+> of #13 deliberately: they're a feature epic, and folding them in would make this
+> branch unmergeable. Say the word if you'd rather have it all in one.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead
