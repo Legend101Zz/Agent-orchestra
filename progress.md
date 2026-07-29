@@ -1554,3 +1554,141 @@ hand back to the implementer.
 - Local install moved to the merged build and switched to nocturne; the stale
   4-day-old headless session (`comreton-1784975244-0000`, conductor already down)
   was killed by the daemon restart. Backup at `~/.orchestra.bak-pre-13-*`.
+
+## Session — 2026-07-29 (code-puppy): #37 theme persistence + the `<leader> t` switcher
+
+- Branch `issue-37-theme-persistence` off fresh `main` (`8b47bf1`). Both halves
+  of the contract: the switcher carried over from #13's finding 1, and this
+  issue's original persistence scope.
+- **`<leader> t` cycles nocturne → ember → phosphor on all four screens.** The
+  live theme is stored in three places — `shell.theme`, `shell.runs.theme`, and
+  `StageState`'s own copy — so `apply_theme` moves all three; missing any one
+  leaves a screen rendering the previous palette (mutation-tested both ways).
+  The chord was wired for STAGE and SCORE only, so HOME (the launch screen) and
+  RUNS could never reach it: `route_leader` now arms and consumes it for all
+  three non-STAGE screens off one shared table, replacing `ScoreState.leader`.
+  STAGE keeps its own pending bit inside `RawRouter` because it works a byte at
+  a time (literal re-send, bracketed paste); it gained `LeaderAction::Theme`.
+- **RUNS's `t` no longer reaches `orc_tui::App::cycle_theme`.** That path swapped
+  in orc-tui's hard-coded EMBER — a colour in no row of the 17-slot map — and
+  shelled out to `current_exe()`, which in the embed is `pi-orchestra`, a binary
+  with no `config` subcommand, printing `error: unrecognized subcommand 'config'`
+  into the message line. `route_runs_key` intercepts `t` first.
+- **Persistence goes through the daemon, never the client.** New
+  `ClientRequest::SetTheme` / `ServerResponse::ThemeSet`; the daemon calls
+  `orc_core::control::set_theme`. `orc-app/src/lib.rs:4`'s rule is intact — the
+  client still writes nothing under `~/.orchestra`. A failed round trip degrades
+  to a session-only switch with the reason on the message line rather than
+  refusing to switch.
+- **`PROTOCOL_VERSION` stays 1.** Both enums are externally tagged and additive,
+  and the hello handshake compares `BUILD_IDENTIFIER`, so mixed builds are
+  refused before a new variant can be sent. Proven live in both directions
+  against a real older binary (a July-12 `orcd` and the installed
+  `~/.local/bin/pi-orchestra` @ `125585a`), not simulated: each refuses with the
+  existing build-mismatch message. An unknown variant gets
+  `malformed protocol message: unknown variant …` and the connection survives.
+- **One theme record.** `harnesses.json`'s `app.theme` is authoritative;
+  `config.json`'s `theme` is a derived mirror refreshed on every write.
+  `control::theme()` reads the registry (falling back to `config.json` only when
+  no registry exists yet, so a pre-#37 install keeps its choice);
+  `read_config_value()` overlays the authoritative value so `pio config
+  get/list` and the standalone `orc-tui` ledger cannot be handed a stale one;
+  `set_config("theme", …)` delegates to `set_theme`. Unknown names resolve to
+  the flagship **on write**, so no durable record holds an unrenderable name.
+  Rationale and the both-files-survive decision are in `findings.md`.
+- `orc_tui::Theme::named` resolved only ember and phosphor, so `named("nocturne")`
+  answered EMBER. It now knows all three; its new `NOCTURNE` is the identity
+  map's row through `runs_theme()`'s slot correspondence, and a test pins the two
+  ledgers to each other so they cannot drift.
+- Deviation from the allowed paths, declared on the issue: `install.sh` seeded
+  `"theme":"ember"` into a fresh `config.json`, which disagreed with the registry
+  default (`nocturne`) from the moment of install. Left in place it would defeat
+  acceptance check 3 on every new machine, so the key is gone from the seed —
+  one line, no behaviour beyond the split this issue exists to close.
+- Every new gate was mutation-tested, not merely observed passing: 15 mutations
+  (stale STAGE copy, stale RUNS copy, `t` falling through to the ledger, STAGE
+  chord losing `t`, leader never arming, SCORE losing the shared table, relaunch
+  ignoring the stored theme, help dropping the switcher, `config.json` winning
+  over the registry, `set_config` not routing, mirror not refreshed, unknown name
+  stored verbatim, orc-tui forgetting nocturne, daemon acking without persisting,
+  version bumped) — each caught by the intended test. One first-pass miss was my
+  own filter, not a gap; strengthening the unit assertion to check the *stored*
+  value closed it.
+- All five gates exit 0: fmt, clippy `-D warnings`, `cargo test --workspace`
+  (267 passed, 0 failed), rustdoc `-D warnings`, `cargo build --release --locked`.
+- Gate 3 flaked intermittently on this checkout (`background_dispatch`,
+  `quota_guard`, and after the merge `harness_cli`'s version-probe test) and it
+  was worth chasing rather than waving away: it is the external SSD, which
+  `task_plan.md` already records for `background_dispatch.rs:195`'s sub-1s
+  budget. Same commit checked out to `/tmp` runs that suite in 3.28-3.49 s with
+  0 failures in 8, against 4.5-4.8 s and 1-in-5 on the SSD. Decisive: a
+  worktree of **unmodified `main`** built on the same SSD fails
+  `quota_guard::cli_dispatch_at_cap…` in 1 of 6 full-workspace runs — my earlier
+  "main passed 6/6" had been on internal disk, which is what made the branch look
+  guilty. The third test is the same family: `discovery.rs:35` bounds the
+  `--version` probe at 2 s, and this branch touches none of `discovery.rs`,
+  `probe.rs`, or `quota.rs`. Full workspace on internal disk: 267 passed,
+  0 failed — three times before the merge, four times after.
+- Noted, not fixed (out of scope): the other RUNS settings keys (`n`
+  notifications, `w`/`b`/`+`/`-`) still shell out through `invoke` and will print
+  the same `unrecognized subcommand` in the embed. #37's allowed paths limit
+  orc-tui to theme-name resolution, so restructuring `invoke` belongs to its own
+  issue. Also `pio config set leader_key` does not reach `app.leader_key` — the
+  same two-file split, one field over; the help text still points at the file for
+  that one rather than claiming a command that does not work.
+
+## Session — 2026-07-29 (code-puppy): #37 review fix 1 — the client→daemon seam had no test
+
+- Reviewer's finding reproduced before fixing anything: replacing `cycle_theme`'s
+  daemon round trip with a no-op (keeping the local `apply_theme`) left
+  `cargo test --workspace` at **267 passed, 0 failed** — the exact number my own
+  evidence comment cited. `<leader> t` still recoloured every screen; the theme
+  simply stopped surviving a relaunch, which is the entire point of the issue.
+- Cause was structural, and my mutation table bracketed it without covering it:
+  every orc-app test drove the switcher with `commands: None`, so the
+  `Some(commands)` branch — the one line that turns a keystroke into
+  persistence — was never executed by anything. M7 covered what a relaunch
+  *reads*, M14 covered the daemon persisting a request it *receives*; nothing
+  covered the *send*, and `BenchClient::set_theme` had no test at all.
+- Fixed with three tests built on the `scripted_daemon` + `read_request_line`
+  helpers already in the file (the reviewer pointed at them), each driving the
+  real production path against a live socket rather than calling the writer
+  directly:
+  - `leader_t_emits_set_theme_for_the_name_it_just_cycled_to` — arms the chord,
+    presses `t`, and asserts the **bytes on the wire** are
+    `{"type":"set_theme","theme":"ember"}`.
+  - `a_refused_save_keeps_the_switch_and_reports_it_on_the_message_line` — a
+    daemon answering `error` leaves the new palette on all three copies and puts
+    `theme not saved: registry is read-only` on the message line. The documented
+    degrade-honestly branch was also completely unexecuted before this.
+  - `the_client_adopts_the_name_the_daemon_says_it_wrote` — see below.
+- Also took the reviewer's non-blocking note on `ServerResponse::ThemeSet`: its
+  doc promised the reply carries the resolved name "so a client that asked for
+  something unrecognised learns what was written", and `cycle_theme` discarded it
+  with `Ok(_)`. Rather than soften the doc, the client now adopts it — the screen
+  can no longer show a palette the durable record disagrees with. Three lines,
+  covered by the third test.
+- Mutation-tested the new coverage four ways, not just once: the reviewer's exact
+  no-op fails all three (`the client must send a request when the theme is
+  cycled: Timeout`); sending a fixed name instead of the cycled one fails two;
+  swallowing the save error fails the refusal test only; ignoring the daemon's
+  resolved name fails the adopt test only. Each mutation is caught by exactly the
+  test that owns it.
+- Gates: fmt, clippy `-D warnings`, rustdoc `-D warnings`, `build --release
+  --locked` all exit 0. `cargo test --workspace` is **270 passed, 0 failed** on
+  internal disk (267 + 3).
+- One more member of the pre-existing bounded-probe flake family surfaced during
+  gate 3: `doctor_cli::doctor_probes_capability_combinations_and_persists_to_registry`
+  failed once under compile load, passes 6/6 in isolation, and rides
+  `probe.rs:55`'s `HELP_PROBE_TIMEOUT = 5s` — the same shape as
+  `discovery.rs:35`'s 2 s version probe (which the reviewer A/B'd against
+  `origin/main`: branch 8/8, main 7/8) and `background_dispatch.rs:195`'s sub-1s
+  budget. This branch touches none of `probe.rs`, `discovery.rs`, or `quota.rs`
+  (`git diff` over all three is empty). Three tests, one cause, worth its own
+  issue.
+- Not changed, with reasoning given to the reviewer: `route_leader` running ahead
+  of the `raw_input_view` guard. STAGE's `RawRouter` already arms the leader while
+  forwarding every other byte to the pane, so intercepting the chord inside a text
+  input is the *consistent* behaviour, not the divergent one — and it keeps
+  `<leader> q` reachable from inside the launch flow. The leader is always a
+  `ctrl-<letter>` byte and cannot be typed as text.

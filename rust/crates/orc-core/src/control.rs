@@ -228,14 +228,95 @@ pub fn stats_json() -> Result<Value> {
     }))
 }
 
-pub fn read_config_value() -> Value {
+/// The three approved theme names, flagship first.
+///
+/// The palette itself lives in the client's theme map
+/// (`orc-app/src/theme.rs`); this is only the vocabulary the durable records
+/// and the CLI agree on.
+pub const THEMES: [&str; 3] = ["nocturne", "ember", "phosphor"];
+
+/// Resolve any configured theme string to one of [`THEMES`].
+///
+/// An unknown, empty, or malformed name answers the flagship rather than
+/// failing: a theme is decoration, and refusing to start over a typo in a
+/// durable record would be a worse answer than rendering `nocturne`.
+#[must_use]
+pub fn resolve_theme(name: &str) -> &'static str {
+    let name = name.trim();
+    THEMES
+        .into_iter()
+        .find(|approved| name.eq_ignore_ascii_case(approved))
+        .unwrap_or(THEMES[0])
+}
+
+/// The raw `config.json` object, with no derived fields applied.
+fn read_config_file() -> Value {
     fs::read(home().join("config.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_else(|| serde_json::to_value(quota::load_config()).unwrap_or_default())
 }
 
+/// The authoritative theme name: `harnesses.json`'s `app.theme`.
+///
+/// `config.json` also carries a `theme` key, but only as a derived mirror for
+/// readers that predate this being settled (issue #37). The registry wins
+/// because that is what the daemon serves to the client on `Home`, so it is
+/// what actually gets rendered. A machine that has `config.json` but no
+/// registry yet keeps its old choice instead of silently jumping to the
+/// flagship.
+#[must_use]
+pub fn theme() -> String {
+    if let Ok(Some(registry)) = crate::bench::read_harness_registry() {
+        return resolve_theme(&registry.app.theme).to_owned();
+    }
+    read_config_file()
+        .get("theme")
+        .and_then(Value::as_str)
+        .map_or_else(
+            || THEMES[0].to_owned(),
+            |name| resolve_theme(name).to_owned(),
+        )
+}
+
+/// Persist the theme through the one authoritative record, returning the
+/// resolved name.
+///
+/// Writes `harnesses.json`'s `app.theme` (authoritative) and then refreshes
+/// `config.json`'s derived copy, so the two files cannot disagree and a
+/// pre-#37 reader of `config.json` still sees the truth. Both writes go
+/// through the registry's atomic temp/flush/sync/rename path and preserve
+/// every unknown field they found.
+pub fn set_theme(name: &str) -> Result<String> {
+    let resolved = resolve_theme(name);
+    let mut registry = crate::bench::load_harness_registry()?;
+    resolved.clone_into(&mut registry.app.theme);
+    crate::bench::write_harness_registry(&registry)?;
+    let mut config = read_config_file();
+    let object = config
+        .as_object_mut()
+        .context("config.json must contain a JSON object")?;
+    object.insert("theme".to_owned(), Value::String(resolved.to_owned()));
+    atomic_write_json(&home().join("config.json"), &config)?;
+    Ok(resolved.to_owned())
+}
+
+pub fn read_config_value() -> Value {
+    let mut config = read_config_file();
+    // `theme` is derived, so answer from the authoritative record rather than
+    // from whatever this file happens to hold: a hand-edited registry must not
+    // be able to leave `pio config get theme` reporting a stale palette.
+    if let Some(object) = config.as_object_mut() {
+        object.insert("theme".to_owned(), Value::String(theme()));
+    }
+    config
+}
+
 pub fn set_config(key: &str, raw_value: &str) -> Result<Value> {
+    if key == "theme" {
+        set_theme(raw_value)?;
+        return Ok(read_config_value());
+    }
     let mut config = read_config_value();
     let object = config
         .as_object_mut()

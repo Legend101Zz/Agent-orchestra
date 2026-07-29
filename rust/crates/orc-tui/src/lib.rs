@@ -11,7 +11,7 @@ use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, Key
 use crossterm::execute;
 
 pub use app::{App, InputMode, View};
-pub use theme::{EMBER, PHOSPHOR, Theme};
+pub use theme::{EMBER, NOCTURNE, PHOSPHOR, Theme};
 
 /// Render the complete event-ledger surface into an enclosing terminal frame.
 ///

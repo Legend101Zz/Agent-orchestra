@@ -198,6 +198,18 @@ impl ThemeName {
         }
     }
 
+    /// The next theme in the switcher's cycle: nocturne, ember, phosphor,
+    /// nocturne. The order is [`Self::ALL`], so the flagship is where a cycle
+    /// starts and returns to.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Nocturne => Self::Ember,
+            Self::Ember => Self::Phosphor,
+            Self::Phosphor => Self::Nocturne,
+        }
+    }
+
     /// The lowercase name written to `~/.orchestra/harnesses.json`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -802,6 +814,48 @@ mod tests {
             offences.is_empty(),
             "colour literals outside the theme map ({scanned} files scanned):\n{}",
             offences.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_cycle_visits_every_theme_and_returns_to_the_flagship() {
+        let mut seen = Vec::new();
+        let mut name = ThemeName::default();
+        for _ in 0..ThemeName::ALL.len() {
+            seen.push(name);
+            name = name.next();
+        }
+        assert_eq!(
+            seen,
+            vec![ThemeName::Nocturne, ThemeName::Ember, ThemeName::Phosphor],
+            "the switcher must reach all three, flagship first"
+        );
+        assert_eq!(name, ThemeName::Nocturne, "the cycle must close");
+    }
+
+    #[test]
+    fn the_embedded_and_standalone_ledgers_resolve_every_name_the_same_way() {
+        // `orc_tui::Theme::named` used to know only ember and phosphor, so
+        // "nocturne" silently answered EMBER. The standalone ledger must
+        // resolve every approved name, and its flagship must be the same
+        // palette the embed renders rather than a second transcription that
+        // can drift.
+        for name in ThemeName::ALL {
+            assert_eq!(
+                orc_tui::Theme::named(name.as_str()).name,
+                name.as_str(),
+                "{name:?} must resolve to itself"
+            );
+        }
+        assert_eq!(
+            orc_tui::Theme::named("nocturne"),
+            Theme::from(ThemeName::Nocturne).runs_theme(),
+            "the two ledgers disagree about the flagship palette"
+        );
+        assert_eq!(
+            orc_tui::Theme::named("chartreuse").name,
+            ThemeName::Nocturne.as_str(),
+            "an unknown name resolves to the flagship, not to ember"
         );
     }
 

@@ -237,7 +237,6 @@ mod tests {
             message: String::new(),
             dragging: None,
             width: WIDTH,
-            leader: false,
         }
     }
 
@@ -289,6 +288,7 @@ mod tests {
             reduced_motion: true,
             epoch: std::time::Instant::now(),
             leader: crate::LeaderKey::parse("ctrl-g"),
+            leader_pending: false,
             watch_session: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         shell.runs.theme = theme.runs_theme();
