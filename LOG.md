@@ -21,7 +21,7 @@ ship-log entries are part of finishing an issue.*
 | [#4](https://github.com/Legend101Zz/Agent-orchestra/issues/4) | Test what each installed CLI can actually do (`pio doctor`), never assume | ✅ | merged (PR #21) |
 | [#5](https://github.com/Legend101Zz/Agent-orchestra/issues/5) | Every delegated task carries a "contract": what to do, where allowed, how we check it worked | ✅ | merged (PR #22) |
 | [#9](https://github.com/Legend101Zz/Agent-orchestra/issues/9) | When you type `delegate:` / `orchestrate:` / `deliberate:` inside a pane, it lights up like ultrathink | ✅ | merged (PR #23) |
-| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | ⬜ | — |
+| [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | The new look: nocturne/ember/phosphor themes, glyphs, baton animation | 🔨 | `issue-13-visual-identity-v1` ([PR #36](https://github.com/Legend101Zz/Agent-orchestra/pull/36)) |
 | [#6](https://github.com/Legend101Zz/Agent-orchestra/issues/6) | Any capable CLI can be a worker, not just pi/Hermes | ✅ | merged (PR #24) |
 | [#7](https://github.com/Legend101Zz/Agent-orchestra/issues/7) | Never spawn so many workers that a subscription gets rate-limited | ✅ | merged (PR #25) |
 | [#8](https://github.com/Legend101Zz/Agent-orchestra/issues/8) | The 7 `orch_*` commands + MCP server so any brain can drive pi-orchestra | ✅ | merged (PR #26) |
@@ -30,8 +30,78 @@ ship-log entries are part of finishing an issue.*
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ⬜ | — *(after #13)* |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
+
+**#13 pushed (2026-07-29, `issue-13-visual-identity-v1`) — pi-orchestra has a
+real look now, and it survives being stripped of colour.** The whole app draws
+from one table of 17 named colours — "the conductor's accent", "a confirmed
+task", "an unavailable harness" — so the three themes (nocturne, the new
+default, plus ember and phosphor) are now genuinely one switch, and a test
+fails the build if anyone writes a raw colour anywhere else. Every state also
+got its own little symbol (✓ confirmed, ◔ queued, ✕ failed, ⏻ conductor down,
+● / ○ for whether a CLI is installed), so on a black-and-white terminal, or one
+where the user has turned colour off, you can still read the screen — there are
+18 committed screenshots-as-text proving it, and they compare the *colours* too,
+not just the words. The baton — the little filament between the conductor and
+its workers — now pulses exactly the way the design says: a three-cell packet
+sweeping left to right while output flows, going quiet 0.4 s after it stops, and
+freezing to a plain solid line for anyone who has asked for reduced motion.
+
+What this does **not** do: no new screens, no new keys, nothing about what
+pi-orchestra can *do* changed. It is purely how it looks and how honestly it
+degrades. It also doesn't touch the RUNS ledger's own code — that screen just
+borrows the new palette so it stops looking like a different app.
+
+What it unblocks: #14, the README and launch screenshots. There is now something
+worth photographing, and the three themes are stable enough to photograph.
+
+> **Review 2026-07-29 — FIX (3 items).** All five gates pass and the map, glyphs
+> and baton are faithful to the sheet, but colour still escapes it in three
+> places: pressing `t` on RUNS swaps to a hard-coded palette, saves it, and makes
+> nocturne unreachable; the trigger rainbow ignores `NO_COLOR`; and the grep gate
+> doesn't look inside subdirectories.
+>
+> **Addendum — one of those three is your call, Mrigesh.** The rainbow's explicit
+> RGB is your own approved exception from #9 (see 2026-07-24 entry below), so that
+> part is settled. What's new is that #13 added the colour-tier probe and the claim
+> that monochrome "drops colour entirely" — and the rainbow ignores it, so a
+> `NO_COLOR` terminal still gets nine 24-bit colour codes. Decide whether the
+> ultrathink exception extends to `NO_COLOR` (then soften the claim) or the rainbow
+> goes bold-only there (then gate it). Gating breaks no existing test — checked.
+>
+> **Correction — finding 1 is smaller than I first wrote it.** Pressing `t` does
+> NOT persist a theme: the shell-out runs `pi-orchestra config …`, which has no
+> `config` subcommand, so it just errors into the RUNS message line. RUNS still
+> visibly leaves the palette while the other screens don't, so it stays on the fix
+> list — but it's not a config trapdoor. **Also: your `harnesses.json` says
+> `ember`, and the branch rightly never rewrites an existing config — so you will
+> NOT see nocturne on this install unless you edit that file or test with a fresh
+> `ORC_HOME`.** Separately, `pio config set theme` writes `config.json` while the
+> client reads `harnesses.json` — pre-existing, needs its own issue.
+>
+> **Fix 1 revised (your call, after testing locally).** Editing JSON isn't a UI, and
+> right now there is no working way to change theme from inside the app at all. So
+> instead of just stopping `t` from misbehaving on RUNS, item 1 becomes
+> **`ctrl-b t` cycles nocturne → ember → phosphor on every screen** — same defect
+> closed, but you get the feature. Session-only: the client is forbidden from
+> writing config, so it reverts to your configured default on relaunch. Persisting
+> it, plus collapsing the two `theme` files, is now **#37**.
+>
+> **Fix 4 added — you were right about the jerky line.** The baton's frame maths is
+> correct; the repaint loop is not. When output stops, nothing schedules the final
+> redraw, so the rail is left frozen mid-packet instead of decaying to dots — then
+> the next burst restarts it at frame 0. Sweep, freeze, jump back, sweep. On a
+> bursty producer (every agent CLI) that's the normal case. Fix is one more repaint
+> on the live→idle edge.
+>
+> The bigger things you asked for — one connector per worker instead of a single
+> decorative line, drag-resize that doesn't hitch, an animation when a message is
+> actually sent or returned, and the little landing emote — are **#38**. Kept out
+> of #13 deliberately: they're a feature epic, and folding them in would make this
+> branch unmergeable. Say the word if you'd rather have it all in one.
 
 **#30 merged (2026-07-28, PR #31) — delegation is now what it was always meant
 to be.** `pio orch delegate` returns the moment the worker has its brief instead

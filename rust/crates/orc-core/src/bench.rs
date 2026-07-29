@@ -105,7 +105,10 @@ pub struct BenchAppConfig {
     pub leader_key: String,
     /// Whether transient animation is collapsed to state changes.
     pub reduced_motion: bool,
-    /// Selected theme, constrained by the client to ember or phosphor.
+    /// Selected theme: `nocturne` (flagship), `ember`, or `phosphor`.
+    ///
+    /// Unknown names are tolerated on read — this record is additive — and the
+    /// client resolves anything it does not recognise to the flagship.
     pub theme: String,
     /// Unknown future fields.
     #[serde(flatten)]
@@ -117,7 +120,7 @@ impl Default for BenchAppConfig {
         Self {
             leader_key: "ctrl-g".to_owned(),
             reduced_motion: false,
-            theme: "ember".to_owned(),
+            theme: "nocturne".to_owned(),
             extra: BTreeMap::new(),
         }
     }

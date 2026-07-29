@@ -1,0 +1,90 @@
+RUNS nocturne truecolor 100x30
+--- text ---
+  ORC / CONTROL PLANE    ACTIVE 0    ATTENTION 0    nocturne                                        
+│Q U O T A   /   M I N I M A X                            │N E E D S   A T T E N T I O N            
+│5H  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────  71%     │CLEAR                                    
+│WK  ━━━━━━━━━━━━━━━━━━━━───────────────────────  46%     │no failed or stalled workers             
+│⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  OK · reset 137m            │                                         
+│                                                         │                                         
+│S E S S I O N   S T A T E                        │V A L U E   /   B A S I S                        
+│0 workers live                                   │≈ $0.00 saved                                    
+│0 sessions                                       │0.0× vs brain rates                              
+│select a session for budget                      │0% exact basis                                   
+  C O M P L E T E D   V O L U M E  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  24h · exact                  
+                                                                                                    
+│S E S S I O N S   /   R U N S                                                                      
+│                                       NO DELEGATED RUNS YET                                       
+│                                                                                                   
+│                        orc run "audit this repository" --bg --brain codex                         
+│                             orc rpc "investigate interactively" --bg                              
+│                               Press n to launch from this console.                                
+│                                                                                                   
+│                                                                                                   
+│                                                                                                   
+│                                                                                                   
+│                                                                                                   
+│L I V E   O U T P U T                                                                              
+│no worker output yet                                                                               
+│                                                                                                   
+│                                                                                                   
+│                                                                                                   
+ j/k navigate   enter open   / search output   n new   , settings   q quit                          
+ RUNS · j/k select · enter open · / search · V/h HOME · ? help · q quit                             
+--- styles ---
+aaaaabbbcccccccccccccdddddddddddeddddddddddddddfgggggggggggghhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+ijjjjjjjjjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkkkkkljjjjjjjjjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkk
+immmmnnnnnoooooopppppppppppppppqqqqqllllllllllllkkkkkkkkkklrrrrrkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+immmmnnnnnooooooppppppppplllllllllllllllllllllllkkkkkkkkkklsssssssssssssssssssssssssssskkkkkkkkkkkkk
+ippppppppppppppppppppppppppppssssssssssssssssskkkkkkkkkkkklkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkklkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ljjjjjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkljjjjjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkk
+ltssssssssssssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkluuuuuuuuuuuuukkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lkssssssssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkklkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lmmmmmmmmmmmmmmmmmmmmmmmmmmmkkkkkkkkkkkkkkkkkkkkkklsssssssssssssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyy
+yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+ijjjjjjjjjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkuuuuuuuuuuuuuuuuuuuuukkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkksssssssssssssssssssssssssssssssssssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ikkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+ljjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lsssssssssssssssssssskkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+lkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+cccccggggggggggcccccccggggggcccgggggggggggggggcccgggggcccggggggggggcccgggghhhhhhhhhhhhhhhhhhhhhhhhhh
+zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+--- legend ---
+a fg=#c4cad6 bg=#10131b mod=bold
+b fg=#262c3a bg=#10131b mod=-
+c fg=#5ad1c8 bg=#10131b mod=-
+d fg=#727b8f bg=#10131b mod=-
+e fg=#8ea2ff bg=#10131b mod=-
+f fg=#e07a80 bg=#10131b mod=-
+g fg=#454c60 bg=#10131b mod=-
+h fg=#c4cad6 bg=#10131b mod=-
+i fg=#39425a bg=#0a0c11 mod=-
+j fg=#727b8f bg=#0a0c11 mod=bold
+k fg=#c4cad6 bg=#0a0c11 mod=-
+l fg=#262c3a bg=#0a0c11 mod=-
+m fg=#727b8f bg=#0a0c11 mod=-
+n fg=#e07a80 bg=#0a0c11 mod=-
+o fg=#8a93a6 bg=#0a0c11 mod=-
+p fg=#5ad1c8 bg=#0a0c11 mod=-
+q fg=#e6b450 bg=#0a0c11 mod=-
+r fg=#e6b450 bg=#0a0c11 mod=bold
+s fg=#454c60 bg=#0a0c11 mod=-
+t fg=#8ea2ff bg=#0a0c11 mod=bold
+u fg=#5ad1c8 bg=#0a0c11 mod=bold
+v fg=#727b8f bg=#171b26 mod=-
+w fg=#5ad1c8 bg=#171b26 mod=-
+x fg=#454c60 bg=#171b26 mod=-
+y fg=#c4cad6 bg=#171b26 mod=-
+z fg=#727b8f bg=#0a0c11 mod=dim

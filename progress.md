@@ -1469,3 +1469,46 @@ hand back to the implementer.
   Capture gate exit codes without a pipe.
 - Mrigesh merged PR #35 (`8f07f1e`) and closed #12. Status boards updated here,
   in `LOG.md`, and in `task_plan.md`. Only #13 and #14 remain in V1.
+
+## Session — 2026-07-29 (code-puppy): #13 visual identity v1 — three themes, glyph register, baton
+
+- Branch `issue-13-visual-identity-v1`. Implemented `docs/design/visual-identity.md`
+  against its source of truth, the identity HTML (`_fillTokens`, `_fillGlyphs`,
+  `_fillBaton` generators), inside the issue's allowed paths only:
+  `rust/crates/orc-app/`, `rust/crates/orc-core/` (theme/config types), `docs/notes/`.
+- Three new modules in orc-app, each the single owner of its concern:
+  `theme.rs` (17 semantic slots × 3 themes × 4 colour tiers, plus the grep gate),
+  `glyph.rs` (16 concepts, Unicode + `nf-*` name + ASCII fallback),
+  `baton.rs` (12 cells, 7 frames, 110 ms/frame, 400 ms decay, static reduced-motion
+  rails). Widget code now names slots and glyphs; the old two-theme `Theme` struct
+  with its inline `Color::Rgb` literals is gone.
+- `nocturne` is the default theme now (the sheet calls it FLAGSHIP). Existing
+  configs naming ember or phosphor are never rewritten; unknown names resolve to
+  the flagship. `orc-core/tests/bench.rs` updated to match.
+- 18 committed snapshots under `orc-app/tests/snapshots/`. Each records the symbol
+  grid, a per-cell **style** key, and the legend — so a colour-only regression
+  cannot pass as "the words are the same". Verified by mutation: one channel of
+  nocturne's `brain` (`0x5ad1c8 → 0x5ad1c9`), no text change anywhere, and the gate
+  fails on the legend line. `ORC_UPDATE_SNAPSHOTS=1` regenerates.
+- Every new gate was mutation-tested rather than merely observed passing:
+  smuggling `Color::Rgb(0x12, 0x34, 0x56)` into `render_legend` fails the grep
+  gate; making the monochrome tier quietly emit its 16-colour row fails the
+  NO_COLOR test; deleting the reduced-motion branch from `baton::State::resolve`
+  fails two tests.
+- Five judgement calls recorded in
+  `docs/notes/2026-07-29-issue-13-visual-identity-evidence.md`, the load-bearing
+  ones being: nerd-font "detection" is honestly a UTF-8 locale probe (a terminal
+  cannot be asked its font, and the register uses ordinary codepoints, not PUA
+  icons — the `nf-*` names are recorded per entry for a future column); and the
+  sheet gives `⏻` to *both* durable-session and conductor-down, which are the two
+  states the shelf most needs to separate, so a healthy card takes `●` instead.
+  A literal reading there would have broken AC3.
+- `BatonKind`'s four event profiles were removed: they predate the spec, which
+  gives the baton one behaviour and one direction. Task events now pulse the rail
+  exactly as a stdout tick does; confirmed/failed/done still read from the pane
+  title and the SCORE card, each with its own glyph.
+- All five gates exit 0: fmt, clippy `-D warnings`, `cargo test --workspace`
+  (250 passed, 0 failed), rustdoc `-D warnings`, `cargo build --release --locked`.
+- Left alone deliberately: `orc-proto/src/lib.rs:477` still says the theme field is
+  "constrained to ember or phosphor". `orc-proto` is outside this issue's allowed
+  paths; the field is a free string and carries `nocturne` fine.

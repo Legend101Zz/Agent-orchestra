@@ -24,8 +24,11 @@ fn default_idle_timeout() -> f64 {
     300.0
 }
 
+/// The flagship theme (`docs/design/visual-identity.md`). A config that
+/// predates this key reads as nocturne; one that names ember or phosphor is
+/// left exactly as the user wrote it.
 fn default_theme() -> String {
-    "ember".to_owned()
+    "nocturne".to_owned()
 }
 
 fn default_notifications() -> String {
