@@ -1692,3 +1692,40 @@ hand back to the implementer.
   input is the *consistent* behaviour, not the divergent one — and it keeps
   `<leader> q` reachable from inside the launch flow. The leader is always a
   `ctrl-<letter>` byte and cannot be typed as text.
+
+## Session — 2026-07-29 (Claude, reviewer): #37 reviewed twice, merged
+
+- Adversarial review of `issue-37-theme-persistence` against #37's contract, then
+  a re-review of the fix round. Verdicts **🔨 FIX (2 items)** → **🧪 ACCEPT**.
+  Mrigesh merged as PR #41 (`2425481`); issue closed.
+- Round 1: all five gates reproduced green (267 tests, 0 failed) and all seven
+  ACs re-verified against a live `piod` on a scratch `ORC_HOME`, not from the
+  pasted evidence — including the ones most likely to hide a hole: `set_theme`
+  sent without a hello is refused and mutates nothing, an unknown variant leaves
+  the connection alive, `pio harness list` does not clobber `app.theme`, and a
+  hand-edited registry beats a stale `config.json`.
+- **The one defect was in the tests, not the code.** Replacing `cycle_theme`'s
+  daemon round trip with a no-op — the single line that turns `<leader> t` into
+  persistence — still passed **267/267**, the exact number the implementer's
+  evidence cited. Every orc-app test drove the switcher with `commands: None`, so
+  the `Some(commands)` branch never executed; the mutation table bracketed the
+  gap (M7 reads, M14 receives) without covering the send.
+- Second item: PR #41 did not merge (`CONFLICTING`, `progress.md` vs PR #40).
+  Discharged mid-review — code-puppy had already made the merge locally as
+  `ad96e41` and pushed it while the verdict was being written.
+- Round 2 verified both fixes by re-running the mutations rather than reading the
+  claims: the original no-op now fails all three new seam tests, and the other
+  three in the implementer's table are each caught by the test that owns them.
+  Gates green, **270 passed, 0 failed**; four files changed since the reviewed
+  commit, 16 branch-wide, no `Cargo.toml`/`Cargo.lock`.
+- Two flakes distinguished from regressions by measurement, not assertion. Gate 3
+  failed once on `harness_cli::harness_list_is_additive…` — interleaved A/B on
+  the same volume gave branch 8/8 vs `origin/main` 7/8, so pre-existing — and
+  once on `background_dispatch::delegate_confirms_while_running…`, which then
+  went 5/5 in isolation.
+- Left open on purpose, recorded in `task_plan.md` rather than forced into a third
+  round (ANTI-SLOP rule 4): the bounded-probe flake family (three tests, one
+  cause) and `handle_raw_event`'s untested dispatch layer — deleting its
+  `route_leader` call kills every leader command on HOME/SCORE/RUNS and still
+  passes 69/69. Both predate this fix round; the second was missed in round 1.
+- **Next: #38** (STAGE as a live circuit), then #39, with #14 last.
