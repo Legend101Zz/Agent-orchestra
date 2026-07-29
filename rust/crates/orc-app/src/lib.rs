@@ -509,6 +509,25 @@ pub fn visible_input_benchmark(
     })
 }
 
+/// What a mouse drag on a STAGE pane is doing.
+///
+/// Only the move half existed before: a press was accepted solely on a pane's
+/// title row, and motion rewrote its `x`/`y` while copying `width`/`height`
+/// straight back. There was no way to resize a pane with the mouse at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Drag {
+    /// Moving the whole pane. Carries where inside it the grab landed, so the
+    /// pane does not jump to put its corner under the cursor.
+    Move { offset_x: u16, offset_y: u16 },
+    /// Resizing from an edge, or from a corner when both hold.
+    Resize { right: bool, bottom: bool },
+}
+
+/// The smallest pane `stage_areas` will lay out. Resize clamps to the same
+/// floor the layout does, so a pane cannot be dragged to a size that would
+/// silently spring back on the next frame.
+const MIN_PANE: (u16, u16) = (10, 5);
+
 /// One pane's own output pulse.
 ///
 /// Keyed by pane id rather than held once for the whole stage: a connector that
@@ -576,8 +595,20 @@ struct StageState {
     glyphs: Glyphs,
     session_id: Option<String>,
     layout: Vec<LayoutRect>,
+    /// Whether `layout` holds local changes the daemon has not been told
+    /// about.
+    ///
+    /// `layout` is both what the client *wants* and, until now, implicitly
+    /// what it had *sent* — so `persist_stage_layout`'s "did this change?"
+    /// test could only ever notice the difference between the rects it asked
+    /// for and the rects `stage_areas` clamped them to. A drag writes its
+    /// result straight into `layout`, so by the time the compare ran the two
+    /// sides already agreed and the move was never persisted at all unless a
+    /// clamp happened to bite. Tracking the intent separately is what makes
+    /// deferring the write until the mouse is up correct rather than lossy.
+    layout_dirty: bool,
     zoomed: bool,
-    dragging: Option<(usize, u16, u16)>,
+    dragging: Option<(usize, Drag)>,
     raw_router: RawRouter,
     confirmed_panes: std::collections::HashSet<String>,
     leader_label: String,
@@ -602,6 +633,7 @@ impl StageState {
             glyphs,
             session_id: None,
             layout: Vec::new(),
+            layout_dirty: false,
             zoomed: false,
             dragging: None,
             raw_router: RawRouter::default(),
@@ -2125,8 +2157,7 @@ fn run_shell_loop(
             if shell.view == ShellView::Stage
                 && let Some(stage) = shell.stage.as_mut()
             {
-                resize_to_cards(commands, stage, &mut requested_sizes)?;
-                persist_stage_layout(commands, stage)?;
+                sync_stage_geometry(commands, stage, &mut requested_sizes)?;
             }
             redraw = false;
         }
@@ -2206,6 +2237,41 @@ fn run_shell_loop(
     }
 }
 
+/// Push STAGE's geometry to the daemon — but never mid-drag.
+///
+/// This is the whole of the "buggy and not fluid" bug. Both halves were
+/// debounced only against their *last value*, and during a drag the value
+/// changes every frame, so at the 16 ms animating cadence each frame did a
+/// blocking `resize` round-trip (daemon → `TIOCSWINSZ` → the hosted CLI
+/// reflows its entire screen) *and* a blocking `update_layout` whose handler
+/// re-reads `session.json`, mutates it and writes it back through an
+/// `fsync`. Up to ~60 socket round-trips, 60 PTY resizes and 60 fsynced
+/// rewrites per second while the mouse was down — with the UI thread blocked
+/// on each one.
+///
+/// While the mouse is down the client now talks to nobody. The frame follows
+/// the cursor because that is a local repaint; the pane's *contents* reflow
+/// once, on release, which is what every tiling window manager does and is
+/// why it reads as fluid. The value-debounce underneath then makes that
+/// single post-release pass fire exactly once.
+///
+/// Deferring is safe because nothing observes the layout in between:
+/// `update_layout` does not bump the daemon's control sequence, so no other
+/// client is waiting on it, and a stale pane size is corrected by the very
+/// next frame after release.
+fn sync_stage_geometry(
+    commands: &mut BenchClient,
+    state: &mut StageState,
+    requested_sizes: &mut HashMap<String, (u16, u16)>,
+) -> Result<()> {
+    if state.dragging.is_some() {
+        return Ok(());
+    }
+    resize_to_cards(commands, state, requested_sizes)?;
+    persist_stage_layout(commands, state)?;
+    Ok(())
+}
+
 fn persist_stage_layout(commands: &mut BenchClient, state: &mut StageState) -> Result<()> {
     let Some(session_id) = state.session_id.clone() else {
         return Ok(());
@@ -2227,9 +2293,10 @@ fn persist_stage_layout(commands: &mut BenchClient, state: &mut StageState) -> R
             order,
         })
         .collect::<Vec<_>>();
-    if layout != state.layout {
+    if layout != state.layout || state.layout_dirty {
         commands.update_layout(session_id, layout.clone())?;
         state.layout = layout;
+        state.layout_dirty = false;
     }
     Ok(())
 }
@@ -2833,35 +2900,61 @@ fn route_raw_mouse(bytes: &[u8], state: &mut StageState) -> Option<Option<Vec<u8
         .pane_areas
         .iter()
         .position(|area| area.contains((column, row).into()));
+    // Release first. SGR reports a release as the *same* button code with an
+    // `m` suffix, so a press branch that keys on the code alone claims it —
+    // and letting go over a pane's title row re-armed the drag instead of
+    // ending it. That left `dragging` latched with the mouse up, which is
+    // both the sticky pane and, now that geometry defers while a drag is in
+    // flight, a client that would never sync again.
+    if *code == 3 || suffix == 'm' {
+        state.dragging = None;
+        return Some(None);
+    }
     if *code == 0
         && let Some(index) = pane_index
-        && let Some(area) = state.pane_areas.get(index)
-        && row == area.y
+        && let Some(area) = state.pane_areas.get(index).copied()
+        && let Some(kind) = grab(area, column, row)
     {
         state.focus = index;
-        state.dragging = Some((
-            index,
-            column.saturating_sub(area.x),
-            row.saturating_sub(area.y),
-        ));
+        state.dragging = Some((index, kind));
         return Some(None);
     }
     if *code == 32
-        && let Some((index, offset_x, offset_y)) = state.dragging
+        && let Some((index, kind)) = state.dragging
         && let Some(pane_id) = state.panes.get(index).map(|pane| pane.id.clone())
         && let Some(area) = state.pane_areas.get(index).copied()
     {
         ensure_layout(state);
+        state.layout_dirty = true;
         if let Some(rect) = state.layout.iter_mut().find(|rect| rect.pane_id == pane_id) {
-            rect.x = column.saturating_sub(offset_x);
-            rect.y = row.saturating_sub(offset_y);
-            rect.width = area.width;
-            rect.height = area.height;
+            match kind {
+                Drag::Move { offset_x, offset_y } => {
+                    rect.x = column.saturating_sub(offset_x);
+                    rect.y = row.saturating_sub(offset_y);
+                    rect.width = area.width;
+                    rect.height = area.height;
+                }
+                Drag::Resize { right, bottom } => {
+                    rect.x = area.x;
+                    rect.y = area.y;
+                    // The dragged edge follows the cursor; the opposite one
+                    // stays put, so the pane grows from where it was grabbed.
+                    rect.width = if right {
+                        column
+                            .saturating_sub(area.x)
+                            .saturating_add(1)
+                            .max(MIN_PANE.0)
+                    } else {
+                        area.width
+                    };
+                    rect.height = if bottom {
+                        row.saturating_sub(area.y).saturating_add(1).max(MIN_PANE.1)
+                    } else {
+                        area.height
+                    };
+                }
+            }
         }
-        return Some(None);
-    }
-    if *code == 3 || suffix == 'm' {
-        state.dragging = None;
         return Some(None);
     }
     let area = *state.pane_areas.get(state.focus)?;
@@ -2877,6 +2970,28 @@ fn route_raw_mouse(bytes: &[u8], state: &mut StageState) -> Option<Option<Vec<u8
     let x = column.saturating_sub(inner.x) + 1;
     let y = row.saturating_sub(inner.y) + 1;
     Some(Some(format!("\x1b[<{code};{x};{y}{suffix}").into_bytes()))
+}
+
+/// What pressing at `(column, row)` inside `area` grabs, if anything.
+///
+/// Edges win over the title row, so the top-right corner resizes rather than
+/// moves — a corner is the one place a user expects to size from, and the rest
+/// of the title bar is still a long, easy move target. Anywhere else in the
+/// pane is not a grab at all: it belongs to the hosted CLI, and swallowing it
+/// would break click-to-position inside the harness.
+const fn grab(area: Rect, column: u16, row: u16) -> Option<Drag> {
+    let right = column == area.right().saturating_sub(1);
+    let bottom = row == area.bottom().saturating_sub(1);
+    if right || bottom {
+        return Some(Drag::Resize { right, bottom });
+    }
+    if row == area.y {
+        return Some(Drag::Move {
+            offset_x: column.saturating_sub(area.x),
+            offset_y: row.saturating_sub(area.y),
+        });
+    }
+    None
 }
 
 /// Parse the bounded SGR mouse sequence used for SCORE card dragging.
@@ -3616,11 +3731,12 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AVATAR_FRAMES, HarnessDiscovery, HashMap, HomeData, HomeState, LeaderAction, LeaderKey,
-        NewSessionFlow, RawRouter, RepaintReasons, SINGLE_HARNESS_MESSAGE, ScoreState, ShellState,
-        ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton, cycle_theme,
-        render_help, render_home, render_score, render_shell, render_stage, repaint_reasons,
-        route_leader, route_raw_mouse, route_runs_key, score_mouse,
+        AVATAR_FRAMES, Drag, HarnessDiscovery, HashMap, HomeData, HomeState, LeaderAction,
+        LeaderKey, MIN_PANE, NewSessionFlow, RawRouter, RepaintReasons, SINGLE_HARNESS_MESSAGE,
+        ScoreState, ShellState, ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton,
+        cycle_theme, grab, render_help, render_home, render_score, render_shell, render_stage,
+        repaint_reasons, route_leader, route_raw_mouse, route_runs_key, score_mouse, stage_areas,
+        sync_stage_geometry,
     };
     use crate::glyph::{Glyph, GlyphTier, Glyphs};
     use crate::theme::{ColorTier, Slot};
@@ -5616,6 +5732,183 @@ mod tests {
             .expect("parse mouse")
             .expect("forward mouse");
         assert_eq!(translated, b"\x1b[<0;2;2M");
+    }
+
+    /// Feed one SGR mouse sequence to STAGE, asserting the client consumed it.
+    fn mouse(state: &mut StageState, code: u16, column: u16, row: u16, suffix: char) {
+        // The wire is 1-based; `route_raw_mouse` converts back to 0-based.
+        let sequence = format!("\x1b[<{code};{};{}{suffix}", column + 1, row + 1);
+        assert!(
+            route_raw_mouse(sequence.as_bytes(), state).is_some(),
+            "{sequence:?} was not consumed by STAGE"
+        );
+    }
+
+    /// Every request the scripted daemon has reported so far. Safe to read
+    /// without waiting: the daemon reports each line *before* it writes the
+    /// reply, and every client call blocks on that reply.
+    fn drain(requests: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
+        std::iter::from_fn(|| requests.try_recv().ok()).collect()
+    }
+
+    fn count_of(requests: &[String], kind: &str) -> usize {
+        requests
+            .iter()
+            .filter(|line| line.contains(&format!("\"type\":\"{kind}\"")))
+            .count()
+    }
+
+    #[test]
+    fn dragging_a_pane_edge_resizes_it_and_the_title_bar_still_moves_it() {
+        // Edge-resize did not exist: a press was accepted only on a pane's
+        // title row, and motion rewrote x/y while copying width/height back
+        // unchanged. AC3 says "dragging a pane edge", so there has to be one.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        let screen = ratatui::layout::Rect::new(0, 0, 120, 40);
+        state.pane_areas = stage_areas(screen, &state);
+        let area = state.pane_areas[0];
+
+        // The right edge resizes; the interior belongs to the hosted CLI.
+        assert_eq!(
+            grab(area, area.right() - 1, area.y + 4),
+            Some(Drag::Resize {
+                right: true,
+                bottom: false
+            })
+        );
+        assert_eq!(
+            grab(area, area.x + 4, area.bottom() - 1),
+            Some(Drag::Resize {
+                right: false,
+                bottom: true
+            })
+        );
+        assert_eq!(
+            grab(area, area.right() - 1, area.bottom() - 1),
+            Some(Drag::Resize {
+                right: true,
+                bottom: true
+            }),
+            "a corner sizes in both axes"
+        );
+        assert_eq!(
+            grab(area, area.x + 4, area.y),
+            Some(Drag::Move {
+                offset_x: 4,
+                offset_y: 0
+            }),
+            "the title bar is still a long, easy move target"
+        );
+        assert_eq!(
+            grab(area, area.x + 4, area.y + 4),
+            None,
+            "the interior is the harness's, not ours"
+        );
+
+        // Drag that right edge twenty columns left.
+        mouse(&mut state, 0, area.right() - 1, area.y + 4, 'M');
+        mouse(&mut state, 32, area.right() - 21, area.y + 4, 'M');
+        state.pane_areas = stage_areas(screen, &state);
+        assert_eq!(
+            state.pane_areas[0].width,
+            area.width - 20,
+            "the dragged edge follows the cursor"
+        );
+        assert_eq!(state.pane_areas[0].x, area.x, "the opposite edge stays put");
+        assert_eq!(
+            state.pane_areas[0].height, area.height,
+            "and the other axis is untouched"
+        );
+
+        // It cannot be dragged below the floor `stage_areas` would enforce.
+        mouse(&mut state, 32, area.x, area.y + 4, 'M');
+        state.pane_areas = stage_areas(screen, &state);
+        assert!(state.pane_areas[0].width >= MIN_PANE.0);
+    }
+
+    #[test]
+    fn a_drag_issues_no_daemon_traffic_until_the_mouse_comes_up() {
+        // AC3 and AC4, counted rather than felt.
+        //
+        // Both halves of the geometry sync were debounced only against their
+        // last *value*, and during a drag the value changes every frame — so
+        // at the 16 ms animating cadence every frame did a blocking `resize`
+        // round-trip (daemon → TIOCSWINSZ → the hosted CLI reflows its whole
+        // screen) and a blocking `update_layout` whose handler re-reads
+        // `session.json`, mutates it and writes it back through an fsync.
+        // Sixty drag frames used to mean 120 blocking round-trips.
+        let (mut client, requests) = client_on_scripted_daemon("drag-rpc", "{\"type\":\"ack\"}\n");
+        let mut state = StageState::for_session(
+            "bench-alpha".to_owned(),
+            panes(),
+            Vec::new(),
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        let screen = ratatui::layout::Rect::new(0, 0, 120, 40);
+        state.pane_areas = stage_areas(screen, &state);
+        let mut sizes = HashMap::new();
+
+        // Settle first, so what the drag itself costs is what gets counted.
+        sync_stage_geometry(&mut client, &mut state, &mut sizes).expect("initial sync");
+        assert!(
+            !drain(&requests).is_empty(),
+            "geometry does reach the daemon when nothing is being dragged"
+        );
+
+        const FRAMES: u16 = 60;
+        let area = state.pane_areas[0];
+        mouse(&mut state, 0, area.right() - 1, area.y + 4, 'M');
+        for step in 0..FRAMES {
+            // Left forty columns, then back, so the value genuinely differs
+            // every frame — which is exactly the condition the old
+            // value-debounce could not survive.
+            mouse(
+                &mut state,
+                32,
+                area.right() - 1 - step % 40,
+                area.y + 4,
+                'M',
+            );
+            // Exactly what the shell does each frame: draw, then sync.
+            state.pane_areas = stage_areas(screen, &state);
+            sync_stage_geometry(&mut client, &mut state, &mut sizes).expect("sync mid-drag");
+        }
+        assert!(
+            drain(&requests).is_empty(),
+            "{FRAMES} drag frames must issue no socket round-trip and no \
+             session.json write at all — the frame follows the cursor because \
+             that is a local repaint"
+        );
+
+        // Mouse up. One pass, and the value-debounce underneath makes it one.
+        mouse(
+            &mut state,
+            0,
+            area.right() - 1 - (FRAMES - 1) % 40,
+            area.y + 4,
+            'm',
+        );
+        state.pane_areas = stage_areas(screen, &state);
+        sync_stage_geometry(&mut client, &mut state, &mut sizes).expect("sync on release");
+        let landed = drain(&requests);
+        assert_eq!(
+            count_of(&landed, "update_layout"),
+            1,
+            "exactly one layout write for the whole drag: {landed:?}"
+        );
+        assert_eq!(
+            count_of(&landed, "resize"),
+            1,
+            "and one resize, for the one pane whose size changed: {landed:?}"
+        );
+
+        // And it stays settled: a further frame with nothing moving is silent.
+        sync_stage_geometry(&mut client, &mut state, &mut sizes).expect("sync after release");
+        assert!(
+            drain(&requests).is_empty(),
+            "the post-release pass fires once, not every frame after it"
+        );
     }
 
     #[test]
