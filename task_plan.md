@@ -34,7 +34,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | V1-9 Worktree isolation + independent review + final report | #5 (✅ merged 2026-07-28, PR #32) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 (✅ merged 2026-07-28, PR #35) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — (✅ merged 2026-07-29, PR #36) |
-| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 (✅ merged 2026-07-29, PR #41) |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
@@ -42,16 +42,22 @@ record. (Issue numbers are filled in as issues are created.)
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12 and #13
-are merged. #14 (README) is the last original V1 item.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13 and
+#37 are merged. #14 (README) is the last original V1 item.**
 
 #13 (PR #36) merged with its review verdict outstanding — FIX, 4 items — so
-those findings are live on `main` and were re-homed rather than dropped: #37
+those findings were live on `main` and were re-homed rather than dropped: #37
 (the `t` key still escapes the theme map), #38 (the baton freezes mid-sweep
 instead of decaying), #39 (the trigger rainbow ignores `NO_COLOR`; the no-hex
 gate doesn't recurse). #37 and #38 also carry the UX work Mrigesh asked for
 after testing: a real theme switcher, per-worker connectors, and drag-resize
-that doesn't round-trip the daemon every frame.
+that doesn't round-trip the daemon every frame. **#37 (PR #41) is now merged**,
+so finding 1 is discharged: `t` no longer escapes the theme map, the chord
+reaches all four screens, and the choice survives a relaunch through a daemon
+round trip (`ClientRequest::SetTheme`) rather than a client-side file write.
+`harnesses.json`'s `app.theme` is the authoritative record and `config.json`'s
+copy is derived from it — see the 2026-07-29 entry in `findings.md`. Two of
+#13's four findings remain, in #38 and #39.
 The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
 that had made every non-trivial delegation fail since #8; #30 (PR #31) then
 separated *delivery* from *execution* — `orch delegate` returns once the brief is
@@ -72,9 +78,9 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**Next: #37, then #38** — both are TUI work on top of #13, so land them before
-#14's screenshots. #39 is small and independent; it can slot in anywhere.
-**#14 goes last**, once the screens are what the launch photos should show.
+**Next: #38** — TUI work on top of #13, so land it before #14's screenshots.
+#39 is small and independent; it can slot in anywhere. **#14 goes last**, once
+the screens are what the launch photos should show.
 
 Open and unfiled: the shipped screen *layouts* are thinner than the mockups
 in `docs/design/visual-identity/`. The palette, glyph register and baton match
@@ -91,6 +97,28 @@ the two can disagree on whether the mode is active; `alternate_profile` has no
 test for the "executor profile has no `--provider/--model`, one sibling does"
 edge; and `background_dispatch.rs:195`'s sub-1s wall-clock budget is
 storage-dependent (fails on an external-SSD checkout, passes on internal disk).
+
+Two unfiled follow-ups from #37's review, both worth their own issue:
+
+- **The bounded-probe flake family — three tests, one cause.** Alongside
+  `background_dispatch.rs:195`'s sub-1s budget, `discovery.rs:35`'s
+  `VERSION_PROBE_TIMEOUT = 2s` (`harness_cli::harness_list_is_additive…`) and
+  `probe.rs:55`'s `HELP_PROBE_TIMEOUT = 5s` (`doctor_cli::doctor_probes…`) all
+  lose to process spawn on an external-SSD checkout under load. Confirmed
+  pre-existing, not caused by #37: interleaved A/B of the discovery one on the
+  same volume gave branch 8/8, `origin/main` 7/8. The fix is one decision about
+  how these budgets are set (scale, or make them env-tunable in tests), not
+  three patches.
+- **`handle_raw_event`'s dispatch layer has no test.** Deleting its
+  `route_leader(...)` call — which kills `<leader>` `t`/`q`/`h`/`b`/`v`/`?` on
+  HOME, SCORE and RUNS — leaves `orc-app` at 69 passed, 0 failed; so does
+  dropping the STAGE `LeaderAction::Theme` arm. The tests drive `route_leader` /
+  `route_runs_key` / `cycle_theme` directly, one level beneath the dispatch that
+  decides whether they are reached. Both lines came in with `2112865`, and the
+  altitude matches the rest of the crate, so this is a codebase-wide property
+  rather than a #37 defect — it was deliberately not made a third fix round
+  (ANTI-SLOP rule 4). One `handle_raw_event`-level test that presses real bytes
+  would cover every leader command at once.
 
 Naming decision (2026-07-22): user-facing CLI is `pio`, daemon `piod`; crate
 names, `ORC_*` env vars and `~/.orchestra` unchanged (see #17).
