@@ -322,6 +322,66 @@ mod tests {
         }
     }
 
+    /// AC5: a dispatch, a confirmed return and a plain stdout tick are three
+    /// visibly different frames, pinned rather than asserted-to-differ.
+    ///
+    /// `mark_output` used to treat a task event exactly as a stdout tick, so
+    /// all three of these were the same picture. They now differ on shape (one
+    /// directional cell against the ambient three-cell ramp), on direction,
+    /// and on slot — three axes, so removing any one still leaves them
+    /// tellable apart.
+    #[test]
+    fn the_message_vocabulary_is_snapshotted_against_the_ambient_pulse() {
+        let theme = Theme::from(ThemeName::Nocturne);
+        // 180 ms in: three frames at 60 ms, two cells each, so the packet is
+        // six cells along whichever way it is going.
+        let raised = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(180))
+            .unwrap_or_else(std::time::Instant::now);
+        let cases = [
+            (
+                "stage-message-dispatch",
+                "outbound dispatch",
+                Some((
+                    crate::circuit::Direction::Outbound,
+                    crate::circuit::Outcome::Dispatched,
+                )),
+                baton::State::Idle,
+            ),
+            (
+                "stage-message-return",
+                "inbound confirmed return",
+                Some((
+                    crate::circuit::Direction::Inbound,
+                    crate::circuit::Outcome::Confirmed,
+                )),
+                baton::State::Idle,
+            ),
+            (
+                "stage-message-output",
+                "plain stdout tick",
+                None,
+                baton::State::Sweeping(2),
+            ),
+        ];
+        for (name, what, message, rail) in cases {
+            let mut stage = StageState::new(stage_panes_n(1), theme, UNICODE);
+            if let Some((direction, outcome)) = message {
+                stage.flights = vec![crate::InFlight {
+                    worker_id: "pane-1".to_owned(),
+                    direction,
+                    outcome,
+                    raised,
+                }];
+            }
+            gate(
+                name,
+                &format!("STAGE nocturne truecolor {what} {WIDTH}x{HEIGHT}"),
+                |frame| render_stage(frame, &mut stage, Some(0), &[rail]),
+            );
+        }
+    }
+
     /// AC8: at the design sheet's minimum viewport the connectors are still
     /// there. Below the routing width `stage_areas` stacks the panes and there
     /// is no gutter, so this golden is the evidence for the inlaid fallback —

@@ -528,6 +528,51 @@ enum Drag {
 /// silently spring back on the next frame.
 const MIN_PANE: (u16, u16) = (10, 5);
 
+/// A discrete message crossing a connector.
+///
+/// Distinct from a [`PanePulse`], which reports that a pane *is producing*.
+/// This reports that one specific thing *was sent*: it has a source, a
+/// destination and an outcome, so it crosses once and lands rather than
+/// looping. See "Message in flight" in `docs/design/visual-identity.md`.
+struct InFlight {
+    /// The worker whose connector carries it, by pane id. The conductor is
+    /// always the other end, so this identifies the wire either way.
+    worker_id: String,
+    direction: circuit::Direction,
+    outcome: circuit::Outcome,
+    raised: Instant,
+}
+
+impl InFlight {
+    /// The pane the emote lands on: a dispatch arrives at its worker, a return
+    /// arrives back at the conductor.
+    fn destination<'a>(&'a self, panes: &'a [PaneSnapshot]) -> Option<&'a PaneSnapshot> {
+        match self.direction {
+            circuit::Direction::Outbound => panes.iter().find(|pane| pane.id == self.worker_id),
+            circuit::Direction::Inbound => panes.first(),
+        }
+    }
+}
+
+/// Classify a task history action into the message vocabulary.
+///
+/// Presentation only — this reads the board the daemon already keeps and
+/// changes nothing about how work is dispatched.
+fn message_for(action: &str) -> Option<(circuit::Direction, circuit::Outcome)> {
+    match action {
+        "dispatched" | "assigned" | "delivery_started" => {
+            Some((circuit::Direction::Outbound, circuit::Outcome::Dispatched))
+        }
+        "delivery_confirmed" | "done" => {
+            Some((circuit::Direction::Inbound, circuit::Outcome::Confirmed))
+        }
+        "delivery_failed" | "failed" => {
+            Some((circuit::Direction::Inbound, circuit::Outcome::Failed))
+        }
+        _ => None,
+    }
+}
+
 /// One pane's own output pulse.
 ///
 /// Keyed by pane id rather than held once for the whole stage: a connector that
@@ -590,6 +635,12 @@ struct StageState {
     /// One pulse per pane, by pane id. `BTreeMap` so iteration order is
     /// deterministic and snapshots do not drift with hashing.
     pulses: BTreeMap<String, PanePulse>,
+    /// Messages currently crossing a connector or showing their emote.
+    flights: Vec<InFlight>,
+    /// How much of each task's history has already been turned into a
+    /// message, by task id. Without it every snapshot would re-raise the same
+    /// dispatch, and the board is re-read on every snapshot.
+    seen_history: HashMap<String, usize>,
     last_tick: Instant,
     theme: Theme,
     glyphs: Glyphs,
@@ -628,6 +679,8 @@ impl StageState {
             panes,
             focus: 0,
             pane_areas: Vec::new(),
+            flights: Vec::new(),
+            seen_history: HashMap::new(),
             last_tick: now,
             theme,
             glyphs,
@@ -739,6 +792,105 @@ impl StageState {
                 .get(&pane.id)
                 .is_none_or(|pulse| pulse.painted != Some(pulse.state(reduced_motion)))
         })
+    }
+
+    /// Turn newly-appended task history into messages in flight.
+    ///
+    /// Only the entries that have appeared since the last look are raised, so
+    /// re-reading the board — which happens on every snapshot — does not
+    /// re-dispatch the same packet forever.
+    fn note_task_events(&mut self, tasks: &[TaskSummary]) {
+        for task in tasks {
+            let seen = self.seen_history.get(&task.id).copied().unwrap_or(0);
+            self.seen_history
+                .insert(task.id.clone(), task.history.len());
+            // A first sighting is history, not news: attaching to a session
+            // with a finished board must not replay every dispatch it ever
+            // made.
+            if seen == 0 {
+                continue;
+            }
+            let Some(worker_id) = task.assignee_run.clone() else {
+                continue;
+            };
+            for entry in task.history.iter().skip(seen) {
+                if let Some((direction, outcome)) = message_for(&entry.action) {
+                    self.flights.push(InFlight {
+                        worker_id: worker_id.clone(),
+                        direction,
+                        outcome,
+                        raised: Instant::now(),
+                    });
+                }
+            }
+        }
+        self.seen_history
+            .retain(|id, _| tasks.iter().any(|task| task.id == *id));
+    }
+
+    /// Drop messages whose emote has run out, and any whose wire has gone.
+    ///
+    /// "Never leaves residue on the buffer" is a property of the whole frame
+    /// being redrawn, but a flight that outlived its pane would keep asking
+    /// for frames, so it is retired here rather than left to leak.
+    fn retire_flights(&mut self, reduced_motion: bool) {
+        let lengths = self.route_lengths();
+        self.flights.retain(|flight| {
+            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+            len > 0
+                && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
+                    != circuit::Flight::Gone
+        });
+    }
+
+    /// How long each worker's connector is this frame, by pane id.
+    fn route_lengths(&self) -> HashMap<String, usize> {
+        circuit::plan(&self.pane_areas).map_or_else(HashMap::new, |wiring| {
+            self.panes
+                .iter()
+                .skip(1)
+                .zip(wiring.routes)
+                .map(|(pane, route)| (pane.id.clone(), route.len()))
+                .collect()
+        })
+    }
+
+    /// Whether any message is still crossing or still showing its emote.
+    fn any_in_flight(&self, reduced_motion: bool) -> bool {
+        let lengths = self.route_lengths();
+        self.flights.iter().any(|flight| {
+            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+            len > 0
+                && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
+                    != circuit::Flight::Gone
+        })
+    }
+
+    /// The emote to stamp on each pane this frame, by pane id.
+    ///
+    /// Most recent wins when several land at once, so the newest news is what
+    /// a pane shows.
+    fn emotes(&self, reduced_motion: bool) -> HashMap<String, (circuit::Outcome, bool)> {
+        let lengths = self.route_lengths();
+        let mut showing = HashMap::new();
+        for flight in &self.flights {
+            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+            if len == 0 {
+                continue;
+            }
+            let circuit::Flight::Landed { since } =
+                circuit::flight(reduced_motion, flight.raised.elapsed(), len)
+            else {
+                continue;
+            };
+            if let Some(pane) = flight.destination(&self.panes) {
+                // "Under reduced motion the flash frame is dropped: it appears
+                // already settled, holds, and leaves."
+                let flashing = !reduced_motion && since < circuit::EMOTE_FLASH;
+                showing.insert(pane.id.clone(), (flight.outcome, flashing));
+            }
+        }
+        showing
     }
 
     /// Whether any *connector* is still mid-pulse.
@@ -2027,11 +2179,9 @@ fn attach_stage(
                 .and(task.assignee_run.clone())
         })
         .collect();
-    // A task event lands on the pane it names, so it pulses that worker's
-    // connector rather than every connector on the stage.
-    for pane_id in confirmed_task_panes(&tasks, &["delivery_confirmed"]) {
-        stage.mark_output(&pane_id);
-    }
+    // Seed the history watermark. A first sighting is history, not news, so
+    // attaching to a finished board must not replay every dispatch it made.
+    stage.note_task_events(&tasks);
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
         reports: shell
@@ -2073,6 +2223,8 @@ struct RepaintReasons {
     stage_changed: bool,
     /// A conductor pane is showing a trigger and motion is allowed.
     trigger_ambient: bool,
+    /// A message is crossing a connector, or its emote is still showing.
+    in_flight: bool,
     home_ambient: bool,
     runs_ambient: bool,
 }
@@ -2085,6 +2237,7 @@ impl RepaintReasons {
             || self.stage_live
             || self.stage_changed
             || self.trigger_ambient
+            || self.in_flight
             || self.home_ambient
             || self.runs_ambient
     }
@@ -2097,6 +2250,10 @@ impl RepaintReasons {
     const fn wait(self) -> Duration {
         if self.animating {
             Duration::from_millis(16)
+        } else if self.in_flight {
+            // The packet advances every `FLIGHT_FRAME_MS`; waking at half that
+            // keeps each frame from aliasing against the poll.
+            Duration::from_millis(circuit::FLIGHT_FRAME_MS / 2)
         } else if self.home_ambient || self.trigger_ambient {
             Duration::from_millis(120)
         } else if self.stage_live || self.runs_ambient {
@@ -2123,6 +2280,7 @@ fn repaint_reasons(shell: &ShellState, pending: bool) -> RepaintReasons {
         stage_changed: stage.is_some_and(|stage| stage.baton_needs_repaint(shell.reduced_motion)),
         trigger_ambient: !shell.reduced_motion
             && stage.is_some_and(|stage| stage.has_live_trigger()),
+        in_flight: stage.is_some_and(|stage| stage.any_in_flight(shell.reduced_motion)),
         home_ambient: !shell.reduced_motion && !shell.help && shell.view == ShellView::Home,
         // The RUNS embed repaints on a modest tick so quota/history updates
         // arriving on the App's internal channel become visible without a
@@ -2146,6 +2304,7 @@ fn run_shell_loop(
         // to switch between the two.
         if let Some(stage) = shell.stage.as_mut() {
             stage.advance();
+            stage.retire_flights(shell.reduced_motion);
         }
         let reasons = repaint_reasons(shell, redraw);
         if reasons.runs_ambient {
@@ -2194,15 +2353,12 @@ fn run_shell_loop(
                                     .and(task.assignee_run.clone())
                             })
                             .collect();
-                        // A task event is traffic on the filament too, and it
-                        // names the pane it landed on, so it pulses that
-                        // worker's connector and not the whole stage.
-                        for pane_id in confirmed_task_panes(
-                            &score.tasks,
-                            &["delivery_confirmed", "delivery_failed", "done"],
-                        ) {
-                            stage.mark_output(&pane_id);
-                        }
+                        // A task event is not a stdout tick. It has a
+                        // source, a destination and an outcome, so it raises a
+                        // discrete message rather than pulsing the ambient
+                        // rail — which is what made a dispatch, a returned
+                        // result and a worker merely printing look identical.
+                        stage.note_task_events(&score.tasks);
                     }
                 }
                 let _ = shell.runs.refresh();
@@ -3157,23 +3313,6 @@ fn handle_home_key(
     Ok(false)
 }
 
-/// The panes named by tasks whose latest history entry is one of `actions`.
-///
-/// `assignee_run` is the pane a task's work is happening in, which is what
-/// turns "a task event happened" into "this worker's wire just carried
-/// something".
-fn confirmed_task_panes(tasks: &[TaskSummary], actions: &[&str]) -> Vec<String> {
-    tasks
-        .iter()
-        .filter(|task| {
-            task.history
-                .last()
-                .is_some_and(|history| actions.contains(&history.action.as_str()))
-        })
-        .filter_map(|task| task.assignee_run.clone())
-        .collect()
-}
-
 fn ensure_layout(state: &mut StageState) {
     if state.layout.len() == state.panes.len() {
         return;
@@ -3217,6 +3356,7 @@ fn render_stage(
     );
     state.pane_areas = stage_areas(area, state);
     let areas = state.pane_areas.clone();
+    let emotes = state.emotes(motion.is_none());
     if state.zoomed {
         if let (Some(pane), Some(pane_area)) =
             (state.panes.get(state.focus), areas.first().copied())
@@ -3230,6 +3370,7 @@ fn render_stage(
                     focus: true,
                     confirmed: state.confirmed_panes.contains(&pane.id),
                     phase,
+                    emote: emotes.get(&pane.id).copied(),
                 },
                 state.theme,
                 state.glyphs,
@@ -3246,6 +3387,7 @@ fn render_stage(
                     focus: index == state.focus,
                     confirmed: state.confirmed_panes.contains(&pane.id),
                     phase,
+                    emote: emotes.get(&pane.id).copied(),
                 },
                 state.theme,
                 state.glyphs,
@@ -3253,7 +3395,7 @@ fn render_stage(
         }
         // After the panes, so an inlaid rail can sit in a worker's own top
         // border and a wire is never buried under a pane drawn later.
-        render_circuit(frame, state, traffic);
+        render_circuit(frame, state, traffic, motion.is_none());
     }
     if state.message.is_empty() {
         let legend = format!(
@@ -3404,7 +3546,12 @@ fn render_shadow(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
 ///
 /// Idle wires are drawn first and live ones after, so where routes share the
 /// trunk at the conductor's port a live packet wins over a quiet neighbour.
-fn render_circuit(frame: &mut Frame<'_>, state: &StageState, traffic: &[baton::State]) {
+fn render_circuit(
+    frame: &mut Frame<'_>,
+    state: &StageState,
+    traffic: &[baton::State],
+    reduced_motion: bool,
+) {
     let Some(wiring) = circuit::plan(&state.pane_areas) else {
         return;
     };
@@ -3454,6 +3601,59 @@ fn render_circuit(frame: &mut Frame<'_>, state: &StageState, traffic: &[baton::S
         for (offset, cell) in route.iter().enumerate().skip(span.start).take(span.len) {
             let paint = circuit::paint(rail, shape(cell), offset - span.start, span.len, glyphs);
             paint_cell(frame, *cell, paint.symbol, theme.state(paint.slot));
+        }
+    }
+    render_flights(frame, state, &wiring, reduced_motion);
+}
+
+/// Draw every message in flight over the wiring.
+///
+/// Last, so a discrete event wins over the ambient pulse underneath it — a
+/// worker can be mid-output and receive a dispatch in the same frame, and the
+/// dispatch is the news.
+fn render_flights(
+    frame: &mut Frame<'_>,
+    state: &StageState,
+    wiring: &circuit::Circuit,
+    reduced_motion: bool,
+) {
+    let theme = state.theme;
+    let glyphs = state.glyphs;
+    for flight in &state.flights {
+        let Some(route) = state
+            .panes
+            .iter()
+            .skip(1)
+            .position(|pane| pane.id == flight.worker_id)
+            .and_then(|index| wiring.routes.get(index))
+        else {
+            continue;
+        };
+        match circuit::flight(reduced_motion, flight.raised.elapsed(), route.len()) {
+            circuit::Flight::Travelling(step) => {
+                let at = circuit::along(flight.direction, step, route.len());
+                if let Some(cell) = route.get(at) {
+                    paint_cell(
+                        frame,
+                        *cell,
+                        circuit::packet(flight.direction, glyphs),
+                        theme.state(flight.outcome.slot()),
+                    );
+                }
+            }
+            circuit::Flight::Landed { .. } if reduced_motion => {
+                // No travel: the whole connector holds solid in the message's
+                // colour for the same span the packet would have taken.
+                for cell in route {
+                    paint_cell(
+                        frame,
+                        *cell,
+                        baton::Cell::Solid.symbol(glyphs),
+                        theme.state(flight.outcome.slot()),
+                    );
+                }
+            }
+            circuit::Flight::Landed { .. } | circuit::Flight::Gone => {}
         }
     }
 }
@@ -3578,6 +3778,10 @@ fn pane_state(pane: &PaneSnapshot) -> (Glyph, Slot) {
 /// slid to.
 #[derive(Clone, Copy)]
 struct PaneChrome {
+    /// A landed message, and whether it is still in its reverse-video flash
+    /// frame. Transient: it precedes the steady `confirmed` badge rather than
+    /// replacing it, which is why they share one run of title.
+    emote: Option<(circuit::Outcome, bool)>,
     focus: bool,
     confirmed: bool,
     phase: usize,
@@ -3595,6 +3799,7 @@ fn render_pane(
         focus,
         confirmed,
         phase,
+        emote,
     } = chrome;
     let (trigger_spans, triggers) = conductor_triggers(pane);
     let badge = trigger_badge(&triggers);
@@ -3610,7 +3815,12 @@ fn render_pane(
             glyphs.get(state_glyph),
             pane.title.to_uppercase(),
             pane.state.as_deref().unwrap_or("LIVE"),
-            if confirmed {
+            // While a message is landing it owns this run of title; the steady
+            // badge underneath returns when the emote's lifetime runs out, so
+            // the two never stack.
+            if let Some((outcome, _)) = emote {
+                format!(" · {} {}", glyphs.get(outcome.glyph()), outcome.label())
+            } else if confirmed {
                 format!(" · {} TASK CONFIRMED", glyphs.get(Glyph::Confirmed))
             } else {
                 String::new()
@@ -3620,7 +3830,17 @@ fn render_pane(
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .title_style(if confirmed {
+        .title_style(if let Some((outcome, flashing)) = emote {
+            // The sheet's three beats, as far as a terminal has them: one
+            // reverse-video frame, then the glyph settled into a steady badge
+            // in the outcome's own slot.
+            let settled = theme.state(outcome.slot());
+            if flashing {
+                settled.add_modifier(Modifier::REVERSED)
+            } else {
+                settled
+            }
+        } else if confirmed {
             theme.state(Slot::Confirmed)
         } else if focus {
             theme.state(state_slot)
@@ -3728,15 +3948,15 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
 
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
-        AVATAR_FRAMES, Drag, HarnessDiscovery, HashMap, HomeData, HomeState, LeaderAction,
-        LeaderKey, MIN_PANE, NewSessionFlow, RawRouter, RepaintReasons, SINGLE_HARNESS_MESSAGE,
-        ScoreState, ShellState, ShellView, SingleHarnessPlan, StageState, Theme, ThemeName, baton,
-        cycle_theme, grab, render_help, render_home, render_score, render_shell, render_stage,
-        repaint_reasons, route_leader, route_raw_mouse, route_runs_key, score_mouse, stage_areas,
-        sync_stage_geometry,
+        AVATAR_FRAMES, Drag, HarnessDiscovery, HashMap, HomeData, HomeState, InFlight,
+        LeaderAction, LeaderKey, MIN_PANE, NewSessionFlow, RawRouter, RepaintReasons,
+        SINGLE_HARNESS_MESSAGE, ScoreState, ShellState, ShellView, SingleHarnessPlan, StageState,
+        Theme, ThemeName, baton, circuit, cycle_theme, grab, render_help, render_home,
+        render_score, render_shell, render_stage, repaint_reasons, route_leader, route_raw_mouse,
+        route_runs_key, score_mouse, stage_areas, sync_stage_geometry,
     };
     use crate::glyph::{Glyph, GlyphTier, Glyphs};
     use crate::theme::{ColorTier, Slot};
@@ -5732,6 +5952,261 @@ mod tests {
             .expect("parse mouse")
             .expect("forward mouse");
         assert_eq!(translated, b"\x1b[<0;2;2M");
+    }
+
+    /// A task whose history ends in `action`, assigned to `pane`.
+    fn task_with(id: &str, pane: &str, actions: &[&str]) -> TaskSummary {
+        TaskSummary {
+            id: id.to_owned(),
+            title: "brief".to_owned(),
+            status: "running".to_owned(),
+            assignee: Some("hermes".to_owned()),
+            assignee_run: Some(pane.to_owned()),
+            isolated: false,
+            isolation: None,
+            blocked: false,
+            tokens: None,
+            diff: None,
+            history: actions
+                .iter()
+                .map(|action| TaskHistorySummary {
+                    at: "2026-07-29T09:00:00Z".to_owned(),
+                    actor: "brain".to_owned(),
+                    action: (*action).to_owned(),
+                    to: None,
+                })
+                .collect(),
+        }
+    }
+
+    /// The whole STAGE buffer as text, at a size that routes.
+    fn stage_text(state: &mut StageState, reduced_motion: bool) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("stage terminal");
+        let traffic = state.traffic(reduced_motion);
+        let motion = (!reduced_motion).then_some(0);
+        terminal
+            .draw(|frame| render_stage(frame, state, motion, &traffic))
+            .expect("render stage");
+        rendered_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn a_dispatch_a_return_and_a_plain_output_tick_look_different() {
+        // AC5. `mark_output` used to treat a task event exactly as a stdout
+        // tick — "a task event is traffic on the filament too, so it pulses
+        // the baton exactly as a stdout tick does" — so a dispatch, a returned
+        // result and a worker merely printing produced identical frames.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        // 1. A plain stdout tick: the ambient three-cell ramp, nothing else.
+        pulse(&mut state, 1);
+        let output = stage_text(&mut state, false);
+        assert!(output.contains('▓'), "the ambient packet");
+        assert!(
+            !output.contains('▶') && !output.contains('◀'),
+            "output is not a message: {output:?}"
+        );
+        assert!(!output.contains("TASK DISPATCHED"));
+
+        // 2. A dispatch: outbound, one directional cell, and its own emote.
+        state.note_task_events(&[task_with("T1", "pane-1", &["created"])]);
+        state.note_task_events(&[task_with("T1", "pane-1", &["created", "dispatched"])]);
+        let dispatched = stage_text(&mut state, false);
+        assert!(dispatched.contains('▶'), "outbound packet: {dispatched:?}");
+        assert!(!dispatched.contains('◀'), "and not the inbound one");
+
+        // 3. A confirmed return: inbound, the other direction.
+        state.flights.clear();
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &["created", "dispatched", "delivery_confirmed"],
+        )]);
+        let returned = stage_text(&mut state, false);
+        assert!(returned.contains('◀'), "inbound packet: {returned:?}");
+        assert!(!returned.contains('▶'), "and not the outbound one");
+
+        // Three genuinely different frames, not three descriptions of one.
+        assert_ne!(output, dispatched);
+        assert_ne!(dispatched, returned);
+        assert_ne!(output, returned);
+    }
+
+    #[test]
+    fn the_emote_lands_on_the_receiving_pane_and_leaves_without_residue() {
+        // AC6. A dispatch lands on its worker; a return lands back on the
+        // conductor. Both go away, and neither leaves anything behind.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        let quiet = stage_text(&mut state, false);
+
+        let outbound = InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now(),
+        };
+        assert_eq!(
+            outbound
+                .destination(&state.panes)
+                .map(|pane| pane.id.clone()),
+            Some("pane-1".to_owned()),
+            "a dispatch arrives at its worker"
+        );
+        let inbound = InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Inbound,
+            outcome: circuit::Outcome::Confirmed,
+            raised: Instant::now(),
+        };
+        assert_eq!(
+            inbound
+                .destination(&state.panes)
+                .map(|pane| pane.id.clone()),
+            Some("pane-0".to_owned()),
+            "a return arrives back at the conductor"
+        );
+
+        // Landed: the emote is on screen, in the sheet's existing wording.
+        let at = |ago: Duration| InFlight {
+            worker_id: outbound.worker_id.clone(),
+            direction: outbound.direction,
+            outcome: outbound.outcome,
+            raised: Instant::now() - ago,
+        };
+        state.flights = vec![at(Duration::from_millis(600))];
+        let landed = stage_text(&mut state, false);
+        assert!(
+            landed.contains("TASK DISPATCHED"),
+            "the emote stamps on the receiving pane: {landed:?}"
+        );
+
+        // Past its stated lifetime: gone, and the buffer is what it was.
+        state.flights = vec![at(circuit::EMOTE_HOLD + Duration::from_secs(2))];
+        state.retire_flights(false);
+        assert!(state.flights.is_empty(), "a spent flight is retired");
+        assert_eq!(
+            stage_text(&mut state, false),
+            quiet,
+            "and leaves no residue: the pane is exactly as it was before"
+        );
+    }
+
+    #[test]
+    fn a_landed_emote_is_never_replayed_by_re_reading_the_board() {
+        // The board is re-read on every snapshot, so a naive "the last history
+        // entry is `done`" test would re-raise the same packet forever. Only
+        // entries that are new since the last look count — and a first sighting
+        // is history, not news.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        let finished = [task_with(
+            "T1",
+            "pane-1",
+            &["created", "dispatched", "done"],
+        )];
+
+        state.note_task_events(&finished);
+        assert!(
+            state.flights.is_empty(),
+            "attaching to a finished board replays nothing"
+        );
+        for _ in 0..5 {
+            state.note_task_events(&finished);
+        }
+        assert!(
+            state.flights.is_empty(),
+            "and re-reading it raises nothing either"
+        );
+
+        // A genuinely new entry does raise exactly one.
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &["created", "dispatched", "done", "delivery_confirmed"],
+        )]);
+        assert_eq!(state.flights.len(), 1);
+    }
+
+    #[test]
+    fn reduced_motion_lands_the_message_without_ever_travelling() {
+        // AC7. Under reduced motion the packet does not cross: the connector
+        // holds solid in the message's colour and the emote appears already
+        // settled. Same information, no travel anywhere on the rail.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        state.flights = vec![InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now(),
+        }];
+
+        let still = stage_text(&mut state, true);
+        assert!(
+            !still.contains('▶') && !still.contains('◀'),
+            "no packet is drawn under reduced motion: {still:?}"
+        );
+        assert!(
+            still.contains("━━━"),
+            "the connector holds solid in the message's colour instead"
+        );
+        assert!(
+            still.contains("TASK DISPATCHED"),
+            "and the emote is there from the first frame, already settled"
+        );
+        // Two different clocks paint the same frame: nothing can animate.
+        state.flights = vec![InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now() - Duration::from_millis(400),
+        }];
+        assert_eq!(stage_text(&mut state, true), still);
+    }
+
+    #[test]
+    fn the_message_vocabulary_survives_no_color_and_the_ascii_column() {
+        // AC7 again, on the two degradation axes. Direction is carried by the
+        // packet's own glyph and outcome by the emote's word and glyph, so
+        // neither depends on colour; and both columns keep the two directions
+        // distinct from each other and from the ambient packet.
+        for glyphs in [GLYPHS, Glyphs::new(GlyphTier::Ascii)] {
+            let out = circuit::packet(circuit::Direction::Outbound, glyphs);
+            let back = circuit::packet(circuit::Direction::Inbound, glyphs);
+            assert_ne!(out, back, "the two directions never share a symbol");
+            assert_eq!(out.chars().count(), 1, "one cell, against the ramp's three");
+            assert_eq!(back.chars().count(), 1);
+            for frame in 0..baton::FRAMES {
+                for cell in baton::cells(baton::State::Sweeping(frame)) {
+                    assert_ne!(cell.symbol(glyphs), out, "{cell:?} collides with outbound");
+                    assert_ne!(cell.symbol(glyphs), back, "{cell:?} collides with inbound");
+                }
+            }
+        }
+
+        // Monochrome: every outcome still readable, by glyph and by word.
+        let mono = Theme::new(ThemeName::Nocturne, ColorTier::Monochrome);
+        let mut state = StageState::new(panes(), mono, GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        for (outcome, want) in [
+            (circuit::Outcome::Dispatched, "TASK DISPATCHED"),
+            (circuit::Outcome::Confirmed, "TASK CONFIRMED"),
+            (circuit::Outcome::Failed, "TASK FAILED"),
+        ] {
+            state.flights = vec![InFlight {
+                worker_id: "pane-1".to_owned(),
+                direction: circuit::Direction::Outbound,
+                outcome,
+                raised: Instant::now() - Duration::from_millis(600),
+            }];
+            let text = stage_text(&mut state, false);
+            assert!(text.contains(want), "{outcome:?} with colour removed");
+            assert!(
+                text.contains(GLYPHS.get(outcome.glyph())),
+                "{outcome:?} pairs its word with a glyph"
+            );
+        }
     }
 
     /// Feed one SGR mouse sequence to STAGE, asserting the client consumed it.

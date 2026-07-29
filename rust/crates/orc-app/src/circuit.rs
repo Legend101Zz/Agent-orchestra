@@ -18,11 +18,12 @@
 //! frame instead of racing one.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use ratatui::layout::Rect;
 
 use crate::baton;
-use crate::glyph::{GlyphTier, Glyphs};
+use crate::glyph::{Glyph, GlyphTier, Glyphs};
 use crate::theme::Slot;
 
 /// Columns of gutter below which elbow routing has nowhere to go and the
@@ -385,6 +386,152 @@ pub const fn rail_span(route: usize) -> Span {
             start: 0,
             len: route,
         }
+    }
+}
+
+/// Milliseconds each in-flight frame holds. Deliberately faster than the
+/// ambient sweep's 110 ms: a dispatch should read as a snap, not as flow.
+pub const FLIGHT_FRAME_MS: u64 = 60;
+
+/// Cells the in-flight packet advances per frame.
+pub const FLIGHT_STEP: usize = 2;
+
+/// How long the landing emote holds once the packet arrives.
+pub const EMOTE_HOLD: Duration = Duration::from_millis(1_200);
+
+/// The sheet's first beat: the row flashes reverse-video for one frame before
+/// the glyph settles.
+pub const EMOTE_FLASH: Duration = Duration::from_millis(90);
+
+/// Which way a discrete message is travelling.
+///
+/// The ambient baton is one direction only — that rule is the baton's and is
+/// unchanged. A message is a separate vocabulary that carries its direction in
+/// its own glyph; see "Message in flight" in the design sheet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Direction {
+    /// Conductor to worker: a dispatch leaving.
+    Outbound,
+    /// Worker to conductor: a result coming back.
+    Inbound,
+}
+
+/// What a message turned out to be.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Outcome {
+    /// A brief has been handed to a worker.
+    Dispatched,
+    /// Delivery was confirmed, or the task finished.
+    Confirmed,
+    /// Delivery failed.
+    Failed,
+}
+
+impl Outcome {
+    /// The slot that colours this message. All three already exist — no new
+    /// slot, which would reorder three palettes and every golden's legend.
+    #[must_use]
+    pub const fn slot(self) -> Slot {
+        match self {
+            Self::Dispatched => Slot::Brain,
+            Self::Confirmed => Slot::Confirmed,
+            Self::Failed => Slot::Failed,
+        }
+    }
+
+    /// The glyph the landing emote stamps, from the existing register.
+    #[must_use]
+    pub const fn glyph(self) -> Glyph {
+        match self {
+            Self::Dispatched => Glyph::InProgress,
+            Self::Confirmed => Glyph::Confirmed,
+            Self::Failed => Glyph::Failed,
+        }
+    }
+
+    /// The emote's label. Extends the sheet's `✓ TASK CONFIRMED` wording
+    /// rather than starting a second vocabulary.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dispatched => "TASK DISPATCHED",
+            Self::Confirmed => "TASK CONFIRMED",
+            Self::Failed => "TASK FAILED",
+        }
+    }
+}
+
+/// Where a message has got to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Flight {
+    /// Still crossing: the index along the route, in traversal order.
+    Travelling(usize),
+    /// Arrived; the emote is showing on the destination pane. Carries how
+    /// long it has been showing, which is what separates the sheet's
+    /// reverse-video flash frame from the settled badge after it.
+    Landed {
+        /// How long the emote has been showing.
+        since: Duration,
+    },
+    /// Finished. The emote's lifetime has run out and it leaves no residue.
+    Gone,
+}
+
+/// Resolve a message's progress from the clock the caller owns.
+///
+/// Under reduced motion there is no travel at all: the message is `Landed`
+/// from the first frame and simply holds, so the connector goes solid in its
+/// colour and the emote appears already settled. Same information, no packet
+/// anywhere on the rail.
+#[must_use]
+pub fn flight(reduced_motion: bool, since_raised: Duration, len: usize) -> Flight {
+    if reduced_motion {
+        return if since_raised < EMOTE_HOLD {
+            Flight::Landed {
+                since: since_raised,
+            }
+        } else {
+            Flight::Gone
+        };
+    }
+    let step = (since_raised.as_millis() / u128::from(FLIGHT_FRAME_MS)) as usize * FLIGHT_STEP;
+    if step < len {
+        return Flight::Travelling(step);
+    }
+    let travel =
+        Duration::from_millis((len.div_ceil(FLIGHT_STEP) as u64).saturating_mul(FLIGHT_FRAME_MS));
+    if since_raised < travel.saturating_add(EMOTE_HOLD) {
+        Flight::Landed {
+            since: since_raised.saturating_sub(travel),
+        }
+    } else {
+        Flight::Gone
+    }
+}
+
+/// The packet's own symbol, which is what carries its direction.
+///
+/// One cell against the ambient pulse's three, so the two stay tellable apart
+/// with colour removed entirely.
+#[must_use]
+pub const fn packet(direction: Direction, glyphs: Glyphs) -> &'static str {
+    match (direction, glyphs.tier()) {
+        (Direction::Outbound, GlyphTier::Unicode) => "▶",
+        (Direction::Outbound, GlyphTier::Ascii) => ">",
+        (Direction::Inbound, GlyphTier::Unicode) => "◀",
+        (Direction::Inbound, GlyphTier::Ascii) => "<",
+    }
+}
+
+/// Map a travel step onto a route cell.
+///
+/// A route is always ordered conductor-end first, so an inbound message walks
+/// it backwards rather than needing a second route.
+#[must_use]
+pub const fn along(direction: Direction, step: usize, len: usize) -> usize {
+    match direction {
+        Direction::Outbound => step,
+        Direction::Inbound => len.saturating_sub(1).saturating_sub(step),
     }
 }
 

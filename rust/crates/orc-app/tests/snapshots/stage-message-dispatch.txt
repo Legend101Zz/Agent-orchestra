@@ -1,0 +1,76 @@
+STAGE nocturne truecolor outbound dispatch 100x30
+--- text ---
+                                                                                                    
+                                                                     ╭ ● PI-M3-0  LIVE ──────────╮  
+                                                                     │pi-m3-0 ready              │▐ 
+ ╭ ◆ CODEX  LIVE ──────────────────────────────────╮                 │                           │▐ 
+ │codex ready                                      │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐◆ ····▶······· ●│                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ │                                                 │▐                │                           │▐ 
+ ╰─────────────────────────────────────────────────╯▐                │                           │▐ 
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐                │                           │▐ 
+                                                                     │                           │▐ 
+                                                                     │                           │▐ 
+                                                                     ╰───────────────────────────╯▐ 
+                                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ typing goes to the pane — ctrl-g then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q 
+--- styles ---
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afgggggggggggggggfffffffffffffffffffffffffffffffffffaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfehaiiiijiiiiiiiakbdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afffffffffffffffffffffffffffffffffffffffffffffffffffeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+aaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbea
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll
+--- legend ---
+a fg=reset bg=#0a0c11 mod=-
+b fg=#262c3a bg=#10131b mod=-
+c fg=#c4cad6 bg=#10131b mod=bold
+d fg=#c4cad6 bg=#10131b mod=-
+e fg=#262c3a bg=#0a0c11 mod=dim
+f fg=#39425a bg=#10131b mod=-
+g fg=#5ad1c8 bg=#10131b mod=bold
+h fg=#5ad1c8 bg=#0a0c11 mod=bold
+i fg=#454c60 bg=#0a0c11 mod=dim
+j fg=#5ad1c8 bg=#0a0c11 mod=bold+dim
+k fg=#8ea2ff bg=#0a0c11 mod=bold
+l fg=#727b8f bg=#0a0c11 mod=dim
