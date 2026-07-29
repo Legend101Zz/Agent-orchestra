@@ -30,10 +30,37 @@ ship-log entries are part of finishing an issue.*
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
-| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ⬜ | — *(after #13)* |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | 👀 | `issue-37-theme-persistence` |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
+
+**#37 pushed (2026-07-29, `issue-37-theme-persistence`) — you can change the
+theme from inside the app, and it stays changed.** Press your leader chord then
+`t` — `ctrl-g t` by default — on any of the four screens, and the whole app
+moves to the next theme together: nocturne → ember → phosphor → back. That was
+the missing half. The other half is that it *sticks*: the client asks the
+daemon to write the choice down, so the next launch opens the same way. The
+client still never touches `~/.orchestra` itself — that rule is the reason this
+needed a new protocol message rather than a one-line file write.
+
+It also fixes the thing that made `pio config set theme nocturne` feel broken:
+the theme was written in two different files, and the command wrote the one the
+app doesn't read. `harnesses.json` is now the record that counts, `config.json`
+keeps a copy that is refreshed from it, and every way of asking — the command,
+the file, the screen — answers the same thing. Pressing `t` on RUNS no longer
+prints `error: unrecognized subcommand 'config'` at you either; that was the
+ledger trying to shell out to a binary that has no such command.
+
+Two smaller things came with it. The `?` help now tells you how to change the
+theme instead of pointing you at a JSON file. And the standalone `pio runs`
+ledger, which only ever knew about two themes, now knows nocturne is a theme at
+all — asking it for nocturne used to silently hand back ember.
+
+What this does **not** do: no new themes (still the three from the design
+sheet), no per-session or per-pane override, and nothing about how the app
+looks — that was #13. #38 (STAGE as a live circuit) is untouched and still
+next.
 
 **#13 pushed (2026-07-29, `issue-13-visual-identity-v1`) — pi-orchestra has a
 real look now, and it survives being stripped of colour.** The whole app draws

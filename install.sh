@@ -95,8 +95,12 @@ esac
 echo "==> private orchestra data directory"
 mkdir -p "$HOME/.orchestra/runs" "$HOME/.orchestra/sessions"
 chmod 700 "$HOME/.orchestra"
+# No `theme` here: harnesses.json's app.theme is the authoritative record
+# (issue #37), and config.json's copy is derived from it on the first write.
+# Seeding a second, disagreeing value is what made `pio config set theme`
+# look like a no-op.
 if [ ! -f "$HOME/.orchestra/config.json" ]; then
-  printf '%s\n' '{"warn_pct":25,"block_pct":10,"cache_ttl_sec":60,"max_parallel_workers":3,"idle_timeout_sec":300,"theme":"ember"}' > "$HOME/.orchestra/config.json"
+  printf '%s\n' '{"warn_pct":25,"block_pct":10,"cache_ttl_sec":60,"max_parallel_workers":3,"idle_timeout_sec":300}' > "$HOME/.orchestra/config.json"
 fi
 
 echo "==> ~/.zshrc marked block"

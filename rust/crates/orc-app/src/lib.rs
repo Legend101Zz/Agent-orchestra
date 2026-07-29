@@ -301,6 +301,21 @@ impl BenchClient {
         }
     }
 
+    /// Persist the chosen theme through the daemon/core writer.
+    ///
+    /// This crate never writes `~/.orchestra` itself; the daemon owns the
+    /// registry. The reply carries the name that was actually written, which
+    /// is the flagship when the daemon did not recognise the request.
+    pub fn set_theme(&mut self, theme: String) -> Result<String> {
+        match self.request(&ClientRequest::SetTheme { theme })? {
+            ServerResponse::ThemeSet { theme } => Ok(theme),
+            ServerResponse::Error { message } => Err(AppError::Daemon(message)),
+            response => Err(AppError::Daemon(format!(
+                "unexpected theme response: {response:?}"
+            ))),
+        }
+    }
+
     /// Fetch SCORE cards through the daemon-owned task command path.
     pub fn task_board(&mut self, session_id: String) -> Result<Vec<TaskSummary>> {
         match self.request(&ClientRequest::TaskBoard { session_id })? {
@@ -632,6 +647,7 @@ enum LeaderAction {
     Score,
     Views,
     Help,
+    Theme,
 }
 
 struct RawRouter {
@@ -675,6 +691,7 @@ impl RawRouter {
                     b'b' => Some(LeaderAction::Score),
                     b'v' => Some(LeaderAction::Views),
                     b'?' => Some(LeaderAction::Help),
+                    b't' => Some(LeaderAction::Theme),
                     _ => {
                         forwarded.push(byte);
                         None
@@ -719,8 +736,6 @@ struct ScoreState {
     message: String,
     dragging: Option<String>,
     width: u16,
-    /// A leader press is pending its follow-up key.
-    leader: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -810,8 +825,15 @@ struct ShellState {
     reduced_motion: bool,
     /// Wall-clock origin for the ambient HOME animation.
     epoch: Instant,
-    /// Parsed leader chord shared by STAGE and SCORE.
+    /// Parsed leader chord, shared by every screen.
     leader: LeaderKey,
+    /// A leader press is pending its follow-up key on HOME, SCORE, or RUNS.
+    ///
+    /// STAGE keeps its own pending bit inside [`RawRouter`], which has to work
+    /// a byte at a time so a chord can be re-sent literally and a bracketed
+    /// paste can suppress it; the other three screens consume whole keys and
+    /// share this one flag rather than growing a copy each.
+    leader_pending: bool,
     /// Session filter shared with the screen-watch thread so snapshots stay
     /// bounded to the attached session.
     watch_session: Arc<Mutex<Option<String>>>,
@@ -1611,7 +1633,7 @@ fn render_help(frame: &mut Frame<'_>, theme: Theme, leader: &str) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n  Change the leader in ~/.orchestra/harnesses.json (app.leader_key).\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
+            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n\n  THEME\n  {leader} t cycles nocturne, ember, phosphor on every screen, and\n  asks the daemon to remember it: the next launch opens the same.\n  pio config set theme <name> does it from a shell; pio config get\n  theme reports what is stored. No file to edit.\n  Set the leader with app.leader_key in ~/.orchestra/harnesses.json.\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
         ))
         .style(Style::default().fg(theme.fg()).bg(theme.overlay())),
         area,
@@ -1716,6 +1738,22 @@ fn render_runs_reports(
     );
 }
 
+/// Pick the theme a launch opens in.
+///
+/// The daemon's configured theme wins — that is where `<leader> t` and `pio
+/// config set theme` both land, so it is what makes a choice survive a
+/// relaunch. The CLI flag is the fallback for a daemon that has no opinion
+/// yet, and an unrecognised name resolves to the flagship rather than
+/// refusing to start. One theme for every screen, so STAGE and HOME can never
+/// disagree about which palette is live.
+fn resolve_initial_theme(configured: &str, fallback: ThemeName) -> ThemeName {
+    if configured.trim().is_empty() {
+        fallback
+    } else {
+        ThemeName::named(configured.trim())
+    }
+}
+
 /// Run the interactive HOME/STAGE shell until the leader-key detach command.
 pub fn run(socket: PathBuf, theme: ThemeName) -> Result<()> {
     run_initial(socket, theme, None, false)
@@ -1730,14 +1768,7 @@ pub fn run_initial(
 ) -> Result<()> {
     let mut commands = BenchClient::connect(&socket)?;
     let home = commands.home()?;
-    // The daemon's configured theme wins; the CLI flag is the fallback for a
-    // daemon that has no opinion yet. One theme for every screen, so STAGE and
-    // HOME can never disagree about which palette is live.
-    let selected_theme = if home.theme.trim().is_empty() {
-        theme
-    } else {
-        ThemeName::named(&home.theme)
-    };
+    let selected_theme = resolve_initial_theme(&home.theme, theme);
     // Probed, never assumed: what this terminal can actually render.
     let resolved = Theme::new(selected_theme, ColorTier::detect());
     let glyphs = Glyphs::new(GlyphTier::detect());
@@ -1770,6 +1801,7 @@ pub fn run_initial(
         reduced_motion,
         epoch: Instant::now(),
         leader,
+        leader_pending: false,
         watch_session: Arc::new(Mutex::new(None)),
     };
     if let Some(session_id) = initial_session {
@@ -1855,7 +1887,6 @@ fn attach_stage(
         message: String::new(),
         dragging: None,
         width: 1,
-        leader: false,
     });
     shell.view = ShellView::Stage;
     Ok(())
@@ -2197,6 +2228,9 @@ fn handle_raw_event(
         }
         return Ok(false);
     }
+    if let Some(quit) = route_leader(bytes, Some(commands), shell) {
+        return Ok(quit);
+    }
     // Bare `?` and `V` are view keys only where no raw input is expected:
     // STAGE forwards every unprefixed byte to the focused pane, the launch
     // flow needs literal `V` and `?` for paths and titles, and an active
@@ -2227,7 +2261,7 @@ fn handle_raw_event(
     match shell.view {
         ShellView::Runs => {
             for key in raw_home_keys(bytes) {
-                if route_runs_key(shell, key) {
+                if route_runs_key(shell, key, Some(commands)) {
                     return Ok(true);
                 }
             }
@@ -2245,22 +2279,6 @@ fn handle_raw_event(
             let Some(score) = shell.score.as_mut() else {
                 return Ok(false);
             };
-            if score.leader {
-                score.leader = false;
-                match bytes {
-                    b"h" => shell.view = ShellView::Home,
-                    b"v" => shell.view = ShellView::Runs,
-                    b"b" => {}
-                    b"?" => shell.help = true,
-                    b"q" => return Ok(true),
-                    _ => {}
-                }
-                return Ok(false);
-            }
-            if bytes == [shell.leader.byte] {
-                score.leader = true;
-                return Ok(false);
-            }
             if bytes == b"g" {
                 if let (Some(stage), Some(task)) =
                     (shell.stage.as_mut(), score.tasks.get(score.selected))
@@ -2370,7 +2388,18 @@ fn handle_raw_event(
             }
             let (forwarded, actions) = stage.raw_router.route(bytes);
             for action in actions {
+                // The theme is shell-wide state — every screen's copy has to
+                // move together — so it takes `shell` rather than the
+                // STAGE-local borrow the other actions use.
+                if action == LeaderAction::Theme {
+                    cycle_theme(shell, Some(commands));
+                    continue;
+                }
+                let Some(stage) = shell.stage.as_mut() else {
+                    continue;
+                };
                 match action {
+                    LeaderAction::Theme => {}
                     LeaderAction::Quit => return Ok(true),
                     LeaderAction::Next => {
                         if !stage.panes.is_empty() {
@@ -2419,12 +2448,118 @@ fn handle_raw_event(
                     LeaderAction::Help => shell.help = true,
                 }
             }
-            if !forwarded.is_empty() {
+            if !forwarded.is_empty()
+                && let Some(stage) = shell.stage.as_ref()
+            {
                 send_focused(commands, stage, forwarded)?;
             }
             Ok(false)
         }
     }
+}
+
+/// Apply one theme to every screen at once.
+///
+/// The live theme is held in three places — the shell (HOME, SCORE, help),
+/// the embedded RUNS ledger, and STAGE's own `StageState` — so a switcher that
+/// updates fewer than all three leaves a screen rendering the previous
+/// palette. RUNS borrows this crate's map via [`Theme::runs_theme`] rather
+/// than `orc-tui`'s own set, so the ledger can never fall back to a colour the
+/// seventeen-slot map does not contain.
+fn apply_theme(shell: &mut ShellState, name: ThemeName) {
+    shell.theme = Theme::new(name, shell.theme.tier());
+    shell.runs.theme = shell.theme.runs_theme();
+    if let Some(stage) = shell.stage.as_mut() {
+        stage.theme = shell.theme;
+    }
+}
+
+/// Advance the theme one step and ask the daemon to remember it.
+///
+/// The switch itself is local and always succeeds; only the *persistence*
+/// needs the daemon, so a failed round trip degrades to a session-only change
+/// with the reason on the message line instead of refusing to switch.
+fn cycle_theme(shell: &mut ShellState, commands: Option<&mut BenchClient>) {
+    let next = shell.theme.name().next();
+    apply_theme(shell, next);
+    let Some(commands) = commands else {
+        return;
+    };
+    let message = match commands.set_theme(next.as_str().to_owned()) {
+        Ok(_) => String::new(),
+        Err(error) => format!("theme not saved: {error}"),
+    };
+    set_message(shell, message);
+}
+
+/// Put one recoverable message on whichever screen the user is looking at.
+fn set_message(shell: &mut ShellState, message: String) {
+    match shell.view {
+        ShellView::Home => shell.home.message = message,
+        ShellView::Stage => {
+            if let Some(stage) = shell.stage.as_mut() {
+                stage.message = message;
+            }
+        }
+        ShellView::Score => {
+            if let Some(score) = shell.score.as_mut() {
+                score.message = message;
+            }
+        }
+        ShellView::Runs => shell.runs.message = message,
+    }
+}
+
+/// Arm and consume the leader chord on HOME, SCORE, and RUNS.
+///
+/// Returns `None` when the bytes are not part of a chord and belong to the
+/// screen underneath, or `Some(quit)` when the chord swallowed them. STAGE is
+/// excluded: it arms its own inside [`RawRouter`], which works a byte at a
+/// time so the chord can be re-sent literally and suppressed inside a
+/// bracketed paste.
+fn route_leader(
+    bytes: &[u8],
+    commands: Option<&mut BenchClient>,
+    shell: &mut ShellState,
+) -> Option<bool> {
+    if shell.view == ShellView::Stage {
+        return None;
+    }
+    if shell.leader_pending {
+        shell.leader_pending = false;
+        return Some(handle_leader_chord(bytes, commands, shell));
+    }
+    if bytes == [shell.leader.byte] {
+        shell.leader_pending = true;
+        return Some(false);
+    }
+    None
+}
+
+/// Act on the key that followed the leader chord on HOME, SCORE, or RUNS.
+///
+/// One table for all three: the chord used to exist only on STAGE and SCORE,
+/// which left HOME — the launch screen, and the first thing a new user sees —
+/// with no way to reach it. Returns true when the client should quit.
+fn handle_leader_chord(
+    bytes: &[u8],
+    commands: Option<&mut BenchClient>,
+    shell: &mut ShellState,
+) -> bool {
+    match bytes {
+        b"q" => return true,
+        b"h" => shell.view = ShellView::Home,
+        b"b" => {
+            if shell.score.is_some() {
+                shell.view = ShellView::Score;
+            }
+        }
+        b"v" => shell.view = ShellView::Runs,
+        b"?" => shell.help = true,
+        b"t" => cycle_theme(shell, commands),
+        _ => {}
+    }
+    false
 }
 
 /// Route one decoded key into the embedded RUNS control plane.
@@ -2433,11 +2568,24 @@ fn handle_raw_event(
 /// only at the App's top-level dashboard while no text input is active;
 /// deeper views and active inputs receive every key, so the embedded
 /// legends describe what actually happens.
-fn route_runs_key(shell: &mut ShellState, key: KeyEvent) -> bool {
+fn route_runs_key(
+    shell: &mut ShellState,
+    key: KeyEvent,
+    commands: Option<&mut BenchClient>,
+) -> bool {
     let busy = shell.runs.input_mode != orc_tui::InputMode::None || shell.runs.help;
     if !busy {
         if key.code == KeyCode::Char('q') {
             return true;
+        }
+        // `t` is the theme switcher on every screen, so it takes the shell's
+        // path here. Letting it reach `orc_tui::App::cycle_theme` would swap
+        // in that crate's own two-theme set behind the map's back and shell
+        // out to `current_exe()` — which in the embed is `pi-orchestra`, a
+        // binary with no `config` subcommand.
+        if key.code == KeyCode::Char('t') {
+            cycle_theme(shell, commands);
+            return false;
         }
         if matches!(
             key.code,
@@ -3244,10 +3392,11 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::{
-        AVATAR_FRAMES, HarnessDiscovery, HomeData, HomeState, LeaderAction, LeaderKey,
+        AVATAR_FRAMES, HarnessDiscovery, HashMap, HomeData, HomeState, LeaderAction, LeaderKey,
         NewSessionFlow, RawRouter, SINGLE_HARNESS_MESSAGE, ScoreState, ShellState, ShellView,
-        SingleHarnessPlan, StageState, Theme, ThemeName, baton, render_help, render_home,
-        render_score, render_shell, render_stage, route_raw_mouse, route_runs_key, score_mouse,
+        SingleHarnessPlan, StageState, Theme, ThemeName, baton, cycle_theme, render_help,
+        render_home, render_score, render_shell, render_stage, route_leader, route_raw_mouse,
+        route_runs_key, score_mouse,
     };
     use crate::glyph::{Glyph, GlyphTier, Glyphs};
     use crate::theme::{ColorTier, Slot};
@@ -3324,11 +3473,10 @@ mod tests {
     }
 
     fn runs_shell(theme_name: ThemeName) -> ShellState {
-        let theme = if theme_name == ThemeName::Phosphor {
-            orc_tui::PHOSPHOR
-        } else {
-            orc_tui::EMBER
-        };
+        // The embed borrows this crate's map, exactly as `run_initial` wires
+        // it, so a fixture can never assert against a palette the real client
+        // would not render.
+        let theme = Theme::from(theme_name).runs_theme();
         ShellState {
             view: ShellView::Runs,
             home: HomeState {
@@ -3364,6 +3512,7 @@ mod tests {
             reduced_motion: false,
             epoch: std::time::Instant::now(),
             leader: LeaderKey::parse("ctrl-g"),
+            leader_pending: false,
             watch_session: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -3427,45 +3576,45 @@ mod tests {
 
         // j/k selection routes into the App.
         let before = shell.runs.selected_row;
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j')), None));
         assert_ne!(shell.runs.selected_row, before, "j must move selection");
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('k'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('k')), None));
         assert_eq!(shell.runs.selected_row, before, "k must move back");
 
         // enter expands the selected session group.
         assert!(shell.runs.expanded.is_empty());
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter), None));
         assert!(!shell.runs.expanded.is_empty(), "enter must expand");
 
         // `/` begins search; literal V and Esc belong to the input.
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('/'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('/')), None));
         assert_eq!(shell.runs.input_mode, orc_tui::InputMode::Search);
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('V'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('V')), None));
         assert_eq!(shell.runs.input, "V", "V must type into the input");
         assert_eq!(shell.view, ShellView::Runs);
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc), None));
         assert_eq!(shell.runs.input_mode, orc_tui::InputMode::None);
         assert_eq!(shell.view, ShellView::Runs, "Esc must only cancel input");
 
         // Esc and h at the dashboard are documented exits to HOME.
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc), None));
         assert_eq!(shell.view, ShellView::Home);
         shell.view = ShellView::Runs;
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('h'))));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('h')), None));
         assert_eq!(shell.view, ShellView::Home);
 
         // q quits the client from the embed.
         shell.view = ShellView::Runs;
-        assert!(route_runs_key(&mut shell, key(KeyCode::Char('q'))));
+        assert!(route_runs_key(&mut shell, key(KeyCode::Char('q')), None));
     }
 
     #[test]
     fn embedded_runs_session_view_keeps_esc_for_the_app_and_updates_the_legend() {
         let mut shell = runs_shell(ThemeName::Ember);
         // Expand the session group, select a child run, open it.
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j'))));
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter), None));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('j')), None));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Enter), None));
         assert_eq!(shell.runs.view, orc_tui::View::Session);
 
         // The legend now describes the session workspace, not the dashboard.
@@ -3486,13 +3635,241 @@ mod tests {
 
         // tab cycles detail tabs inside the App.
         let tab_before = shell.runs.detail_tab;
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Tab)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Tab), None));
         assert_ne!(shell.runs.detail_tab, tab_before);
 
         // Esc returns to the App dashboard, not to HOME.
-        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc)));
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Esc), None));
         assert_eq!(shell.runs.view, orc_tui::View::Dashboard);
         assert_eq!(shell.view, ShellView::Runs);
+    }
+
+    /// A shell with all four screens live, in one theme, exactly as
+    /// `run_initial` and `attach_stage` wire them.
+    fn four_screen_shell(theme_name: ThemeName) -> ShellState {
+        let mut shell = runs_shell(theme_name);
+        let theme = Theme::from(theme_name);
+        let mut stage = StageState::new(panes(), theme, GLYPHS);
+        stage.session_id = Some("score-session".to_owned());
+        shell.stage = Some(stage);
+        shell.score = Some(ScoreState {
+            session_id: "score-session".to_owned(),
+            tasks: vec![TaskSummary {
+                id: "T0001".to_owned(),
+                title: "a brief".to_owned(),
+                status: "backlog".to_owned(),
+                assignee: None,
+                assignee_run: None,
+                isolated: false,
+                isolation: None,
+                blocked: false,
+                tokens: None,
+                diff: None,
+                history: Vec::new(),
+            }],
+            reports: HashMap::new(),
+            selected: 0,
+            message: String::new(),
+            dragging: None,
+            width: 120,
+        });
+        shell
+    }
+
+    /// Every copy of the live theme, so a switcher that misses one is caught
+    /// rather than merely looking right on whichever screen the test drew.
+    fn theme_copies(shell: &ShellState) -> (ThemeName, orc_tui::Theme, Option<ThemeName>) {
+        (
+            shell.theme.name(),
+            shell.runs.theme,
+            shell.stage.as_ref().map(|stage| stage.theme.name()),
+        )
+    }
+
+    #[test]
+    fn leader_t_cycles_every_screen_together_from_every_screen() {
+        for view in [
+            ShellView::Home,
+            ShellView::Stage,
+            ShellView::Score,
+            ShellView::Runs,
+        ] {
+            let mut shell = four_screen_shell(ThemeName::Nocturne);
+            shell.view = view;
+            // Nocturne, ember, phosphor, and back to the flagship.
+            for expected in [
+                ThemeName::Ember,
+                ThemeName::Phosphor,
+                ThemeName::Nocturne,
+                ThemeName::Ember,
+            ] {
+                // The chord detector differs by screen — STAGE reads raw
+                // bytes so a chord can be re-sent literally — but both must
+                // reach the one switcher.
+                if view == ShellView::Stage {
+                    let stage = shell.stage.as_mut().expect("stage fixture");
+                    let (forwarded, actions) = stage.raw_router.route(b"\x07t");
+                    assert!(forwarded.is_empty(), "{view:?}: the chord must not leak");
+                    assert_eq!(actions, vec![LeaderAction::Theme], "{view:?}");
+                    cycle_theme(&mut shell, None);
+                } else {
+                    assert_eq!(
+                        route_leader(&[shell.leader.byte], None, &mut shell),
+                        Some(false),
+                        "{view:?}: the leader must arm here"
+                    );
+                    assert!(shell.leader_pending, "{view:?}");
+                    assert_eq!(
+                        route_leader(b"t", None, &mut shell),
+                        Some(false),
+                        "{view:?}: t must be consumed as a command"
+                    );
+                }
+
+                let (shell_theme, runs_theme, stage_theme) = theme_copies(&shell);
+                assert_eq!(shell_theme, expected, "{view:?}: HOME/SCORE/help palette");
+                assert_eq!(stage_theme, Some(expected), "{view:?}: STAGE holds its own");
+                assert_eq!(
+                    runs_theme,
+                    Theme::from(expected).runs_theme(),
+                    "{view:?}: RUNS must borrow the map"
+                );
+                // Never the ledger's own two-theme set: those colours are in
+                // no row of the seventeen-slot map.
+                assert_ne!(runs_theme, orc_tui::EMBER, "{view:?}");
+                assert_ne!(runs_theme, orc_tui::PHOSPHOR, "{view:?}");
+                // The switch is local and always succeeds; nothing shells out.
+                for message in [
+                    shell.home.message.as_str(),
+                    shell.runs.message.as_str(),
+                    shell.stage.as_ref().map_or("", |stage| &stage.message),
+                    shell.score.as_ref().map_or("", |score| &score.message),
+                ] {
+                    assert!(
+                        !message.contains("unrecognized subcommand"),
+                        "{view:?}: {message:?} reached a message line"
+                    );
+                    assert!(
+                        message.is_empty(),
+                        "{view:?}: unexpected message {message:?}"
+                    );
+                }
+                // The chord never changes which screen you are on.
+                assert_eq!(shell.view, view, "{view:?}: theme must not navigate");
+            }
+        }
+    }
+
+    #[test]
+    fn bare_t_in_runs_takes_the_shell_path_not_the_ledgers_own_switcher() {
+        let mut shell = four_screen_shell(ThemeName::Nocturne);
+        shell.view = ShellView::Runs;
+        assert!(!route_runs_key(&mut shell, key(KeyCode::Char('t')), None));
+
+        assert_eq!(shell.theme.name(), ThemeName::Ember, "the map advanced");
+        assert_eq!(shell.runs.theme, Theme::from(ThemeName::Ember).runs_theme());
+        assert_eq!(
+            shell.stage.as_ref().map(|stage| stage.theme.name()),
+            Some(ThemeName::Ember),
+            "STAGE's own copy must move with it"
+        );
+        // `orc_tui::App::cycle_theme` would have swapped in its own palette
+        // and shelled out to `current_exe()`, which in the embed is
+        // `pi-orchestra` — a binary with no `config` subcommand.
+        assert!(
+            shell.runs.message.is_empty(),
+            "the ledger's switcher ran: {:?}",
+            shell.runs.message
+        );
+        assert_ne!(shell.runs.theme, orc_tui::EMBER);
+        assert_ne!(shell.runs.theme, orc_tui::PHOSPHOR);
+    }
+
+    #[test]
+    fn the_leader_chord_reaches_home_and_runs_not_only_stage_and_score() {
+        // HOME is the launch screen; before #37 it had no chord at all.
+        for view in [ShellView::Home, ShellView::Runs] {
+            let mut shell = four_screen_shell(ThemeName::Nocturne);
+            shell.view = view;
+
+            // An ordinary key is not a chord and belongs to the screen.
+            assert_eq!(route_leader(b"j", None, &mut shell), None, "{view:?}");
+            assert!(!shell.leader_pending, "{view:?}");
+
+            // The leader arms, and the follow-up key is consumed as a command
+            // rather than reaching the screen underneath.
+            let chord = [shell.leader.byte];
+            assert_eq!(route_leader(&chord, None, &mut shell), Some(false));
+            assert_eq!(route_leader(b"?", None, &mut shell), Some(false));
+            assert!(shell.help, "{view:?}: leader ? must open help");
+            shell.help = false;
+
+            assert_eq!(route_leader(&chord, None, &mut shell), Some(false));
+            assert_eq!(route_leader(b"b", None, &mut shell), Some(false));
+            assert_eq!(shell.view, ShellView::Score, "{view:?}: leader b to SCORE");
+
+            shell.view = view;
+            assert_eq!(route_leader(&chord, None, &mut shell), Some(false));
+            assert_eq!(
+                route_leader(b"q", None, &mut shell),
+                Some(true),
+                "{view:?}: leader q must quit"
+            );
+
+            // STAGE keeps its own router; this path must not shadow it.
+            shell.view = ShellView::Stage;
+            assert_eq!(route_leader(&chord, None, &mut shell), None, "{view:?}");
+        }
+    }
+
+    #[test]
+    fn score_keeps_its_documented_chord_after_moving_to_the_shared_table() {
+        let mut shell = four_screen_shell(ThemeName::Nocturne);
+        shell.view = ShellView::Score;
+        let chord = [shell.leader.byte];
+
+        for (key, expected) in [
+            (b"h", ShellView::Home),
+            (b"v", ShellView::Runs),
+            (b"b", ShellView::Score),
+        ] {
+            shell.view = ShellView::Score;
+            assert_eq!(route_leader(&chord, None, &mut shell), Some(false));
+            assert_eq!(route_leader(key, None, &mut shell), Some(false));
+            assert_eq!(shell.view, expected, "leader {key:?}");
+        }
+
+        shell.view = ShellView::Score;
+        assert_eq!(route_leader(&chord, None, &mut shell), Some(false));
+        assert_eq!(route_leader(b"q", None, &mut shell), Some(true));
+    }
+
+    #[test]
+    fn a_relaunch_opens_in_the_persisted_theme() {
+        // What `run_initial` does with the daemon's `Home` answer: the stored
+        // choice wins, the CLI flag is only the fallback, and a name nobody
+        // recognises resolves rather than refusing to start.
+        for name in ThemeName::ALL {
+            assert_eq!(
+                super::resolve_initial_theme(name.as_str(), ThemeName::Ember),
+                name,
+                "{name:?} must survive the relaunch"
+            );
+        }
+        assert_eq!(
+            super::resolve_initial_theme("  phosphor ", ThemeName::Ember),
+            ThemeName::Phosphor
+        );
+        assert_eq!(
+            super::resolve_initial_theme("", ThemeName::Phosphor),
+            ThemeName::Phosphor,
+            "an unconfigured daemon falls back to the flag"
+        );
+        assert_eq!(
+            super::resolve_initial_theme("chartreuse", ThemeName::Ember),
+            ThemeName::Nocturne,
+            "an unknown stored name resolves to the flagship"
+        );
     }
 
     fn panes() -> Vec<PaneSnapshot> {
@@ -3735,11 +4112,7 @@ mod tests {
         theme_name: ThemeName,
         reduced_motion: bool,
     ) -> ShellState {
-        let tui_theme = if theme_name == ThemeName::Phosphor {
-            orc_tui::PHOSPHOR
-        } else {
-            orc_tui::EMBER
-        };
+        let tui_theme = Theme::from(theme_name).runs_theme();
         ShellState {
             view: ShellView::Stage,
             home: HomeState {
@@ -3768,6 +4141,7 @@ mod tests {
             reduced_motion,
             epoch: std::time::Instant::now(),
             leader: LeaderKey::parse("ctrl-g"),
+            leader_pending: false,
             watch_session: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -3945,7 +4319,6 @@ mod tests {
             message: String::new(),
             dragging: None,
             width: 100,
-            leader: false,
         };
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).expect("mono SCORE terminal");
@@ -4673,7 +5046,6 @@ mod tests {
             message: String::new(),
             dragging: None,
             width: 1,
-            leader: false,
         };
         terminal
             .draw(|frame| {
@@ -4722,6 +5094,16 @@ mod tests {
                 assert!(text.contains("SCORE"));
                 assert!(text.contains("UNAVAILABLE"));
                 assert!(text.contains("reattach"));
+                // The theme is a command now, not a file to hand-edit.
+                assert!(text.contains("THEME"), "{width}x{height}");
+                assert!(
+                    text.contains("t cycles nocturne"),
+                    "help must teach the switcher ({width}x{height})"
+                );
+                assert!(
+                    text.contains("pio config set theme"),
+                    "help must name the CLI path ({width}x{height})"
+                );
             }
         }
     }
@@ -4791,7 +5173,6 @@ mod tests {
                     message: "dependency still open".to_owned(),
                     dragging: None,
                     width: 1,
-                    leader: false,
                 };
                 terminal
                     .draw(|frame| {

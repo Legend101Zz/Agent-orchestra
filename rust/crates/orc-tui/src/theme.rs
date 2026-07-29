@@ -27,6 +27,32 @@ const fn rgb(red: u8, green: u8, blue: u8) -> Color {
     Color::Rgb(red, green, blue)
 }
 
+/// The flagship, transcribed from `docs/design/visual-identity.md` through the
+/// same slot correspondence the embedded ledger uses
+/// (`orc_app::theme::Theme::runs_theme`), so a standalone `pio runs` in
+/// nocturne renders the identity palette rather than an approximation of it.
+pub const NOCTURNE: Theme = Theme {
+    name: "nocturne",
+    bg: rgb(0x0a, 0x0c, 0x11),
+    panel: rgb(0x10, 0x13, 0x1b),
+    surface: rgb(0x17, 0x1b, 0x26),
+    border: rgb(0x26, 0x2c, 0x3a),
+    border_focus: rgb(0x39, 0x42, 0x5a),
+    text: rgb(0xc4, 0xca, 0xd6),
+    text_dim: rgb(0x45, 0x4c, 0x60),
+    label: rgb(0x72, 0x7b, 0x8f),
+    accent: rgb(0x5a, 0xd1, 0xc8),
+    accent_2: rgb(0x5a, 0xd1, 0xc8),
+    ok: rgb(0xe6, 0xb4, 0x50),
+    warn: rgb(0x8a, 0x93, 0xa6),
+    error: rgb(0xe0, 0x7a, 0x80),
+    running: rgb(0x8e, 0xa2, 0xff),
+    killed: rgb(0x56, 0x5e, 0x70),
+    controller_codex: rgb(0x5a, 0xd1, 0xc8),
+    controller_claude: rgb(0x8e, 0xa2, 0xff),
+    controller_human: rgb(0x72, 0x7b, 0x8f),
+};
+
 pub const EMBER: Theme = Theme {
     name: "ember",
     bg: rgb(22, 18, 14),
@@ -72,18 +98,29 @@ pub const PHOSPHOR: Theme = Theme {
 };
 
 impl Theme {
+    /// Every approved theme in cycle order, flagship first.
+    pub const ALL: [Self; 3] = [NOCTURNE, EMBER, PHOSPHOR];
+
+    /// Resolve a configured theme name, falling back to the flagship.
+    ///
+    /// All three approved names resolve here, so the standalone ledger and the
+    /// embedded one cannot disagree about which theme a name refers to.
     #[must_use]
     pub fn named(name: &str) -> Self {
-        if name == "phosphor" { PHOSPHOR } else { EMBER }
+        Self::ALL
+            .into_iter()
+            .find(|theme| name.eq_ignore_ascii_case(theme.name))
+            .unwrap_or(NOCTURNE)
     }
 
+    /// The next theme in the cycle: nocturne, ember, phosphor, nocturne.
     #[must_use]
-    pub const fn other(self) -> Self {
-        if self.name.as_bytes()[0] == b'e' {
-            PHOSPHOR
-        } else {
-            EMBER
-        }
+    pub fn other(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|theme| theme.name == self.name)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
     }
 
     #[must_use]

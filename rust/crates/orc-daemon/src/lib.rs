@@ -801,6 +801,11 @@ impl Daemon {
                 metrics: self.metrics()?,
             }),
             ClientRequest::Home => self.home_response(),
+            // The client is forbidden from writing registry files, so the
+            // theme it cycled is persisted here, through core's writer.
+            ClientRequest::SetTheme { theme } => Ok(ServerResponse::ThemeSet {
+                theme: orc_core::control::set_theme(&theme)?,
+            }),
             ClientRequest::CreateSession {
                 brain,
                 workers,
@@ -2054,6 +2059,69 @@ exit 0
             }
             other => panic!("unexpected response variant: {other:?}"),
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The client cannot write `~/.orchestra`, so the theme it cycled is
+    /// persisted here — and the next `Home` (what a relaunch reads) has to
+    /// report it.
+    #[test]
+    #[allow(unsafe_code)]
+    fn set_theme_persists_through_the_daemon_and_the_next_home_reports_it() {
+        let _guard = daemon_test_lock();
+        let root = std::env::temp_dir().join(format!("orcd-theme-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create theme root");
+        // SAFETY: daemon tests that mutate ORC_HOME run serially in this binary.
+        unsafe { std::env::set_var("ORC_HOME", &root) };
+        write_harness_registry(&HarnessRegistry::default()).expect("persist default registry");
+
+        let daemon = Daemon::production(root.clone(), update_signal());
+        let ServerResponse::Home { theme, .. } = daemon
+            .respond(ClientRequest::Home)
+            .expect("initial home response")
+        else {
+            panic!("expected a home response");
+        };
+        assert_eq!(theme, "nocturne", "the registry default is the flagship");
+
+        let response = daemon
+            .respond(ClientRequest::SetTheme {
+                theme: "phosphor".to_owned(),
+            })
+            .expect("set theme");
+        assert_eq!(
+            response,
+            ServerResponse::ThemeSet {
+                theme: "phosphor".to_owned()
+            }
+        );
+
+        // What a relaunch would read, from the socket and from disk.
+        let ServerResponse::Home { theme, .. } =
+            daemon.respond(ClientRequest::Home).expect("home after set")
+        else {
+            panic!("expected a home response");
+        };
+        assert_eq!(theme, "phosphor", "the choice must survive for a relaunch");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("harnesses.json")).expect("read registry"))
+                .expect("parse registry");
+        assert_eq!(stored["app"]["theme"], serde_json::json!("phosphor"));
+
+        // An unrecognised name resolves rather than failing, and the reply
+        // says what was actually written.
+        let response = daemon
+            .respond(ClientRequest::SetTheme {
+                theme: "chartreuse".to_owned(),
+            })
+            .expect("set unknown theme");
+        assert_eq!(
+            response,
+            ServerResponse::ThemeSet {
+                theme: "nocturne".to_owned()
+            }
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

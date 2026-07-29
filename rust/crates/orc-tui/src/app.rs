@@ -162,9 +162,12 @@ pub struct App {
 impl App {
     pub fn new(theme_override: Option<&str>) -> Result<Self> {
         let config = orc_core::control::read_config_value();
+        // `config` already answers the authoritative theme (orc-core derives
+        // the key from the registry), so the standalone ledger opens in the
+        // same palette the Bench client would render.
         let theme_name = theme_override
             .or_else(|| config.get("theme").and_then(Value::as_str))
-            .unwrap_or("ember");
+            .unwrap_or("nocturne");
         let mut snapshot = Snapshot::default();
         snapshot.refresh()?;
         let ttl = Duration::from_secs(quota::load_config().cache_ttl_sec.max(1));

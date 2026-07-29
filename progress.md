@@ -1512,3 +1512,72 @@ hand back to the implementer.
 - Left alone deliberately: `orc-proto/src/lib.rs:477` still says the theme field is
   "constrained to ember or phosphor". `orc-proto` is outside this issue's allowed
   paths; the field is a free string and carries `nocturne` fine.
+
+## Session — 2026-07-29 (code-puppy): #37 theme persistence + the `<leader> t` switcher
+
+- Branch `issue-37-theme-persistence` off fresh `main` (`8b47bf1`). Both halves
+  of the contract: the switcher carried over from #13's finding 1, and this
+  issue's original persistence scope.
+- **`<leader> t` cycles nocturne → ember → phosphor on all four screens.** The
+  live theme is stored in three places — `shell.theme`, `shell.runs.theme`, and
+  `StageState`'s own copy — so `apply_theme` moves all three; missing any one
+  leaves a screen rendering the previous palette (mutation-tested both ways).
+  The chord was wired for STAGE and SCORE only, so HOME (the launch screen) and
+  RUNS could never reach it: `route_leader` now arms and consumes it for all
+  three non-STAGE screens off one shared table, replacing `ScoreState.leader`.
+  STAGE keeps its own pending bit inside `RawRouter` because it works a byte at
+  a time (literal re-send, bracketed paste); it gained `LeaderAction::Theme`.
+- **RUNS's `t` no longer reaches `orc_tui::App::cycle_theme`.** That path swapped
+  in orc-tui's hard-coded EMBER — a colour in no row of the 17-slot map — and
+  shelled out to `current_exe()`, which in the embed is `pi-orchestra`, a binary
+  with no `config` subcommand, printing `error: unrecognized subcommand 'config'`
+  into the message line. `route_runs_key` intercepts `t` first.
+- **Persistence goes through the daemon, never the client.** New
+  `ClientRequest::SetTheme` / `ServerResponse::ThemeSet`; the daemon calls
+  `orc_core::control::set_theme`. `orc-app/src/lib.rs:4`'s rule is intact — the
+  client still writes nothing under `~/.orchestra`. A failed round trip degrades
+  to a session-only switch with the reason on the message line rather than
+  refusing to switch.
+- **`PROTOCOL_VERSION` stays 1.** Both enums are externally tagged and additive,
+  and the hello handshake compares `BUILD_IDENTIFIER`, so mixed builds are
+  refused before a new variant can be sent. Proven live in both directions
+  against a real older binary (a July-12 `orcd` and the installed
+  `~/.local/bin/pi-orchestra` @ `125585a`), not simulated: each refuses with the
+  existing build-mismatch message. An unknown variant gets
+  `malformed protocol message: unknown variant …` and the connection survives.
+- **One theme record.** `harnesses.json`'s `app.theme` is authoritative;
+  `config.json`'s `theme` is a derived mirror refreshed on every write.
+  `control::theme()` reads the registry (falling back to `config.json` only when
+  no registry exists yet, so a pre-#37 install keeps its choice);
+  `read_config_value()` overlays the authoritative value so `pio config
+  get/list` and the standalone `orc-tui` ledger cannot be handed a stale one;
+  `set_config("theme", …)` delegates to `set_theme`. Unknown names resolve to
+  the flagship **on write**, so no durable record holds an unrenderable name.
+  Rationale and the both-files-survive decision are in `findings.md`.
+- `orc_tui::Theme::named` resolved only ember and phosphor, so `named("nocturne")`
+  answered EMBER. It now knows all three; its new `NOCTURNE` is the identity
+  map's row through `runs_theme()`'s slot correspondence, and a test pins the two
+  ledgers to each other so they cannot drift.
+- Deviation from the allowed paths, declared on the issue: `install.sh` seeded
+  `"theme":"ember"` into a fresh `config.json`, which disagreed with the registry
+  default (`nocturne`) from the moment of install. Left in place it would defeat
+  acceptance check 3 on every new machine, so the key is gone from the seed —
+  one line, no behaviour beyond the split this issue exists to close.
+- Every new gate was mutation-tested, not merely observed passing: 15 mutations
+  (stale STAGE copy, stale RUNS copy, `t` falling through to the ledger, STAGE
+  chord losing `t`, leader never arming, SCORE losing the shared table, relaunch
+  ignoring the stored theme, help dropping the switcher, `config.json` winning
+  over the registry, `set_config` not routing, mirror not refreshed, unknown name
+  stored verbatim, orc-tui forgetting nocturne, daemon acking without persisting,
+  version bumped) — each caught by the intended test. One first-pass miss was my
+  own filter, not a gap; strengthening the unit assertion to check the *stored*
+  value closed it.
+- All five gates exit 0: fmt, clippy `-D warnings`, `cargo test --workspace`
+  (267 passed, 0 failed), rustdoc `-D warnings`, `cargo build --release --locked`.
+- Noted, not fixed (out of scope): the other RUNS settings keys (`n`
+  notifications, `w`/`b`/`+`/`-`) still shell out through `invoke` and will print
+  the same `unrecognized subcommand` in the embed. #37's allowed paths limit
+  orc-tui to theme-name resolution, so restructuring `invoke` belongs to its own
+  issue. Also `pio config set leader_key` does not reach `app.leader_key` — the
+  same two-file split, one field over; the help text still points at the file for
+  that one rather than claiming a command that does not work.
