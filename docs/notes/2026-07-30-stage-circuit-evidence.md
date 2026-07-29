@@ -15,13 +15,25 @@ All five, from `rust/`:
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | pass |
 | `cargo build --release --locked` | pass |
 
-**Known pre-existing flake, not caused by this branch.**
-`background_dispatch.rs`'s `delegate_confirms_while_running_and_cap_one_queues_until_real_exit`
-failed once mid-branch and passed on re-run. It is the sub-1s wall-clock budget
-already recorded in `task_plan.md` as storage-dependent — it loses to process
-spawn on this external-SSD checkout under load, and is one of the three
-bounded-probe flakes filed there as a single open decision. The new AC9
-measurement deliberately does **not** add a fourth: its ceiling is 16 ms
+**Two pre-existing flakes observed, neither caused by this branch.** The branch
+touches exactly one crate — `orc-app` — and both flakes are elsewhere.
+
+1. `background_dispatch::delegate_confirms_while_running_and_cap_one_queues_until_real_exit`
+   failed once and passed on re-run. This is the sub-1s wall-clock budget
+   already filed in `task_plan.md` as storage-dependent.
+2. `orc-cli::quota_guard::cli_dispatch_at_cap_is_queued_then_drains_and_the_cap_setter_persists`
+   failed 1 run in 8. Measured rather than assumed, using the interleaved A/B
+   on the same volume that `task_plan.md` used for the discovery flake:
+
+   | | passed |
+   |---|---|
+   | `issue-38-stage-circuit` | 9/10 |
+   | `origin/main` @ `4eb784c` (worktree, same volume) | 9/10 |
+
+   Identical, so pre-existing. It is a **fourth** member of the bounded-probe
+   flake family `task_plan.md` records, and was not named there; added.
+
+The new AC9 measurement deliberately does not add a fifth: its ceiling is 16 ms
 against a measured 0.157 ms, two orders of magnitude of headroom.
 
 ## AC3 — fluid drag, counted
