@@ -1,0 +1,62 @@
+STAGE nocturne truecolor 80x24 minimum
+--- text ---
+                                                                                
+ ╭ ◆ CODEX  LIVE ────────────────────────────────────────────────────────────╮  
+ │codex ready                                                                │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ ╰───────────────────────────────────────────────────────────────────────────╯▐ 
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ ╭ ● PI-M3-0  LIVE ─────────────────────────────────────────────────────▓░───╮  
+ │pi-m3-0 ready                                                              │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ ╰───────────────────────────────────────────────────────────────────────────╯▐ 
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ ╭ ● PI-M3-1  LIVE ────────────────────────────────────────────────────······╮  
+ │pi-m3-1 ready                                                              │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ │                                                                           │▐ 
+ ╰───────────────────────────────────────────────────────────────────────────╯▐ 
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ typing goes to the pane — ctrl-g then: n/p focus · z zoom · s swap · b SCORE · 
+--- styles ---
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+abcccccccccccccccbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa
+abdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddbea
+abdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddbea
+abdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddbea
+abdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddbea
+abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbea
+aaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
+afgggggggggggggggggffffffffffffffffffffffffffffffffffffffffffffffffffffhichhhfaa
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffea
+aaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
+afgggggggggggggggggffffffffffffffffffffffffffffffffffffffffffffffffffffhhhhhhfaa
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddfea
+afffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffea
+aaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
+jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+--- legend ---
+a fg=reset bg=#0a0c11 mod=-
+b fg=#39425a bg=#10131b mod=-
+c fg=#5ad1c8 bg=#10131b mod=bold
+d fg=#c4cad6 bg=#10131b mod=-
+e fg=#262c3a bg=#0a0c11 mod=dim
+f fg=#262c3a bg=#10131b mod=-
+g fg=#c4cad6 bg=#10131b mod=bold
+h fg=#454c60 bg=#10131b mod=dim
+i fg=#e6b450 bg=#10131b mod=bold
+j fg=#727b8f bg=#0a0c11 mod=dim

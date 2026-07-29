@@ -4,6 +4,7 @@
 //! This crate owns rendering and input forwarding. It must never write
 //! registry/session/task files or outlive the daemon-owned PTYs.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -41,6 +42,7 @@ use tachyonfx::{EffectTimer, Interpolation};
 use thiserror::Error;
 
 pub mod baton;
+pub mod circuit;
 pub mod glyph;
 #[cfg(test)]
 mod snapshot;
@@ -507,25 +509,69 @@ pub fn visible_input_benchmark(
     })
 }
 
+/// One pane's own output pulse.
+///
+/// Keyed by pane id rather than held once for the whole stage: a connector that
+/// cannot say *which* worker produced the output is decoration, and a single
+/// global pulse is what made the shipped rail decoration. Keyed by id and not
+/// by index because `s` swaps two panes and a session can gain or lose one, and
+/// index-keyed state silently reattributes traffic the moment that happens.
+struct PanePulse {
+    /// The decay timer. It is reset on every output tick, so `done()` means
+    /// "no output for [`baton::DECAY`]" — the spec's trigger for falling back
+    /// to the idle rail.
+    pulse: EffectTimer,
+    /// When this pane's current sweep began, so its packet's frame is a
+    /// function of wall-clock rather than of how often the shell repainted.
+    sweep_start: Instant,
+    /// The rail state this pane's connector last actually *painted*, as
+    /// opposed to the one it last computed. The repaint loop compares against
+    /// this and forces a draw when they differ, which is what stops a packet
+    /// freezing mid-sweep at the moment the decay timer expires. `None` until
+    /// the first paint, so the first frame always draws.
+    painted: Option<baton::State>,
+}
+
+impl PanePulse {
+    fn new() -> Self {
+        Self {
+            pulse: EffectTimer::from_ms(
+                u32::try_from(baton::DECAY.as_millis()).unwrap_or(u32::MAX),
+                Interpolation::Linear,
+            ),
+            sweep_start: Instant::now(),
+            painted: None,
+        }
+    }
+
+    /// This pane produced output: restart the decay timer, and begin a sweep
+    /// if its rail had gone idle.
+    fn mark(&mut self) {
+        if self.pulse.done() {
+            self.sweep_start = Instant::now();
+        }
+        self.pulse.reset();
+    }
+
+    /// This pane's rail state right now, given the client's motion preference.
+    fn state(&self, reduced_motion: bool) -> baton::State {
+        let since_output = if self.pulse.done() {
+            baton::DECAY
+        } else {
+            Duration::ZERO
+        };
+        baton::State::resolve(reduced_motion, since_output, self.sweep_start.elapsed())
+    }
+}
+
 struct StageState {
     panes: Vec<PaneSnapshot>,
     focus: usize,
     pane_areas: Vec<Rect>,
-    /// The baton's decay timer. It is reset on every output tick, so
-    /// `done()` means "no output for [`baton::DECAY`]" — the spec's trigger
-    /// for falling back to the idle rail — and the shell's repaint loop reads
-    /// the same signal to stop animating.
-    pulse: EffectTimer,
+    /// One pulse per pane, by pane id. `BTreeMap` so iteration order is
+    /// deterministic and snapshots do not drift with hashing.
+    pulses: BTreeMap<String, PanePulse>,
     last_tick: Instant,
-    /// When the current sweep began, so the packet's frame is a function of
-    /// wall-clock rather than of how often the shell happened to repaint.
-    sweep_start: Instant,
-    /// The rail state the shell last actually *painted*, as opposed to the one
-    /// it last computed. The repaint loop compares this against the resolved
-    /// state and forces a draw when they differ, which is what stops the
-    /// packet freezing mid-sweep at the moment the decay timer expires.
-    /// `None` until the first paint, so the first frame always draws.
-    painted_baton: Option<baton::State>,
     theme: Theme,
     glyphs: Glyphs,
     session_id: Option<String>,
@@ -544,16 +590,14 @@ impl StageState {
     fn new(panes: Vec<PaneSnapshot>, theme: Theme, glyphs: Glyphs) -> Self {
         let now = Instant::now();
         Self {
+            pulses: panes
+                .iter()
+                .map(|pane| (pane.id.clone(), PanePulse::new()))
+                .collect(),
             panes,
             focus: 0,
             pane_areas: Vec::new(),
-            pulse: EffectTimer::from_ms(
-                u32::try_from(baton::DECAY.as_millis()).unwrap_or(u32::MAX),
-                Interpolation::Linear,
-            ),
             last_tick: now,
-            sweep_start: now,
-            painted_baton: None,
             theme,
             glyphs,
             session_id: None,
@@ -581,68 +625,114 @@ impl StageState {
     }
 
     fn apply_snapshot(&mut self, panes: Vec<PaneSnapshot>) {
-        let changed = panes
+        // Diff per pane id, not per index. `zip` truncates to the shorter vec,
+        // so the shipped index-wise comparison noticed an added or removed
+        // pane only through the length check — and it collapsed the whole
+        // result into one global "something moved", which is precisely why the
+        // rail could not say who was talking.
+        let prior = self
+            .panes
             .iter()
-            .zip(&self.panes)
-            .any(|(next, prior)| next.id != prior.id || next.sequence != prior.sequence)
-            || panes.len() != self.panes.len();
+            .map(|pane| (pane.id.as_str(), pane.sequence))
+            .collect::<HashMap<_, _>>();
+        let produced = panes
+            .iter()
+            .filter(|next| prior.get(next.id.as_str()) != Some(&next.sequence))
+            .map(|pane| pane.id.clone())
+            .collect::<Vec<_>>();
         self.panes = panes;
-        if changed {
-            self.mark_output();
+        for id in produced {
+            self.mark_output(&id);
         }
+        // A pane that has gone leaves no pulse behind to be reattributed to
+        // whatever takes its id next.
+        self.pulses
+            .retain(|id, _| self.panes.iter().any(|pane| pane.id == *id));
         self.focus = self.focus.min(self.panes.len().saturating_sub(1));
     }
 
-    /// A pane produced output, or a task event landed: restart the decay
-    /// timer, and begin a sweep if the rail had gone idle.
-    fn mark_output(&mut self) {
-        if self.pulse.done() {
-            self.sweep_start = Instant::now();
-        }
-        self.pulse.reset();
+    /// One pane produced output: pulse that pane's connector and no other.
+    fn mark_output(&mut self, pane_id: &str) {
+        self.pulses
+            .entry(pane_id.to_owned())
+            .or_insert_with(PanePulse::new)
+            .mark();
     }
 
     fn advance(&mut self) {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
-        let _ = self.pulse.process(elapsed);
+        for pulse in self.pulses.values_mut() {
+            let _ = pulse.pulse.process(elapsed);
+        }
     }
 
-    /// The baton's state right now, given the client's motion preference.
+    /// One pane's rail state right now, given the client's motion preference.
+    fn baton_state_for(&self, pane_id: &str, reduced_motion: bool) -> baton::State {
+        self.pulses
+            .get(pane_id)
+            .map_or(baton::State::Idle, |pulse| pulse.state(reduced_motion))
+    }
+
+    /// The rail state of every worker's connector, in worker order.
     ///
-    /// `pulse.done()` is the 400 ms silence the spec decays on; the sweep
-    /// frame comes from `sweep_start` so the packet advances at a fixed
-    /// 110 ms/frame regardless of repaint rate.
-    fn baton_state(&self, reduced_motion: bool) -> baton::State {
-        let since_output = if self.pulse.done() {
-            baton::DECAY
-        } else {
-            Duration::ZERO
-        };
-        baton::State::resolve(reduced_motion, since_output, self.sweep_start.elapsed())
+    /// Index `i` is `panes[i + 1]`, matching `circuit::Circuit::routes`. The
+    /// conductor has no connector of its own: what a worker's wire reports is
+    /// that *worker's* output, which is the whole of AC2. The conductor's own
+    /// traffic is a discrete message, not an ambient pulse — see the sheet's
+    /// "Message in flight".
+    fn traffic(&self, reduced_motion: bool) -> Vec<baton::State> {
+        self.panes
+            .iter()
+            .skip(1)
+            .map(|pane| self.baton_state_for(&pane.id, reduced_motion))
+            .collect()
     }
 
-    /// Whether the rail resolves to something other than what is on screen.
+    /// Whether any connector resolves to something other than what is on
+    /// screen.
     ///
     /// The repaint loop's other reasons to draw are all "something is still
-    /// moving". None of them covers the frame on which motion *stops*: when
-    /// the decay timer expires, the live flags go false in the same iteration
-    /// that the rail first resolves to [`baton::State::Idle`], so without this
-    /// the idle rail is computed and never painted and the packet stays
-    /// stranded mid-sweep until the next burst. Comparing against the last
-    /// painted state also covers the identical Steady→Idle transition under
-    /// reduced motion, where there is no animation cadence to fall back on.
+    /// moving". None of them covers the frame on which motion *stops*: when a
+    /// decay timer expires, the live flags go false in the same iteration that
+    /// its rail first resolves to [`baton::State::Idle`], so without this the
+    /// idle rail is computed and never painted and the packet stays stranded
+    /// mid-sweep until the next burst. Comparing against the last painted
+    /// state also covers the identical Steady→Idle transition under reduced
+    /// motion, where there is no animation cadence to fall back on.
     fn baton_needs_repaint(&self, reduced_motion: bool) -> bool {
-        self.painted_baton != Some(self.baton_state(reduced_motion))
+        self.panes.iter().skip(1).any(|pane| {
+            self.pulses
+                .get(&pane.id)
+                .is_none_or(|pulse| pulse.painted != Some(pulse.state(reduced_motion)))
+        })
     }
 
-    /// Record the rail state that was just drawn to the terminal.
+    /// Whether any *connector* is still mid-pulse.
     ///
-    /// Called from the render path with the exact value handed to
+    /// Workers only. The conductor has no connector of its own, so its pulse
+    /// drives nothing on screen — and a repaint cadence held open by something
+    /// that animates nothing is the same wasted spin the trigger rainbow used
+    /// to cause.
+    fn any_live(&self) -> bool {
+        self.panes.iter().skip(1).any(|pane| {
+            self.pulses
+                .get(&pane.id)
+                .is_some_and(|pulse| !pulse.pulse.done())
+        })
+    }
+
+    /// Record the rail states that were just drawn to the terminal.
+    ///
+    /// Called from the render path with the exact slice handed to
     /// [`render_stage`], so "last painted" means painted, not computed.
-    fn record_painted_baton(&mut self, state: baton::State) {
-        self.painted_baton = Some(state);
+    fn record_painted_traffic(&mut self, traffic: &[baton::State]) {
+        for (pane, state) in self.panes.iter().skip(1).zip(traffic) {
+            if let Some(pulse) = self.pulses.get_mut(&pane.id) {
+                pulse.painted = Some(*state);
+            }
+        }
     }
 
     /// Whether any conductor pane currently shows a trigger.
@@ -1695,15 +1785,17 @@ fn render_shell(frame: &mut Frame<'_>, shell: &mut ShellState) {
         ShellView::Stage => {
             let motion =
                 (!shell.reduced_motion).then(|| (shell.epoch.elapsed().as_millis() / 120) as usize);
-            let baton = shell.stage.as_ref().map_or(baton::State::Idle, |stage| {
-                stage.baton_state(shell.reduced_motion)
-            });
+            let traffic = shell
+                .stage
+                .as_ref()
+                .map(|stage| stage.traffic(shell.reduced_motion))
+                .unwrap_or_default();
             if let Some(stage) = shell.stage.as_mut() {
-                render_stage(frame, stage, motion, baton);
+                render_stage(frame, stage, motion, &traffic);
                 // What reached the terminal, recorded at the only place that
                 // knows it did: `run_shell_loop` compares against this to
-                // decide whether the rail still owes the screen a frame.
-                stage.record_painted_baton(baton);
+                // decide whether a rail still owes the screen a frame.
+                stage.record_painted_traffic(&traffic);
             }
         }
         ShellView::Score => {
@@ -1903,12 +1995,10 @@ fn attach_stage(
                 .and(task.assignee_run.clone())
         })
         .collect();
-    if tasks.iter().any(|task| {
-        task.history
-            .last()
-            .is_some_and(|history| history.action == "delivery_confirmed")
-    }) {
-        stage.mark_output();
+    // A task event lands on the pane it names, so it pulses that worker's
+    // connector rather than every connector on the stage.
+    for pane_id in confirmed_task_panes(&tasks, &["delivery_confirmed"]) {
+        stage.mark_output(&pane_id);
     }
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
@@ -1993,7 +2083,7 @@ fn repaint_reasons(shell: &ShellState, pending: bool) -> RepaintReasons {
     // draws is never satisfied and would spin the loop at full tilt.
     let on_stage = !shell.help && shell.view == ShellView::Stage;
     let stage = shell.stage.as_ref().filter(|_| on_stage);
-    let live = stage.is_some_and(|stage| !stage.pulse.done());
+    let live = stage.is_some_and(StageState::any_live);
     RepaintReasons {
         pending,
         animating: live && !shell.reduced_motion,
@@ -2073,20 +2163,14 @@ fn run_shell_loop(
                                     .and(task.assignee_run.clone())
                             })
                             .collect();
-                        // A task event is traffic on the filament too, so it
-                        // pulses the baton exactly as a stdout tick does.
-                        if score
-                            .tasks
-                            .iter()
-                            .filter_map(|task| task.history.last())
-                            .any(|history| {
-                                matches!(
-                                    history.action.as_str(),
-                                    "delivery_confirmed" | "delivery_failed" | "done"
-                                )
-                            })
-                        {
-                            stage.mark_output();
+                        // A task event is traffic on the filament too, and it
+                        // names the pane it landed on, so it pulses that
+                        // worker's connector and not the whole stage.
+                        for pane_id in confirmed_task_panes(
+                            &score.tasks,
+                            &["delivery_confirmed", "delivery_failed", "done"],
+                        ) {
+                            stage.mark_output(&pane_id);
                         }
                     }
                 }
@@ -2958,6 +3042,23 @@ fn handle_home_key(
     Ok(false)
 }
 
+/// The panes named by tasks whose latest history entry is one of `actions`.
+///
+/// `assignee_run` is the pane a task's work is happening in, which is what
+/// turns "a task event happened" into "this worker's wire just carried
+/// something".
+fn confirmed_task_panes(tasks: &[TaskSummary], actions: &[&str]) -> Vec<String> {
+    tasks
+        .iter()
+        .filter(|task| {
+            task.history
+                .last()
+                .is_some_and(|history| actions.contains(&history.action.as_str()))
+        })
+        .filter_map(|task| task.assignee_run.clone())
+        .collect()
+}
+
 fn ensure_layout(state: &mut StageState) {
     if state.layout.len() == state.panes.len() {
         return;
@@ -2989,7 +3090,7 @@ fn render_stage(
     frame: &mut Frame<'_>,
     state: &mut StageState,
     motion: Option<usize>,
-    baton_state: baton::State,
+    traffic: &[baton::State],
 ) {
     let area = frame.area();
     // The trigger rainbow steps one colour per motion tick; `None` (reduced
@@ -3000,20 +3101,6 @@ fn render_stage(
         area,
     );
     state.pane_areas = stage_areas(area, state);
-    if area.width >= 100 && state.panes.len() >= 2 && !state.zoomed {
-        // The rail spans the gap `stage_areas` leaves between the conductor
-        // and the bench, one column clear of the conductor's drop shadow, and
-        // centred on the stage's vertical middle.
-        let rail = Rect::new(
-            area.x
-                .saturating_add(2)
-                .saturating_add(conductor_width(area)),
-            area.y.saturating_add(area.height / 2),
-            BATON_RAIL,
-            1,
-        );
-        render_baton(frame, rail, state, baton_state);
-    }
     let areas = state.pane_areas.clone();
     if state.zoomed {
         if let (Some(pane), Some(pane_area)) =
@@ -3049,6 +3136,9 @@ fn render_stage(
                 state.glyphs,
             );
         }
+        // After the panes, so an inlaid rail can sit in a worker's own top
+        // border and a wire is never buried under a pane drawn later.
+        render_circuit(frame, state, traffic);
     }
     if state.message.is_empty() {
         let legend = format!(
@@ -3190,43 +3280,75 @@ fn render_shadow(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
     }
 }
 
-/// Draw the baton: `◆` conductor, twelve rail cells, `●` bench.
+/// Draw the wiring: one connector per worker, each carrying its own traffic.
 ///
-/// One row, one direction, exactly the cells [`baton::cells`] returns — the
-/// whole frame is decided by the passed state, so a snapshot pins a frame
-/// instead of racing the clock.
-fn render_baton(frame: &mut Frame<'_>, area: Rect, state: &StageState, baton_state: baton::State) {
-    if area.width < BATON_RAIL || area.height == 0 {
+/// `traffic[i]` is the rail state of the connector to `panes[i + 1]`; a missing
+/// entry is idle. The whole frame is decided by the passed states, so a
+/// snapshot pins a frame instead of racing the clock — the same property the
+/// single rail had, kept while going from one wire to *n*.
+///
+/// Idle wires are drawn first and live ones after, so where routes share the
+/// trunk at the conductor's port a live packet wins over a quiet neighbour.
+fn render_circuit(frame: &mut Frame<'_>, state: &StageState, traffic: &[baton::State]) {
+    let Some(wiring) = circuit::plan(&state.pane_areas) else {
         return;
-    }
+    };
     let theme = state.theme;
     let glyphs = state.glyphs;
-    let conductor = glyphs.get(Glyph::Conductor);
-    let bench = glyphs.get(Glyph::WorkerSeated);
-    // The ASCII column's endpoints are three cells wide, which will not fit
-    // beside twelve rail cells in the gap the layout reserves. The rail is
-    // what carries the meaning, so the endpoints are what gets dropped.
-    let endpoints =
-        baton::CELLS + conductor.chars().count() + bench.chars().count() + 2 <= area.width.into();
-    let mut spans = Vec::with_capacity(baton::CELLS + 4);
-    if endpoints {
-        spans.push(Span::styled(conductor.to_owned(), theme.state(Slot::Brain)));
-        spans.push(Span::raw(" "));
+    let shape = |cell: &(u16, u16)| {
+        wiring
+            .loom
+            .binary_search_by_key(cell, |(at, _)| *at)
+            .map_or_else(|_| circuit::Wire::default(), |index| wiring.loom[index].1)
+    };
+    // Structure first: every cell where the wire turns or branches. Those are
+    // the loom's own shape and belong to no single route — a junction sits on
+    // the path of every worker downstream of it. Flat runs are deliberately
+    // left to the rails, so a straight single-worker wire still paints the
+    // sheet's `◆ ············ ●` with its endpoint clearance intact rather
+    // than filling that clearance with rule.
+    for ((x, y), wire) in &wiring.loom {
+        if !wire.is_horizontal() {
+            paint_cell(
+                frame,
+                (*x, *y),
+                wire.symbol(glyphs),
+                theme.state(Slot::Faint),
+            );
+        }
     }
-    for cell in baton::cells(baton_state) {
-        spans.push(Span::styled(
-            cell.symbol(glyphs).to_owned(),
-            theme.state(cell.slot()),
-        ));
+    let mut order = (0..wiring.routes.len()).collect::<Vec<_>>();
+    order.sort_by_key(|index| traffic.get(*index) == Some(&baton::State::Idle));
+    for index in order.into_iter().rev() {
+        let route = &wiring.routes[index];
+        let rail = traffic.get(index).copied().unwrap_or(baton::State::Idle);
+        let span = circuit::rail_span(route.len());
+        // The ASCII column's endpoints are three cells wide — `(*)` and `[w]`
+        // — and a wire cell is one column. Drawing them anyway would shear the
+        // rest of the row, so as before the rail is what carries the meaning
+        // and the endpoints are what gets dropped; their clearance stays, so
+        // the rail itself is identical in both columns.
+        let conductor = glyphs.get(Glyph::Conductor);
+        let bench = glyphs.get(Glyph::WorkerSeated);
+        if span.endpoints && conductor.chars().count() == 1 && bench.chars().count() == 1 {
+            paint_cell(frame, route[0], conductor, theme.state(Slot::Brain));
+            if let Some(end) = route.last() {
+                paint_cell(frame, *end, bench, theme.state(Slot::Worker));
+            }
+        }
+        for (offset, cell) in route.iter().enumerate().skip(span.start).take(span.len) {
+            let paint = circuit::paint(rail, shape(cell), offset - span.start, span.len, glyphs);
+            paint_cell(frame, *cell, paint.symbol, theme.state(paint.slot));
+        }
     }
-    if endpoints {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(bench.to_owned(), theme.state(Slot::Worker)));
+}
+
+/// Write one symbol into one buffer cell, if it is on screen.
+fn paint_cell(frame: &mut Frame<'_>, (x, y): (u16, u16), symbol: &str, style: Style) {
+    if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+        cell.set_symbol(symbol);
+        cell.set_style(style);
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.bg())),
-        area,
-    );
 }
 
 /// A trigger token located on the pane grid, in terminal columns.
@@ -4008,7 +4130,9 @@ mod tests {
                 let mut state = StageState::new(panes(), theme.into(), GLYPHS);
                 state.confirmed_panes.insert("pane-1".to_owned());
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
+                    .draw(|frame| {
+                        render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)])
+                    })
                     .expect("render stage");
                 let text = terminal
                     .backend()
@@ -4090,7 +4214,7 @@ mod tests {
                     );
                     terminal
                         .draw(|frame| {
-                            render_stage(frame, &mut state, None, baton::State::Sweeping(1))
+                            render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)])
                         })
                         .expect("render stage");
                     let buffer = terminal.backend().buffer();
@@ -4132,7 +4256,9 @@ mod tests {
                 let mut state =
                     StageState::new(vec![conductor_pane(stream)], theme_name.into(), GLYPHS);
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
+                    .draw(|frame| {
+                        render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)])
+                    })
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -4171,7 +4297,9 @@ mod tests {
                     GLYPHS,
                 );
                 terminal
-                    .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
+                    .draw(|frame| {
+                        render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)])
+                    })
                     .expect("render stage");
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -4198,7 +4326,7 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("test terminal");
             let mut state = StageState::new(vec![pane.clone()], theme_name.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
+                .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)]))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             assert_eq!(
@@ -4303,7 +4431,7 @@ mod tests {
                 GLYPHS,
             );
             terminal
-                .draw(|frame| render_stage(frame, &mut state, motion, baton::State::Sweeping(1)))
+                .draw(|frame| render_stage(frame, &mut state, motion, &[baton::State::Sweeping(1)]))
                 .expect("render stage");
             terminal.backend().buffer().clone()
         };
@@ -4351,7 +4479,7 @@ mod tests {
             let mut state =
                 StageState::new(vec![conductor_pane(stream)], theme_name.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut state, None, baton::State::Sweeping(1)))
+                .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)]))
                 .expect("render stage");
             let buffer = terminal.backend().buffer();
             // Only the keyword+colon lights up -- never the colored prompt glyph.
@@ -4590,13 +4718,47 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("baton terminal");
             let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut stage, None, state))
+                .draw(|frame| render_stage(frame, &mut stage, None, &[state]))
                 .expect("render baton");
             assert!(
                 baton_row(terminal.backend().buffer(), width).contains(want),
                 "{state:?}: STAGE did not paint {want:?}"
             );
         }
+    }
+
+    /// A conductor plus `count` workers, so the topology can be exercised at
+    /// the worker counts AC1 names.
+    fn bench(count: usize) -> Vec<PaneSnapshot> {
+        let mut all = panes();
+        let worker = all[1].clone();
+        all.truncate(1);
+        for index in 0..count {
+            let mut next = worker.clone();
+            next.id = format!("pane-{}", index + 1);
+            next.title = format!("hermes-{index}");
+            all.push(next);
+        }
+        all
+    }
+
+    /// Pulse one pane's connector, by index into `stage.panes`.
+    fn pulse(stage: &mut StageState, index: usize) {
+        let id = stage.panes[index].id.clone();
+        stage.mark_output(&id);
+    }
+
+    /// Advance one pane's decay timer past the silence window.
+    fn decay(stage: &mut StageState, index: usize) {
+        let id = stage.panes[index].id.clone();
+        if let Some(pulse) = stage.pulses.get_mut(&id) {
+            let _ = pulse.pulse.process(baton::DECAY + Duration::from_millis(1));
+        }
+    }
+
+    /// One pane's own rail state.
+    fn rail(stage: &StageState, index: usize, reduced_motion: bool) -> baton::State {
+        stage.baton_state_for(&stage.panes[index].id, reduced_motion)
     }
 
     #[test]
@@ -4610,26 +4772,20 @@ mod tests {
             let mut terminal = Terminal::new(backend).expect("baton terminal");
             let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
             terminal
-                .draw(|frame| render_stage(frame, &mut stage, None, state))
+                .draw(|frame| render_stage(frame, &mut stage, None, &[state]))
                 .expect("render baton");
             baton_row(terminal.backend().buffer(), width)
         };
         let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
-        stage.mark_output();
+        pulse(&mut stage, 1);
         assert_eq!(
-            stage.baton_state(true),
+            rail(&stage, 1, true),
             baton::State::Steady,
             "a live pane under reduced motion gets the solid rail"
         );
-        assert_eq!(
-            render(stage.baton_state(true)),
-            render(baton::State::Steady)
-        );
+        assert_eq!(render(rail(&stage, 1, true)), render(baton::State::Steady));
         // Full motion at the same instant is a travelling packet instead.
-        assert!(matches!(
-            stage.baton_state(false),
-            baton::State::Sweeping(_)
-        ));
+        assert!(matches!(rail(&stage, 1, false), baton::State::Sweeping(_)));
         // Two different sweep frames really do paint differently.
         assert_ne!(
             render(baton::State::Sweeping(0)),
@@ -4642,25 +4798,81 @@ mod tests {
         let mut stage = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
         // A fresh stage has not seen output yet, so it starts live and decays.
         stage.advance();
-        stage.mark_output();
-        assert!(matches!(
-            stage.baton_state(false),
-            baton::State::Sweeping(_)
-        ));
+        pulse(&mut stage, 1);
+        assert!(matches!(rail(&stage, 1, false), baton::State::Sweeping(_)));
         // Advancing past the decay window with no further output idles it.
-        stage
-            .pulse
-            .process(baton::DECAY + std::time::Duration::from_millis(1));
-        assert_eq!(stage.baton_state(false), baton::State::Idle);
-        assert_eq!(stage.baton_state(true), baton::State::Idle);
+        decay(&mut stage, 1);
+        assert_eq!(rail(&stage, 1, false), baton::State::Idle);
+        assert_eq!(rail(&stage, 1, true), baton::State::Idle);
         // A new snapshot with a fresh sequence is an output tick.
         let mut next = panes();
-        next[0].sequence = 2;
+        next[1].sequence = 2;
         stage.apply_snapshot(next);
-        assert!(matches!(
-            stage.baton_state(false),
-            baton::State::Sweeping(_)
-        ));
+        assert!(matches!(rail(&stage, 1, false), baton::State::Sweeping(_)));
+    }
+
+    #[test]
+    fn output_from_one_worker_animates_that_workers_connector_and_no_other() {
+        // AC2, and the whole point of the topology work: the shipped code
+        // raised one global pulse if *any* pane's sequence moved, so even the
+        // single rail could not say who was talking.
+        let mut stage = StageState::new(bench(3), ThemeName::Nocturne.into(), GLYPHS);
+        for index in 1..4 {
+            decay(&mut stage, index);
+        }
+        assert!(
+            stage
+                .traffic(false)
+                .iter()
+                .all(|state| *state == baton::State::Idle),
+            "every wire starts quiet"
+        );
+
+        // Advance only worker 2's sequence, exactly as the acceptance check
+        // specifies.
+        let mut next = bench(3);
+        next[2].sequence = 7;
+        stage.apply_snapshot(next);
+
+        let traffic = stage.traffic(false);
+        assert!(
+            matches!(traffic[1], baton::State::Sweeping(_)),
+            "worker 2's connector carries its own output: {traffic:?}"
+        );
+        assert_eq!(traffic[0], baton::State::Idle, "worker 1 stays quiet");
+        assert_eq!(traffic[2], baton::State::Idle, "worker 3 stays quiet");
+    }
+
+    #[test]
+    fn a_swapped_or_departed_pane_never_inherits_another_panes_traffic() {
+        // Attribution is keyed by pane id, not by index, because `s` swaps two
+        // panes and a session can gain or lose one. Index-keyed state would
+        // silently hand worker 1's live pulse to whoever landed in slot 1.
+        let mut stage = StageState::new(bench(3), ThemeName::Nocturne.into(), GLYPHS);
+        for index in 1..4 {
+            decay(&mut stage, index);
+        }
+        pulse(&mut stage, 1);
+        assert!(matches!(stage.traffic(false)[0], baton::State::Sweeping(_)));
+
+        // Worker 1 leaves; the other two shuffle up a slot.
+        let mut next = bench(3);
+        next.remove(1);
+        for pane in &mut next {
+            pane.sequence = 1;
+        }
+        stage.apply_snapshot(next);
+
+        let traffic = stage.traffic(false);
+        assert_eq!(traffic.len(), 2, "two workers left");
+        assert!(
+            traffic.iter().all(|state| *state == baton::State::Idle),
+            "the departed worker's pulse went with it: {traffic:?}"
+        );
+        assert!(
+            !stage.pulses.contains_key("pane-1"),
+            "and left no state behind to be reattributed"
+        );
     }
 
     /// Draw one shell frame through the real render path and return the rail
@@ -4687,7 +4899,7 @@ mod tests {
         // `baton_state()`'s return value passed before this fix.
         let width = 120;
         let mut shell = stage_shell(panes(), ThemeName::Nocturne, false);
-        shell.stage.as_mut().expect("stage").mark_output();
+        pulse(shell.stage.as_mut().expect("stage"), 1);
 
         let live = paint_rail(&mut shell, width);
         assert!(
@@ -4696,12 +4908,7 @@ mod tests {
         );
 
         // 400 ms of silence. This is the frame the bug dropped.
-        shell
-            .stage
-            .as_mut()
-            .expect("stage")
-            .pulse
-            .process(baton::DECAY + Duration::from_millis(1));
+        decay(shell.stage.as_mut().expect("stage"), 1);
         let reasons = repaint_reasons(&shell, false);
         assert_eq!(
             reasons,
@@ -4737,7 +4944,7 @@ mod tests {
         // switching between them is the whole of its motion.
         let width = 120;
         let mut shell = stage_shell(panes(), ThemeName::Nocturne, true);
-        shell.stage.as_mut().expect("stage").mark_output();
+        pulse(shell.stage.as_mut().expect("stage"), 1);
 
         let live = paint_rail(&mut shell, width);
         assert!(
@@ -4749,12 +4956,7 @@ mod tests {
             "reduced motion never animates"
         );
 
-        shell
-            .stage
-            .as_mut()
-            .expect("stage")
-            .pulse
-            .process(baton::DECAY + Duration::from_millis(1));
+        decay(shell.stage.as_mut().expect("stage"), 1);
         assert!(
             repaint_reasons(&shell, false).stage_changed,
             "Steady -> Idle owes the screen a frame under reduced motion too"
@@ -4783,18 +4985,13 @@ mod tests {
             ThemeName::Nocturne,
             false,
         );
-        shell.stage.as_mut().expect("stage").mark_output();
+        pulse(shell.stage.as_mut().expect("stage"), 1);
 
         // Let the pulse decay while the trigger stays on screen.
         let _ = paint_rail(&mut shell, width);
-        shell
-            .stage
-            .as_mut()
-            .expect("stage")
-            .pulse
-            .process(baton::DECAY + Duration::from_millis(1));
+        decay(shell.stage.as_mut().expect("stage"), 1);
         assert_eq!(
-            shell.stage.as_ref().expect("stage").baton_state(false),
+            rail(shell.stage.as_ref().expect("stage"), 1, false),
             baton::State::Idle,
             "a trigger is not traffic: the rail is idle"
         );
