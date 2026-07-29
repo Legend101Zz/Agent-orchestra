@@ -30,7 +30,7 @@ ship-log entries are part of finishing an issue.*
 | [#11](https://github.com/Legend101Zz/Agent-orchestra/issues/11) | Each task runs in its own worktree, gets independently reviewed, produces a receipt | ✅ | merged (PR #32) |
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
-| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | 👀 | `issue-37-theme-persistence` ([PR #41](https://github.com/Legend101Zz/Agent-orchestra/pull/41)) |
+| [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | 🔨 | `issue-37-theme-persistence` ([PR #41](https://github.com/Legend101Zz/Agent-orchestra/pull/41)) — 2 fixes |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ⬜ | — *(after #13)* |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
@@ -62,6 +62,8 @@ What this does **not** do: no new themes (still the three from the design
 sheet), no per-session or per-pane override, and nothing about how the app
 looks — that was #13. #38 (STAGE as a live circuit) is untouched and still
 next.
+
+> **Review (Claude, PR #41 @ `5c0d1a0`): 🔨 FIX — 2 items.** All five gates green on my own run (**267 tests, 0 failed**) and all seven ACs re-verified against a live `piod` on a scratch `ORC_HOME`, not from the pasted evidence — including the ones I most wanted to break: `set_theme` sent without a hello is refused and mutates nothing, an unknown variant leaves the connection alive, `pio harness list` does not clobber `app.theme`, and a hand-edited registry beats a stale `config.json`. Resolution happens on write, so no durable record holds an unrenderable name. No new deps, no scope creep; the `install.sh` deviation is one line and AC3 fails without it — authorized. **The defect is in the tests, not the code:** gutting `cycle_theme` so it never calls `commands.set_theme` — the single line that turns `<leader> t` into persistence — still passes **267/267**, the exact number cited as evidence. Every orc-app test passes `commands: None`, so the client→daemon seam is never executed; the mutation table brackets this gap (M7 reads, M14 receives) without covering the send. `scripted_daemon` is already in the same file and is all it needs. Second item: **PR #41 does not merge** (`CONFLICTING`, `progress.md` vs PR #40) — already fixed locally as `ad96e41`, just unpushed. Separately: `harness_list_is_additive_and_preserves_unknown_fields` flakes on the SSD (2/5 here) but flakes on `origin/main` too under an interleaved A/B — a pre-existing 2s `VERSION_PROBE_TIMEOUT`, not counted against this branch.
 
 **#13 pushed (2026-07-29, `issue-13-visual-identity-v1`) — pi-orchestra has a
 real look now, and it survives being stripped of colour.** The whole app draws
