@@ -1636,3 +1636,59 @@ hand back to the implementer.
   issue. Also `pio config set leader_key` does not reach `app.leader_key` — the
   same two-file split, one field over; the help text still points at the file for
   that one rather than claiming a command that does not work.
+
+## Session — 2026-07-29 (code-puppy): #37 review fix 1 — the client→daemon seam had no test
+
+- Reviewer's finding reproduced before fixing anything: replacing `cycle_theme`'s
+  daemon round trip with a no-op (keeping the local `apply_theme`) left
+  `cargo test --workspace` at **267 passed, 0 failed** — the exact number my own
+  evidence comment cited. `<leader> t` still recoloured every screen; the theme
+  simply stopped surviving a relaunch, which is the entire point of the issue.
+- Cause was structural, and my mutation table bracketed it without covering it:
+  every orc-app test drove the switcher with `commands: None`, so the
+  `Some(commands)` branch — the one line that turns a keystroke into
+  persistence — was never executed by anything. M7 covered what a relaunch
+  *reads*, M14 covered the daemon persisting a request it *receives*; nothing
+  covered the *send*, and `BenchClient::set_theme` had no test at all.
+- Fixed with three tests built on the `scripted_daemon` + `read_request_line`
+  helpers already in the file (the reviewer pointed at them), each driving the
+  real production path against a live socket rather than calling the writer
+  directly:
+  - `leader_t_emits_set_theme_for_the_name_it_just_cycled_to` — arms the chord,
+    presses `t`, and asserts the **bytes on the wire** are
+    `{"type":"set_theme","theme":"ember"}`.
+  - `a_refused_save_keeps_the_switch_and_reports_it_on_the_message_line` — a
+    daemon answering `error` leaves the new palette on all three copies and puts
+    `theme not saved: registry is read-only` on the message line. The documented
+    degrade-honestly branch was also completely unexecuted before this.
+  - `the_client_adopts_the_name_the_daemon_says_it_wrote` — see below.
+- Also took the reviewer's non-blocking note on `ServerResponse::ThemeSet`: its
+  doc promised the reply carries the resolved name "so a client that asked for
+  something unrecognised learns what was written", and `cycle_theme` discarded it
+  with `Ok(_)`. Rather than soften the doc, the client now adopts it — the screen
+  can no longer show a palette the durable record disagrees with. Three lines,
+  covered by the third test.
+- Mutation-tested the new coverage four ways, not just once: the reviewer's exact
+  no-op fails all three (`the client must send a request when the theme is
+  cycled: Timeout`); sending a fixed name instead of the cycled one fails two;
+  swallowing the save error fails the refusal test only; ignoring the daemon's
+  resolved name fails the adopt test only. Each mutation is caught by exactly the
+  test that owns it.
+- Gates: fmt, clippy `-D warnings`, rustdoc `-D warnings`, `build --release
+  --locked` all exit 0. `cargo test --workspace` is **270 passed, 0 failed** on
+  internal disk (267 + 3).
+- One more member of the pre-existing bounded-probe flake family surfaced during
+  gate 3: `doctor_cli::doctor_probes_capability_combinations_and_persists_to_registry`
+  failed once under compile load, passes 6/6 in isolation, and rides
+  `probe.rs:55`'s `HELP_PROBE_TIMEOUT = 5s` — the same shape as
+  `discovery.rs:35`'s 2 s version probe (which the reviewer A/B'd against
+  `origin/main`: branch 8/8, main 7/8) and `background_dispatch.rs:195`'s sub-1s
+  budget. This branch touches none of `probe.rs`, `discovery.rs`, or `quota.rs`
+  (`git diff` over all three is empty). Three tests, one cause, worth its own
+  issue.
+- Not changed, with reasoning given to the reviewer: `route_leader` running ahead
+  of the `raw_input_view` guard. STAGE's `RawRouter` already arms the leader while
+  forwarding every other byte to the pane, so intercepting the chord inside a text
+  input is the *consistent* behaviour, not the divergent one — and it keeps
+  `<leader> q` reachable from inside the launch flow. The leader is always a
+  `ctrl-<letter>` byte and cannot be typed as text.
