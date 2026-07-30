@@ -10,8 +10,16 @@
 //! (`_fillTokens`), including that sheet's nearest-ANSI-256 fallback column.
 //!
 //! Colour is never load-bearing alone: every slot that names a *state* has a
-//! matching glyph in [`crate::glyph`], and the monochrome tier drops colour
-//! entirely so the UI must still read through layout, glyph, bold, and reverse.
+//! matching glyph in [`crate::glyph`], and on the monochrome tier every colour
+//! **this map** answers with — the slots and the trigger gradient alike —
+//! resolves to [`Color::Reset`], so the UI must still read through layout,
+//! glyph, bold, and reverse.
+//!
+//! One colour the crate emits does not come from this map: a hosted pane's own
+//! SGR, which [`Theme::pane_color`] replays from the wire at every tier. It is
+//! not theming and it is not tier-gated — see its doc. So "monochrome emits no
+//! colour" is a claim about what pi-orchestra paints, not about what a harness
+//! running inside a pane prints.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -325,21 +333,31 @@ const PHOSPHOR: Palette = Palette {
     ],
 };
 
+/// The number of colour stops in the trigger gradient.
+pub const TRIGGER_STOPS: usize = 7;
+
 /// The per-character gradient a highlighted conductor trigger cycles through,
 /// column by column, so a spell shimmers like Claude Code's `ultrathink`.
 ///
-/// Meaning never rides on the rainbow alone: the token stays **bold** and keeps
-/// its `◆ LABEL` title badge, both of which survive a monochrome terminal — the
-/// colour is decoration on top. It lives here because this module owns every
-/// literal colour in the crate.
-pub const TRIGGER_RAINBOW: [Color; 7] = [
-    Color::Rgb(255, 107, 107), // red
-    Color::Rgb(255, 169, 77),  // orange
-    Color::Rgb(255, 224, 102), // yellow
-    Color::Rgb(99, 230, 190),  // green
-    Color::Rgb(77, 171, 247),  // blue
-    Color::Rgb(177, 151, 252), // indigo
-    Color::Rgb(247, 131, 172), // violet
+/// Naming these stops explicitly rather than as slots is an owner-approved
+/// exception to the slot rule (LOG.md, 2026-07-24): a seven-colour sweep has no
+/// single-slot equivalent. It is *not* an exception to the tier rule, so the
+/// stops carry the same three columns as every row of the map above — 24-bit,
+/// the nearest xterm-256 index, and the base ANSI colour each collapses to —
+/// and [`ColorTier::Monochrome`] drops them entirely like everything else here.
+///
+/// Meaning never rides on the gradient: the token stays **bold** and keeps its
+/// `◆ LABEL` title badge, and on a monochrome terminal those two are the whole
+/// of the effect. The colour is decoration on top. It lives here because this
+/// module owns every literal colour in the crate.
+const TRIGGER_GRADIENT: [SlotColors; TRIGGER_STOPS] = [
+    slot(0xff_6b6b, 203, Color::LightRed),     // red
+    slot(0xff_a94d, 215, Color::Yellow),       // orange
+    slot(0xff_e066, 221, Color::LightYellow),  // yellow
+    slot(0x63_e6be, 79, Color::LightGreen),    // green
+    slot(0x4d_abf7, 75, Color::LightBlue),     // blue
+    slot(0xb1_97fc, 141, Color::LightMagenta), // indigo
+    slot(0xf7_83ac, 211, Color::Magenta),      // violet
 ];
 
 /// Name a resolved colour for a snapshot or an evidence dump.
@@ -383,15 +401,14 @@ impl Theme {
         self.tier
     }
 
-    /// Resolve one semantic slot for this theme and tier.
+    /// Pick one row of the map's three columns for this tier.
     ///
-    /// Under [`ColorTier::Monochrome`] every slot answers [`Color::Reset`]:
-    /// the terminal's own foreground and background. That is the honest
-    /// answer — with no colour to spend, state has to read from glyph,
-    /// bold, dim, and reverse instead.
-    #[must_use]
-    pub fn slot(self, slot: Slot) -> Color {
-        let colors = &self.name.palette().slots[slot as usize];
+    /// Every colour **the map** answers with comes through here — slots and the
+    /// trigger gradient both — which is what makes "the monochrome tier answers
+    /// `Reset`" a property of this module rather than a promise each caller has
+    /// to keep. [`Theme::pane_color`] is the one method that does not resolve
+    /// through here, because it replays a pane's own SGR rather than theming.
+    fn resolve(self, colors: &SlotColors) -> Color {
         match self.tier {
             ColorTier::TrueColor => {
                 let rgb = colors.rgb;
@@ -405,6 +422,40 @@ impl Theme {
             ColorTier::Ansi16 => colors.ansi16,
             ColorTier::Monochrome => Color::Reset,
         }
+    }
+
+    /// Resolve one semantic slot for this theme and tier.
+    ///
+    /// Under [`ColorTier::Monochrome`] every slot answers [`Color::Reset`]:
+    /// the terminal's own foreground and background. That is the honest
+    /// answer — with no colour to spend, state has to read from glyph,
+    /// bold, dim, and reverse instead.
+    #[must_use]
+    pub fn slot(self, slot: Slot) -> Color {
+        self.resolve(&self.name.palette().slots[slot as usize])
+    }
+
+    /// The trigger gradient this terminal receives, or `None` when it has none
+    /// to spend.
+    ///
+    /// Tier by tier, so the answer is on the record rather than implied:
+    ///
+    /// | tier | a trigger token receives |
+    /// |---|---|
+    /// | [`ColorTier::TrueColor`] | the seven 24-bit stops, the design's native form |
+    /// | [`ColorTier::Ansi256`] | the seven nearest xterm-cube indices |
+    /// | [`ColorTier::Ansi16`] | seven distinct base ANSI colours |
+    /// | [`ColorTier::Monochrome`] | `None` — no colour at all |
+    ///
+    /// `None` is what `NO_COLOR` asks for and it costs the affordance nothing:
+    /// the caller keeps the token **bold** at every tier and the `◆ LABEL`
+    /// title badge names the spell in words.
+    #[must_use]
+    pub fn trigger_gradient(self) -> Option<[Color; TRIGGER_STOPS]> {
+        if self.tier == ColorTier::Monochrome {
+            return None;
+        }
+        Some(TRIGGER_GRADIENT.map(|stop| self.resolve(&stop)))
     }
 
     /// A style for a state, pairing the slot's colour with the modifier that
@@ -452,6 +503,14 @@ impl Theme {
     ///
     /// This replays what the harness printed; it is not theming, which is why
     /// it takes its colour from the wire rather than from the map.
+    ///
+    /// **It is deliberately not tier-gated**, and that is the one place the
+    /// module's "monochrome emits no colour" stops being true of the screen: a
+    /// harness printing SGR inside its pane puts that colour on a `NO_COLOR`
+    /// terminal, because quantising or discarding it would be editing another
+    /// program's output. In practice the hosted process inherits `NO_COLOR`
+    /// itself and prints none. Only the [`Slot`] fallback — the pane's *default*
+    /// foreground and background — is resolved through the tier.
     #[must_use]
     pub fn pane_color(self, color: orc_proto::TerminalColor, default: Slot) -> Color {
         match color {
@@ -743,16 +802,272 @@ mod tests {
         assert_eq!(color.selection().bg, Some(color.sel()));
     }
 
-    /// The grep gate: widget code names slots, never colours.
-    ///
-    /// Every source file in the crate except this one is scanned for a colour
-    /// literal — a `#rrggbb` string, an `Rgb`/`Indexed` constructor with
-    /// numeric arguments, or any named `Color::` variant. `Color::Rgb(red,
-    /// green, blue)` built from *identifiers* is allowed, because that is a
-    /// hosted pane replaying its own SGR rather than the app theming itself,
-    /// and that path lives here in `Theme::pane_color` anyway.
     #[test]
-    fn no_hex_literals_outside_the_theme_map() {
+    fn the_trigger_gradient_degrades_with_the_tier_and_vanishes_without_colour() {
+        // The #13 carry-over, at the source. The rainbow used to be a bare
+        // `[Color; 7]` of RGB stops that every tier received verbatim, so a
+        // monochrome terminal was sent nine truecolor cells while this module
+        // claimed it "drops colour entirely" and a 16-colour terminal was sent
+        // SGR it cannot render. It is a row of the map like any other now.
+        //
+        // The theme is irrelevant — the gradient is the trigger's, not the
+        // palette's — so every theme must answer identically, and that is
+        // asserted rather than assumed.
+        for name in ThemeName::ALL {
+            assert_eq!(
+                Theme::new(name, ColorTier::TrueColor).trigger_gradient(),
+                Some([
+                    Color::Rgb(0xff, 0x6b, 0x6b),
+                    Color::Rgb(0xff, 0xa9, 0x4d),
+                    Color::Rgb(0xff, 0xe0, 0x66),
+                    Color::Rgb(0x63, 0xe6, 0xbe),
+                    Color::Rgb(0x4d, 0xab, 0xf7),
+                    Color::Rgb(0xb1, 0x97, 0xfc),
+                    Color::Rgb(0xf7, 0x83, 0xac),
+                ]),
+                "{name:?}: truecolor is the design's native form, unchanged"
+            );
+            assert_eq!(
+                Theme::new(name, ColorTier::Ansi256).trigger_gradient(),
+                Some([
+                    Color::Indexed(203),
+                    Color::Indexed(215),
+                    Color::Indexed(221),
+                    Color::Indexed(79),
+                    Color::Indexed(75),
+                    Color::Indexed(141),
+                    Color::Indexed(211),
+                ]),
+                "{name:?}: ansi256 receives the nearest cube index per stop"
+            );
+            assert_eq!(
+                Theme::new(name, ColorTier::Ansi16).trigger_gradient(),
+                Some([
+                    Color::LightRed,
+                    Color::Yellow,
+                    Color::LightYellow,
+                    Color::LightGreen,
+                    Color::LightBlue,
+                    Color::LightMagenta,
+                    Color::Magenta,
+                ]),
+                "{name:?}: ansi16 receives seven base ANSI colours, not truecolor SGR"
+            );
+            assert_eq!(
+                Theme::new(name, ColorTier::Monochrome).trigger_gradient(),
+                None,
+                "{name:?}: NO_COLOR means no colour — the token is carried by bold \
+                 and the badge, which is all this tier has"
+            );
+        }
+        // Seven stops that collapse onto six colours would be a gradient with a
+        // seam in it, so the 16-colour row has to stay a permutation.
+        let sixteen = Theme::new(ThemeName::Nocturne, ColorTier::Ansi16)
+            .trigger_gradient()
+            .expect("ansi16 has a gradient");
+        for (index, colour) in sixteen.iter().enumerate() {
+            assert!(
+                !matches!(colour, Color::Rgb(..) | Color::Indexed(_) | Color::Reset),
+                "stop {index} must collapse to a base ANSI colour"
+            );
+            assert!(
+                !sixteen[index + 1..].contains(colour),
+                "stop {index} is repeated later in the gradient"
+            );
+        }
+    }
+
+    #[test]
+    fn the_trigger_gradients_ansi256_column_really_is_the_nearest_index() {
+        // The design sheet asks for the fallback column to be "a nearest-color
+        // pass", so the transcribed indices are checked against one rather than
+        // trusted. Searched over 16..=255 — the cube and the greyscale ramp —
+        // because 0..=15 are whatever the terminal's own scheme says they are
+        // and so cannot be measured from here.
+        let level = |index: u32| [0, 95, 135, 175, 215, 255][index as usize];
+        let palette = |index: u32| -> (i32, i32, i32) {
+            if index < 232 {
+                let cube = index - 16;
+                (level(cube / 36), level((cube / 6) % 6), level(cube % 6))
+            } else {
+                let grey = 8 + 10 * (index as i32 - 232);
+                (grey, grey, grey)
+            }
+        };
+        let truecolor = Theme::new(ThemeName::Nocturne, ColorTier::TrueColor)
+            .trigger_gradient()
+            .expect("truecolor has a gradient");
+        let indexed = Theme::new(ThemeName::Nocturne, ColorTier::Ansi256)
+            .trigger_gradient()
+            .expect("ansi256 has a gradient");
+        for (stop, (wanted, got)) in truecolor.iter().zip(indexed.iter()).enumerate() {
+            let Color::Rgb(red, green, blue) = *wanted else {
+                panic!("stop {stop} is not truecolor");
+            };
+            let distance = |index: u32| {
+                let (r, g, b) = palette(index);
+                (r - i32::from(red)).pow(2)
+                    + (g - i32::from(green)).pow(2)
+                    + (b - i32::from(blue)).pow(2)
+            };
+            let nearest = (16..=255)
+                .min_by_key(|index| distance(*index))
+                .unwrap_or(16);
+            assert_eq!(
+                *got,
+                Color::Indexed(u8::try_from(nearest).unwrap_or(u8::MAX)),
+                "stop {stop} is not the nearest xterm-256 index"
+            );
+        }
+    }
+
+    /// Every `.rs` file under `root`, at any depth, relative to it and sorted.
+    ///
+    /// The gate below used to use a flat `read_dir`, which made a widget module
+    /// one directory down invisible to it: a hex literal in `src/widgets/mod.rs`
+    /// passed. AGENTS.md's own "prefer new modules over growing a file past ~600
+    /// lines" makes `src/<subdir>/` the likely next move, so the walk descends.
+    fn rust_sources(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut found = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).expect("read source directory") {
+                let path = entry.expect("source entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path.strip_prefix(root).expect("under src").to_path_buf());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// A declaration with any visibility qualifier removed.
+    ///
+    /// `pub`, `pub(crate)`, `pub(super)`, `pub(in crate::widgets)` — all of them,
+    /// because a floor that only understood `pub` and `pub(crate)` would quietly
+    /// stop tracking a module declared any other way.
+    fn strip_visibility(line: &str) -> &str {
+        let Some(rest) = line.strip_prefix("pub") else {
+            return line;
+        };
+        match rest.chars().next() {
+            // `pub(...)` — skip the whole restriction, however it is spelled.
+            Some('(') => rest
+                .split_once(')')
+                .map_or(line, |(_, after)| after.trim_start()),
+            // `pub mod x;`. Anything else starting with "pub" is an identifier
+            // such as `pubs`, and must not be treated as a qualifier.
+            Some(character) if character.is_whitespace() => rest.trim_start(),
+            _ => line,
+        }
+    }
+
+    /// Every source file the crate's module graph reaches, from its two roots.
+    ///
+    /// `mod name;` in `src/lib.rs` resolves to `src/name.rs` or
+    /// `src/name/mod.rs`, and inside `src/dir/mod.rs` it resolves under `dir`.
+    /// Any visibility qualifier is accepted (see [`strip_visibility`]) and
+    /// `#[path = "..."]` is honoured, so the floor does not lose a module just
+    /// because of how it was spelled.
+    /// This reads the *source text*, so it is an independent statement of what
+    /// has to be scanned: a walk that stopped descending fails the coverage
+    /// assertion instead of quietly meeting a constant floor. A colour literal
+    /// can only reach a build through a declared module, so this is also the
+    /// exact set that matters.
+    fn declared_sources(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut pending: Vec<std::path::PathBuf> = ["lib.rs", "main.rs"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .filter(|relative| root.join(relative).is_file())
+            .collect();
+        let mut found: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(relative) = pending.pop() {
+            if found.contains(&relative) {
+                continue;
+            }
+            let body = std::fs::read_to_string(root.join(&relative)).expect("read module");
+            // Where this file's children live: beside a crate or directory root,
+            // in a directory named after any other module.
+            let parent = if matches!(
+                relative.file_name().and_then(|name| name.to_str()),
+                Some("lib.rs" | "main.rs" | "mod.rs")
+            ) {
+                relative
+                    .parent()
+                    .unwrap_or(std::path::Path::new(""))
+                    .to_path_buf()
+            } else {
+                relative.with_extension("")
+            };
+            found.push(relative);
+            // `#[path = "..."]` overrides where the *next* declaration's file
+            // lives, so it has to be carried across one line.
+            let mut explicit: Option<String> = None;
+            for line in body.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("#[path") {
+                    explicit = rest.split('"').nth(1).map(str::to_owned);
+                    continue;
+                }
+                let declaration = strip_visibility(line);
+                // `mod tests { .. }` is inline and has no file of its own, so
+                // only a declaration terminated by `;` names one.
+                let named = declaration
+                    .strip_prefix("mod ")
+                    .and_then(|rest| rest.strip_suffix(';'))
+                    .map(str::trim);
+                let Some(name) = named else {
+                    // The attribute applied to whatever this is, not to a later
+                    // `mod`; blank lines and comments do not break the pairing.
+                    if !line.is_empty() && !line.starts_with("//") {
+                        explicit = None;
+                    }
+                    continue;
+                };
+                let candidates = match explicit.take() {
+                    Some(path) => vec![parent.join(path)],
+                    None => vec![
+                        parent.join(format!("{name}.rs")),
+                        parent.join(name).join("mod.rs"),
+                    ],
+                };
+                if let Some(hit) = candidates
+                    .into_iter()
+                    .find(|candidate| root.join(candidate).is_file())
+                {
+                    pending.push(hit);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The one file exempt from the colour scan: the theme map itself.
+    ///
+    /// Matched on the **whole** relative path, not on the file name. Keying it
+    /// on the name was harmless while the walk was flat and unsound once it
+    /// recursed: any `src/<anydir>/theme.rs` would have been exempt, and
+    /// splitting this file (1100+ lines against AGENTS.md's ~600 guidance) into
+    /// `src/theme/mod.rs` + `src/theme/palette.rs` would have exempted the map
+    /// and nothing else — the opposite of what the gate is for.
+    const THEME_MAP: &str = "theme.rs";
+
+    /// Scan a source tree for colour literals: a `#rrggbb` string, an
+    /// `Rgb`/`Indexed` constructor with numeric arguments, or any named
+    /// `Color::` variant. `Color::Rgb(red, green, blue)` built from
+    /// *identifiers* is allowed, because that is a hosted pane replaying its own
+    /// SGR rather than the app theming itself, and that path lives in
+    /// `Theme::pane_color` anyway.
+    ///
+    /// Takes the root as an argument so the rules can be exercised against a
+    /// synthetic tree — which is the only way to assert what the gate does with
+    /// a file it must *not* exempt without planting one in the real crate.
+    /// Returns the files scanned and the offences, `<relative path>:<line>`.
+    fn colour_offences(root: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
         const NAMED: [&str; 18] = [
             "Color::Black",
             "Color::Red",
@@ -773,19 +1088,17 @@ mod tests {
             "Color::Reset",
             "Color::from_u32",
         ];
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut scanned = 0_usize;
+        let mut scanned = Vec::new();
         let mut offences = Vec::new();
-        for entry in std::fs::read_dir(&src).expect("read src") {
-            let path = entry.expect("src entry").path();
-            if path.extension().is_none_or(|ext| ext != "rs")
-                || path.file_name().is_some_and(|name| name == "theme.rs")
-            {
+        for relative in rust_sources(root) {
+            if relative == std::path::Path::new(THEME_MAP) {
                 continue;
             }
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let body = std::fs::read_to_string(&path).expect("read source");
-            scanned += 1;
+            // The subdirectory, if any, is part of the name: `mod.rs` alone
+            // would not say which module failed.
+            let name = relative.display().to_string();
+            let body = std::fs::read_to_string(root.join(&relative)).expect("read source");
+            scanned.push(relative);
             for (number, line) in body.lines().enumerate() {
                 let hit = |needle: &str| {
                     line.split(needle).skip(1).any(|rest| {
@@ -806,13 +1119,199 @@ mod tests {
                 }
             }
         }
+        (scanned, offences)
+    }
+
+    /// Build a throwaway source tree under `root`, so the gate's own rules can
+    /// be asserted on files that must not exist in the real crate.
+    fn write_tree(root: &std::path::Path, files: &[(&str, &str)]) {
+        let _ = std::fs::remove_dir_all(root);
+        for (relative, body) in files {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create module directory");
+            }
+            std::fs::write(&path, body).expect("write module");
+        }
+    }
+
+    #[test]
+    fn the_exemption_is_the_theme_map_itself_and_nothing_else_named_like_it() {
+        // The review's second finding. The exemption used to match on the file
+        // *name*, which was harmless while the walk was flat: there was only one
+        // `theme.rs` to find. Once the walk recursed, every `src/<anydir>/
+        // theme.rs` became exempt — so the very split this file is heading for
+        // (`src/theme/mod.rs` + `src/theme/palette.rs`, at 1100+ lines against
+        // AGENTS.md's ~600 guidance) would have exempted the map and nothing
+        // else. Asserted on a synthetic tree because proving it needs a file the
+        // real crate must not contain.
+        let root = std::env::temp_dir().join(format!("orc-app-gate-{}", std::process::id()));
+        write_tree(
+            &root,
+            &[
+                (
+                    "theme.rs",
+                    "Color::Rgb(1, 2, 3) // the map may name colours\n",
+                ),
+                ("widgets/theme.rs", "let sneaky = Color::Indexed(199);\n"),
+                ("widgets/deep/panel.rs", "let hex = \"#ff00aa\";\n"),
+                ("honest.rs", "theme.slot(Slot::Fg)\n"),
+            ],
+        );
+        let (scanned, offences) = colour_offences(&root);
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(
+            offences.len(),
+            2,
+            "expected the two literals below the root to be reported: {offences:?}"
+        );
         assert!(
-            scanned >= 4,
-            "the gate scanned only {scanned} files — it is not looking where the widgets are"
+            offences
+                .iter()
+                .any(|hit| hit.starts_with("widgets/theme.rs:")),
+            "a `theme.rs` that is not THE theme map must be scanned like any \
+             other file: {offences:?}"
+        );
+        assert!(
+            offences
+                .iter()
+                .any(|hit| hit.starts_with("widgets/deep/panel.rs:")),
+            "the scan must reach any depth: {offences:?}"
+        );
+        assert_eq!(scanned.len(), 3, "only the root theme.rs may be skipped");
+        assert!(
+            !scanned.contains(&std::path::PathBuf::from(THEME_MAP)),
+            "the theme map itself is the one file exempt from its own rule"
+        );
+    }
+
+    #[test]
+    fn the_module_graph_probe_reads_every_way_a_module_can_be_declared() {
+        // The review's fourth finding: the probe stripped only `pub ` and
+        // `pub(crate) `, so `pub(super)`, `pub(in ...)` and `#[path]` modules
+        // were invisible to the floor — it would have under-counted the tree it
+        // exists to track. Inline `mod tests { .. }` must stay invisible, since
+        // it has no file, and `pubs` is an identifier, not a qualifier.
+        let root = std::env::temp_dir().join(format!("orc-app-graph-{}", std::process::id()));
+        write_tree(
+            &root,
+            &[
+                (
+                    "lib.rs",
+                    "pub mod plain;\n\
+                     pub(crate) mod crated;\n\
+                     pub(super) mod supered;\n\
+                     pub(in crate::plain) mod scoped;\n\
+                     mod bare;\n\
+                     #[path = \"elsewhere/renamed.rs\"]\n\
+                     mod aliased;\n\
+                     #[cfg(test)]\n\
+                     mod gated;\n\
+                     let pubs = 1;\n\
+                     #[cfg(test)]\n\
+                     mod tests {\n\
+                     }\n",
+                ),
+                ("plain.rs", "pub mod nested;\n"),
+                ("plain/nested.rs", ""),
+                ("crated.rs", ""),
+                ("supered.rs", ""),
+                ("scoped.rs", ""),
+                ("bare/mod.rs", ""),
+                ("elsewhere/renamed.rs", ""),
+                ("gated.rs", ""),
+                ("orphan.rs", "// on disk, declared by nobody\n"),
+            ],
+        );
+        let declared = declared_sources(&root);
+        let _ = std::fs::remove_dir_all(&root);
+
+        let names: Vec<String> = declared
+            .iter()
+            .map(|path| path.display().to_string().replace('\\', "/"))
+            .collect();
+        for wanted in [
+            "lib.rs",
+            "plain.rs",
+            "plain/nested.rs",
+            "crated.rs",
+            "supered.rs",
+            "scoped.rs",
+            "bare/mod.rs",
+            "elsewhere/renamed.rs",
+            "gated.rs",
+        ] {
+            assert!(
+                names.iter().any(|name| name == wanted),
+                "{wanted} is declared but the probe missed it: {names:?}"
+            );
+        }
+        assert!(
+            !names.iter().any(|name| name == "orphan.rs"),
+            "the probe reports the module graph, not the directory listing: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name.contains("tests")),
+            "an inline `mod tests {{ .. }}` has no file to find: {names:?}"
+        );
+    }
+
+    /// The grep gate: widget code names slots, never colours.
+    ///
+    /// Every source file in the crate except [`THEME_MAP`] is scanned — at any
+    /// depth. Two assertions guard the walk itself, and they catch different
+    /// failures: the coverage loop catches a walk that stopped descending, and
+    /// the exemption count catches an exemption that matched more than the one
+    /// file it is allowed to.
+    #[test]
+    fn no_hex_literals_outside_the_theme_map() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let walked = rust_sources(&src);
+        let (scanned, offences) = colour_offences(&src);
+        // The floor tracks the tree: every file the crate declares as a module
+        // must be one the walk reached, named individually so a failure says
+        // which module went unscanned rather than only that a count is short.
+        let declared = declared_sources(&src);
+        assert!(
+            declared.len() >= 2,
+            "the module-graph probe found {} files — it stopped parsing, so the \
+             floor below means nothing",
+            declared.len()
+        );
+        for relative in &declared {
+            assert!(
+                walked.contains(relative),
+                "the gate never looked at {}, which the crate declares as a module",
+                relative.display()
+            );
+        }
+        // Order matters: if the map is split into `src/theme/` the exemption
+        // matches nothing, and the count below would then fire with a message
+        // blaming the opposite problem. This one names the real cause.
+        assert!(
+            walked
+                .iter()
+                .any(|path| path == std::path::Path::new(THEME_MAP)),
+            "there is no {THEME_MAP} to exempt — if the map moved, point \
+             THEME_MAP at it rather than letting the gate scan its own table"
+        );
+        // Exactly one file may be skipped. A count against `declared` would add
+        // nothing here — the loop above already proves `declared` is a subset of
+        // `walked` — whereas this fires the moment the exemption swallows a
+        // second file, which is how keying it on the file name went wrong.
+        assert_eq!(
+            scanned.len() + 1,
+            walked.len(),
+            "the gate walked to {} files and scanned {}: the {THEME_MAP} exemption \
+             is swallowing more than the theme map",
+            walked.len(),
+            scanned.len()
         );
         assert!(
             offences.is_empty(),
-            "colour literals outside the theme map ({scanned} files scanned):\n{}",
+            "colour literals outside the theme map ({} files scanned):\n{}",
+            scanned.len(),
             offences.join("\n")
         );
     }

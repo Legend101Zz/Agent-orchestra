@@ -50,7 +50,7 @@ pub mod theme;
 
 use crate::glyph::{Glyph, GlyphTier, Glyphs};
 pub use crate::theme::ThemeName;
-use crate::theme::{ColorTier, Slot, TRIGGER_RAINBOW, Theme};
+use crate::theme::{ColorTier, Slot, Theme};
 
 const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -944,6 +944,10 @@ impl StageState {
     /// with no output has produced no traffic, so the rail decays to idle like
     /// any other silent pane. Pinned by
     /// `a_trigger_animates_the_rainbow_but_never_the_rail`.
+    ///
+    /// It answers what a pane *shows*, not whether that has anything to
+    /// animate; `repaint_reasons` pairs it with the tier, because a terminal
+    /// with no gradient has nothing to slide.
     fn has_live_trigger(&self) -> bool {
         self.panes
             .iter()
@@ -2239,7 +2243,10 @@ struct RepaintReasons {
     /// The rail resolves to something other than what is on screen. This is
     /// the only reason that fires on the frame motion *stops*.
     stage_changed: bool,
-    /// A conductor pane is showing a trigger and motion is allowed.
+    /// A conductor pane is showing a trigger, motion is allowed, and there is a
+    /// gradient for it to slide. On the monochrome tier there is not: the token
+    /// is bold and nothing else, so a 120 ms cadence would be the wasted spin
+    /// [`StageState::any_live`] describes.
     trigger_ambient: bool,
     /// A message is crossing a connector, or its emote is still showing.
     in_flight: bool,
@@ -2297,6 +2304,7 @@ fn repaint_reasons(shell: &ShellState, pending: bool) -> RepaintReasons {
         stage_live: live && shell.reduced_motion,
         stage_changed: stage.is_some_and(|stage| stage.baton_needs_repaint(shell.reduced_motion)),
         trigger_ambient: !shell.reduced_motion
+            && shell.theme.trigger_gradient().is_some()
             && stage.is_some_and(|stage| stage.has_live_trigger()),
         in_flight: stage.is_some_and(|stage| stage.any_in_flight(shell.reduced_motion)),
         home_ambient: !shell.reduced_motion && !shell.help && shell.view == ShellView::Home,
@@ -3911,6 +3919,9 @@ fn render_pane(
     }
     let rows = inner.height.min(pane.rows);
     let cols = inner.width.min(pane.cols);
+    // Resolved once for the pane rather than per cell: the tier cannot change
+    // mid-frame, and `None` here is the whole of the monochrome behaviour.
+    let gradient = theme.trigger_gradient();
     let buffer = frame.buffer_mut();
     for row in 0..rows {
         for col in 0..cols {
@@ -3940,20 +3951,26 @@ fn render_pane(
                 style = style.add_modifier(Modifier::REVERSED);
             }
             // A detected conductor trigger shimmers like `ultrathink`: each
-            // column of the token takes the next colour in TRIGGER_RAINBOW, and
-            // `phase` slides the gradient one stop per motion tick so it flows.
-            // Kept BOLD so the span still reads when colour is stripped (the
-            // `◆ LABEL` title badge names it too — never colour alone).
+            // column of the token takes the next stop of the gradient, and
+            // `phase` slides it one stop per motion tick so it flows.
+            //
+            // The colour is the part that degrades. BOLD is unconditional, so
+            // the span still reads when there is no colour to spend at all —
+            // which is exactly what `Theme::trigger_gradient` answers on the
+            // monochrome tier, so `NO_COLOR` really means no colour here rather
+            // than nine truecolor cells. The `◆ LABEL` title badge names the
+            // spell in words either way.
             if let Some(span) = trigger_spans
                 .iter()
                 .find(|span| span.row == row && col >= span.col && col < span.col + span.len)
             {
-                let offset = usize::from(col - span.col);
-                let colour = TRIGGER_RAINBOW[(offset + phase) % TRIGGER_RAINBOW.len()];
                 style = style
-                    .fg(colour)
                     .add_modifier(Modifier::BOLD)
                     .remove_modifier(Modifier::REVERSED);
+                if let Some(stops) = gradient {
+                    let offset = usize::from(col - span.col);
+                    style = style.fg(stops[(offset + phase) % stops.len()]);
+                }
             }
             target.set_symbol(if source.text.is_empty() {
                 " "
@@ -4535,18 +4552,51 @@ mod tests {
         }
     }
 
-    /// The concatenated symbols of every rainbow-highlighted trigger cell, in
+    /// The gradient a truecolor terminal receives, which is the tier every test
+    /// renders with unless it is specifically exercising a degradation.
+    fn truecolor_gradient() -> [ratatui::style::Color; crate::theme::TRIGGER_STOPS] {
+        Theme::from(ThemeName::Nocturne)
+            .trigger_gradient()
+            .expect("truecolor has a gradient")
+    }
+
+    /// The concatenated symbols of every gradient-highlighted trigger cell, in
     /// buffer (row-major) order. A highlighted cell is BOLD with a foreground
-    /// drawn from `TRIGGER_RAINBOW`; for a single trigger this is exactly the
-    /// token, so tests can assert the prompt glyph is never part of the span.
+    /// drawn from the truecolor gradient; for a single trigger this is exactly
+    /// the token, so tests can assert the prompt glyph is never part of the span.
+    ///
+    /// Truecolor on purpose: below that tier the stops are ordinary ANSI colours
+    /// that theme slots also use, so "fg is a gradient stop" would stop meaning
+    /// "this cell is a trigger". The tier cases assert on the token's own cells
+    /// instead — see `a_trigger_token_degrades_with_the_colour_tier`.
     fn highlighted_symbols(buffer: &ratatui::buffer::Buffer) -> String {
+        let gradient = truecolor_gradient();
         buffer
             .content()
             .iter()
-            .filter(|cell| {
-                cell.modifier.contains(Modifier::BOLD) && super::TRIGGER_RAINBOW.contains(&cell.fg)
-            })
+            .filter(|cell| cell.modifier.contains(Modifier::BOLD) && gradient.contains(&cell.fg))
             .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    /// The cells STAGE painted for the one `delegate:` token on screen, found by
+    /// the symbols themselves so it works at any tier and any layout. The title
+    /// badge spells the label in capitals, so it cannot be matched by mistake.
+    fn trigger_token_cells(buffer: &ratatui::buffer::Buffer) -> Vec<ratatui::buffer::Cell> {
+        let token: Vec<String> = "delegate:".chars().map(|ch| ch.to_string()).collect();
+        let cells: Vec<&ratatui::buffer::Cell> = buffer.content().iter().collect();
+        let start = cells
+            .windows(token.len())
+            .position(|window| {
+                window
+                    .iter()
+                    .zip(&token)
+                    .all(|(cell, want)| cell.symbol() == want)
+            })
+            .expect("the trigger token is on screen");
+        cells[start..start + token.len()]
+            .iter()
+            .map(|cell| (*cell).clone())
             .collect()
     }
 
@@ -4747,10 +4797,16 @@ mod tests {
     #[test]
     fn trigger_highlight_is_reduced_motion_and_color_safe() {
         // AC3: under reduced motion the rainbow is frozen at phase 0, so two
-        // renders are byte-identical (no animation), and the affordance still
-        // survives colour removal because the token stays BOLD and a glyph +
-        // label badge names it. Uses a real Claude Code prompt prefix (U+276F,
-        // as UTF-8 bytes) so the fixture matches a live pane, not a bare stream.
+        // renders are byte-identical (no animation), and the token carries the
+        // BOLD and the glyph + label badge that are the affordance once colour
+        // is gone. Uses a real Claude Code prompt prefix (U+276F, as UTF-8
+        // bytes) so the fixture matches a live pane, not a bare stream.
+        //
+        // Note what this does *not* do: every render here is truecolor, so it
+        // shows the bold and the badge are present, never that they are all
+        // that is left. Reading it as the latter is how a rainbow that ignored
+        // the tier survived #13 — that claim is
+        // `a_trigger_token_degrades_with_the_colour_tier`'s.
         let stream = b"\xe2\x9d\xaf delegate: add OAuth login\r\n";
         for theme_name in ThemeName::ALL {
             let mut frames = Vec::new();
@@ -4804,13 +4860,13 @@ mod tests {
             terminal.backend().buffer().clone()
         };
         // The highlighted token's per-cell colours, left to right.
+        let gradient = truecolor_gradient();
         let token_colours = |buffer: &ratatui::buffer::Buffer| -> Vec<ratatui::style::Color> {
             buffer
                 .content()
                 .iter()
                 .filter(|cell| {
-                    cell.modifier.contains(Modifier::BOLD)
-                        && super::TRIGGER_RAINBOW.contains(&cell.fg)
+                    cell.modifier.contains(Modifier::BOLD) && gradient.contains(&cell.fg)
                 })
                 .map(|cell| cell.fg)
                 .collect()
@@ -4865,6 +4921,73 @@ mod tests {
                 text.contains("DELEGATE"),
                 "{theme_name:?}: missing label badge"
             );
+        }
+    }
+
+    #[test]
+    fn a_trigger_token_degrades_with_the_colour_tier() {
+        // Finding 1 of the #13 review, from the render side. `render_pane` used
+        // to apply the gradient with no tier check at all, so `NO_COLOR` was
+        // sent nine truecolor cells while `theme.rs` claimed the monochrome tier
+        // "drops colour entirely", and `TERM=xterm` was sent 24-bit SGR it
+        // cannot render. What each tier receives is pinned here on the rendered
+        // buffer rather than only on the map: the nine cells of `delegate:`
+        // carry exactly that tier's gradient, one stop per column, and they stay
+        // BOLD at every tier — including the one with no colour to spend.
+        for tier in [
+            ColorTier::TrueColor,
+            ColorTier::Ansi256,
+            ColorTier::Ansi16,
+            ColorTier::Monochrome,
+        ] {
+            let theme = Theme::new(ThemeName::Nocturne, tier);
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            let mut state =
+                StageState::new(vec![conductor_pane(b"delegate: go\r\n")], theme, GLYPHS);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)]))
+                .expect("render stage");
+            let buffer = terminal.backend().buffer();
+            let token = trigger_token_cells(buffer);
+            assert_eq!(token.len(), 9, "{tier:?}: `delegate:` is nine cells");
+            for (column, cell) in token.iter().enumerate() {
+                assert!(
+                    cell.modifier.contains(Modifier::BOLD),
+                    "{tier:?}: column {column} lost the bold that carries the token"
+                );
+            }
+            if let Some(stops) = theme.trigger_gradient() {
+                let painted: Vec<_> = token.iter().map(|cell| cell.fg).collect();
+                let wanted: Vec<_> = (0..token.len())
+                    .map(|column| stops[column % stops.len()])
+                    .collect();
+                assert_eq!(
+                    painted, wanted,
+                    "{tier:?}: the token is not this tier's gradient, one stop per column"
+                );
+            } else {
+                for (column, cell) in token.iter().enumerate() {
+                    assert_eq!(
+                        super::theme::describe(cell.fg),
+                        "reset",
+                        "{tier:?}: column {column} still emits a foreground colour"
+                    );
+                    assert_eq!(
+                        super::theme::describe(cell.bg),
+                        "reset",
+                        "{tier:?}: column {column} still emits a background colour"
+                    );
+                }
+            }
+            // And the badge names the spell in words at every tier — what a
+            // monochrome terminal reads instead of a colour.
+            let text = rendered_text(buffer);
+            assert!(
+                text.contains(&super::trigger_badge_mark()),
+                "{tier:?}: missing glyph badge"
+            );
+            assert!(text.contains("DELEGATE"), "{tier:?}: missing label badge");
         }
     }
 
@@ -4966,6 +5089,49 @@ mod tests {
                 .iter()
                 .any(|cell| cell.modifier.contains(Modifier::DIM)),
             "recessive metadata is indistinguishable under NO_COLOR"
+        );
+
+        // STAGE carries the trigger grammar, and it is the screen this
+        // assertion used to skip: it ran over SCORE and HOME only, and the
+        // STAGE fixtures wrote `codex ready`, which contains no trigger. Nine
+        // truecolor cells were being emitted under `NO_COLOR` with nothing
+        // watching. A live trigger is now inside the "nothing on screen carries
+        // colour" net, so it cannot come back quietly.
+        let mut stage = StageState::new(
+            vec![conductor_pane(b"delegate: add OAuth login\r\n")],
+            theme,
+            GLYPHS,
+        );
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("mono STAGE terminal");
+        terminal
+            .draw(|frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]))
+            .expect("render mono STAGE");
+        let buffer = terminal.backend().buffer().clone();
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .all(|cell| super::theme::describe(cell.fg) == "reset"
+                    && super::theme::describe(cell.bg) == "reset"),
+            "a NO_COLOR STAGE showing a live trigger emitted colour"
+        );
+        let token = trigger_token_cells(&buffer);
+        assert_eq!(token.len(), 9, "the trigger token is on the mono screen");
+        assert!(
+            token
+                .iter()
+                .all(|cell| cell.modifier.contains(Modifier::BOLD)),
+            "with no colour left, bold is what carries the trigger — and it is gone"
+        );
+        let stage_text = rendered_text(&buffer);
+        assert!(
+            stage_text.contains(&super::trigger_badge_mark()),
+            "the glyph badge is the other half of a colourless trigger"
+        );
+        assert!(
+            stage_text.contains("DELEGATE"),
+            "…and it must still be named in words"
         );
 
         // HOME carries availability and session health.
@@ -5393,6 +5559,54 @@ mod tests {
             Duration::from_millis(120),
             "one colour per 120 ms is all the rainbow steps, so a trigger must \
              not hold the loop at the baton's 16 ms cadence"
+        );
+    }
+
+    #[test]
+    fn a_trigger_asks_for_no_frames_when_there_is_no_gradient_to_slide() {
+        // The consequence of gating the gradient on the tier, on the loop side.
+        // `trigger_ambient` exists to hold the shell at 120 ms so the gradient
+        // can step one stop per tick. With no stops there is nothing to step,
+        // and repainting a token that cannot change is precisely the wasted spin
+        // `any_live`'s doc calls out. Same fixture as the test above, so the
+        // only difference between the two halves is the colour tier.
+        let width = 120;
+        let stream = format!("{}: build the thing\r\n", Trigger::ALL[0].keyword());
+        let bench = panes().remove(1);
+        let mut shell = stage_shell(
+            vec![conductor_pane(stream.as_bytes()), bench],
+            ThemeName::Nocturne,
+            false,
+        );
+        pulse(shell.stage.as_mut().expect("stage"), 1);
+        let _ = paint_rail(&mut shell, width);
+        decay(shell.stage.as_mut().expect("stage"), 1);
+        let _ = paint_rail(&mut shell, width);
+        assert_eq!(
+            repaint_reasons(&shell, false),
+            RepaintReasons {
+                trigger_ambient: true,
+                ..RepaintReasons::default()
+            },
+            "with colour, the trigger is the one thing still asking for frames"
+        );
+
+        // The same screen on a terminal that resolved to no colour at all. The
+        // client sets both themes from one resolved value, so both move.
+        let mono = Theme::new(ThemeName::Nocturne, ColorTier::Monochrome);
+        shell.theme = mono;
+        shell.stage.as_mut().expect("stage").theme = mono;
+        let reasons = repaint_reasons(&shell, false);
+        assert_eq!(
+            reasons,
+            RepaintReasons::default(),
+            "nothing on this screen can change, so nothing may ask for a frame"
+        );
+        assert!(!reasons.draw());
+        assert_eq!(
+            reasons.wait(),
+            Duration::from_secs(30),
+            "a bold token with no gradient must not hold the loop at 120 ms"
         );
     }
 

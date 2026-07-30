@@ -1783,3 +1783,112 @@ hand back to the implementer.
 - AC9 measured: **0.157 ms/frame in release**, 6.223 ms debug, with six workers
   all live plus a message in flight at 150×44. Budget is the 16 ms cadence.
 - **Next: review of #38**, then #39, with #14 last.
+
+## Session — 2026-07-30 (implementer, #39 visual-identity carry-over from #13)
+
+- Branched `issue-39-trigger-tier-grep-gate` from fresh `main` @ `1406840`
+  (after #38's PR #42 merged). Allowed paths: `rust/crates/orc-app/`,
+  `docs/notes/`.
+- **The NO_COLOR decision was (a), collapse it — but per tier, not to nothing.**
+  The issue's own second half ("a 16-colour terminal also receives truecolor
+  SGR") is the argument: the complaint is not that a 16-colour terminal gets
+  colour, it is that it gets SGR it cannot render. So `TRIGGER_RAINBOW` stopped
+  being a bare `[Color; 7]` and became `TRIGGER_GRADIENT`, a row of the theme
+  map with the same three columns as every other row — 24-bit, nearest
+  xterm-256 index, base ANSI collapse — resolved through the same
+  `Theme::resolve` every slot goes through. `Theme::trigger_gradient()` answers
+  `None` on the monochrome tier, so `theme.rs`'s "drops colour entirely" is
+  now true instead of softened.
+- **Truecolor is untouched, and the proof is that no committed golden drifted.**
+  Ten STAGE goldens compare byte-for-byte with the change in. The owner-approved
+  #9 exception (literal stops, not slot names) is preserved exactly where it was
+  approved; what is no longer excepted is the tier, which is #13's rule.
+- The ANSI-256 column is checked, not trusted: a test recomputes a
+  nearest-colour pass over indices 16..=255 and asserts the transcribed indices
+  are what it finds — the pass the design sheet actually asks for.
+- **One consequence taken deliberately, and it is a real one.**
+  `repaint_reasons`' `trigger_ambient` held the loop at 120 ms so the gradient
+  could step. With no gradient it would repaint a token that cannot change —
+  the exact anti-pattern `any_live`'s own doc names ("a repaint cadence held
+  open by something that animates nothing is the same wasted spin the trigger
+  rainbow used to cause"). Gating the colour without gating the guard would
+  have *created* that spin, so the guard moved too.
+- **Both suite holes the issue diagnosed were real and are closed.** The
+  `all(fg == "reset")` net ran over SCORE and HOME only; it now renders STAGE
+  with a live trigger. And `stage_panes()` wrote `codex ready`, so no golden
+  ever went through the highlight path — new `stage_trigger_panes()` fixture,
+  gated at all four tiers (4 new goldens whose legends *are* the AC3 evidence).
+- Mutation-checked in both directions. Restoring the pre-fix render fails three
+  independent tests; removing the repaint clause fails the fourth.
+- **The grep-gate hole was reproduced before being fixed.** With the pre-fix
+  gate (flat `read_dir` + `scanned >= 4`) and `src/widgets/mod.rs` holding five
+  colour literals, the test was **green**. Recursive walk now catches all five
+  with `widgets/mod.rs:<line>` naming the module.
+- AC5: the floor is the crate's **module graph**, not a constant — `mod x;`
+  parsed transitively from `lib.rs`/`main.rs` and resolved to `x.rs` or
+  `x/mod.rs`. It reads source text rather than the same directory walk, so it is
+  an independent check: cripple the walk back to flat and the gate fails on the
+  floor itself, per-file *and* on the count, each independently. Demo module
+  deleted; `git status` clean of it.
+- Noted, not fixed (out of scope, recorded in the evidence note): `pane_color`
+  still replays a hosted pane's own SGR at every tier including monochrome. It
+  is documented behaviour with a stated reason and the app claims nothing else,
+  but it is the one remaining path that can put colour on a `NO_COLOR` screen.
+- Gates: all five green. `orc-app` lib tests 94 → 99 (measured against a stashed
+  tree), workspace 304 passed. The known storage flake
+  `delegate_confirms_while_running…` appeared once and passed on re-run; it is
+  in `orc-cli`, which this branch does not touch.
+- Evidence: `docs/notes/2026-07-30-issue-39-evidence.md`.
+- **Next: review of #39**, then #45 (which #46 added to the board while this
+  branch was open), with #14 (README + screenshots) last. Note for
+  whoever picks that up: `docs/WORKFLOW.md`'s checkout note is stale — it says
+  `/Volumes/Mrigesh SSD/pi-orchestra` "is NOT this repo", but that checkout is
+  the one tracking `origin/main` today (`Agent-orchestra/` beside it is months
+  behind, at the #12 era). Outside this issue's allowed paths, so left alone.
+
+## Session — 2026-07-30 (implementer, #39 fix round after 🔨 FIX review)
+
+- Four findings, all four accepted, none pushed back on. The two blocking ones
+  were defects **this branch introduced** — and both were introduced by the fix
+  rather than inherited, which is the part worth remembering.
+- **Finding 1: my own new doc lines were the claim-vs-behaviour gap.** I had
+  flagged `pane_color` as an adjacent issue in the evidence note while, two
+  files away, writing "every colour the crate emits comes through here"
+  (`Theme::resolve`) and "drops colour entirely… without exception" (module
+  doc). Both false while `pane_color` replays a pane's SGR at every tier. The
+  note even said "the app is not claiming otherwise" — it was, and I wrote the
+  claim. Scoped all three docs to what the *map* emits, with the caveat stated
+  on `pane_color` itself. Behaviour deliberately unchanged: what `pane_color`
+  should do under `NO_COLOR` is its own decision, and the ask was honesty.
+- **Finding 2: recursion made the gate's exemption unsound.** `file_name() ==
+  "theme.rs"` was fine while the walk was flat — there was only one to find.
+  Recursing turned it into "every `src/<anydir>/theme.rs` is exempt". Fixed to a
+  whole-path compare against a named `THEME_MAP`, and the scan was split out as
+  `colour_offences(root)` so the rule is testable against a **synthetic tree** —
+  the only way to assert what the gate does with a file the real crate must not
+  contain. Mutation-checked: the old rule leaves `widgets/theme.rs`'s
+  `Color::Indexed(199)` unreported.
+- Added the assertion the reviewer's "future `src/theme/` split" warning
+  implies: if the map moves, the gate says so by name instead of silently
+  scanning its own table — ordered *before* the exemption count, or the count
+  fires first blaming the opposite problem.
+- **Finding 3 was a straight factual correction and it was right.** I claimed
+  the two floor assertions "each catch a non-recursing walk independently". They
+  did not: if the coverage loop passes then `declared ⊆ walked`, so
+  `scanned + 1 >= declared.len()` could never fire. The mutation only appeared
+  to exercise it because it had also deleted the coverage loop. Replaced with
+  `scanned.len() + 1 == walked.len()`, which is *not* implied — it fires when the
+  exemption swallows a second file. Corrected in the evidence note and on the PR.
+- **Finding 4:** `strip_visibility` now removes any qualifier (`pub`,
+  `pub(crate)`, `pub(super)`, `pub(in …)`) while leaving an identifier like
+  `pubs` alone, and `#[path = "..."]` is carried to the declaration it precedes.
+  Pinned by a synthetic-crate test covering all six spellings plus an inline
+  `mod tests {}` (no file) and an undeclared `orphan.rs` (must not appear).
+  Mutation-checked: the old two-prefix strip finds six of nine.
+- Both new tests use throwaway trees under `std::env::temp_dir()`, so nothing
+  has to be planted in the crate and removed by hand the way AC4's original
+  demonstration did.
+- Gates: all five green. `orc-app` lib tests 99 → 101, workspace 306. No golden
+  moved; the only non-doc, non-test change this round is the exemption predicate.
+- **Next: re-review of #39**, then #45, with #14 last.
+

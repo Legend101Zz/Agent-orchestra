@@ -275,6 +275,23 @@ mod tests {
             .collect()
     }
 
+    /// STAGE with a live trigger on the conductor's screen.
+    ///
+    /// `stage_panes()` writes `codex ready`, which contains no trigger, so not
+    /// one committed golden went through the highlight path — which is how a
+    /// gradient that ignored the colour tier survived the whole suite. These
+    /// goldens are the evidence for what each tier actually receives: the
+    /// legends carry the per-cell colours, so the monochrome one says `reset`
+    /// nine times where the truecolor one lists the seven stops.
+    fn stage_trigger_panes() -> Vec<PaneSnapshot> {
+        let mut panes = stage_panes();
+        // Longer than the `codex ready` it replaces, so nothing of it is left.
+        for (column, glyph) in "delegate: ship the thing".chars().enumerate() {
+            panes[0].cells[column].text = glyph.to_string();
+        }
+        panes
+    }
+
     /// A conductor plus `count` workers, so the topology is pinned at the
     /// worker counts AC1 names rather than only at the one the rest of the
     /// suite happens to use.
@@ -508,6 +525,27 @@ mod tests {
             &format!("STAGE nocturne monochrome {WIDTH}x{HEIGHT}"),
             |frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]),
         );
+    }
+
+    /// A live trigger at every colour tier, so what a trigger token receives is
+    /// on the record as four goldens rather than as prose. The four differ only
+    /// in the tier, and the diff between them is the whole of the degradation.
+    #[test]
+    fn a_live_trigger_is_snapshotted_at_every_colour_tier() {
+        for (slug, tier) in [
+            ("truecolor", ColorTier::TrueColor),
+            ("ansi256", ColorTier::Ansi256),
+            ("ansi16", ColorTier::Ansi16),
+            ("no-color", ColorTier::Monochrome),
+        ] {
+            let theme = Theme::new(ThemeName::Nocturne, tier);
+            let mut stage = StageState::new(stage_trigger_panes(), theme, UNICODE);
+            gate(
+                &format!("stage-trigger-{slug}"),
+                &format!("STAGE nocturne {slug} live trigger {WIDTH}x{HEIGHT}"),
+                |frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]),
+            );
+        }
     }
 
     /// The ANSI-256 tier, where the design sheet's fallback column is what
