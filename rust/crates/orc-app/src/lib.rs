@@ -651,6 +651,19 @@ struct StageState {
     raw_router: RawRouter,
     confirmed_panes: std::collections::HashSet<String>,
     leader_label: String,
+    /// Whether the trigger grammar can actually fire on this machine.
+    ///
+    /// The in-pane highlight is pure text analysis: it lights up `delegate:`
+    /// whether or not anything is listening for it. On the machine that
+    /// reported issue #45 nothing was — no `UserPromptSubmit` hook was
+    /// registered at all — so STAGE spent the whole session announcing a
+    /// capability that did not exist, which is precisely the "never claim a
+    /// capability that wasn't probed" rule.
+    ///
+    /// `attach_stage` always sets this from `orc_core::trigger_grammar`, the
+    /// same probe `pio doctor` reports. It defaults to wired only because a
+    /// `StageState` that has not attached has nothing on screen to mislabel.
+    trigger_wired: bool,
     /// Recoverable command failure shown on the legend line instead of
     /// exiting the client.
     message: String,
@@ -681,6 +694,7 @@ impl StageState {
             raw_router: RawRouter::default(),
             confirmed_panes: std::collections::HashSet::new(),
             leader_label: "ctrl-g".to_owned(),
+            trigger_wired: true,
             message: String::new(),
         }
     }
@@ -783,22 +797,42 @@ impl StageState {
         })
     }
 
+    /// Learn the board that already existed, raising nothing.
+    ///
+    /// Attaching to a session with a finished board must not replay every
+    /// dispatch it ever made, so the watermark starts at what is already
+    /// there. This is the *only* thing that may treat history as old news:
+    /// once attached, a task appearing for the first time appeared because
+    /// the conductor just delegated it, and that is precisely the event
+    /// STAGE exists to show.
+    fn seed_task_events(&mut self, tasks: &[TaskSummary]) {
+        for task in tasks {
+            self.seen_history
+                .insert(task.id.clone(), task.history.len());
+        }
+        self.retain_seen(tasks);
+    }
+
     /// Turn newly-appended task history into messages in flight.
     ///
     /// Only the entries that have appeared since the last look are raised, so
     /// re-reading the board — which happens on every snapshot — does not
     /// re-dispatch the same packet forever.
+    ///
+    /// A task with no watermark is *new*, not old: it was created after
+    /// [`Self::seed_task_events`] ran, so its whole history is news. This used
+    /// to skip it, and the cost was the headline gesture of issue #45 — a
+    /// `pio orch delegate` from inside a seated pane creates, assigns and
+    /// confirms a task between two snapshots, so STAGE saw it for the first
+    /// time already finished and animated nothing at all. Every test around
+    /// this passed because each one hand-fed a `created`-only board first,
+    /// sharing the assumption that a task is always seen before it is
+    /// dispatched.
     fn note_task_events(&mut self, tasks: &[TaskSummary]) {
         for task in tasks {
             let seen = self.seen_history.get(&task.id).copied().unwrap_or(0);
             self.seen_history
                 .insert(task.id.clone(), task.history.len());
-            // A first sighting is history, not news: attaching to a session
-            // with a finished board must not replay every dispatch it ever
-            // made.
-            if seen == 0 {
-                continue;
-            }
             let Some(worker_id) = task.assignee_run.clone() else {
                 continue;
             };
@@ -815,6 +849,11 @@ impl StageState {
                 }
             }
         }
+        self.retain_seen(tasks);
+    }
+
+    /// Forget watermarks for tasks that have left the board.
+    fn retain_seen(&mut self, tasks: &[TaskSummary]) {
         self.seen_history
             .retain(|id, _| tasks.iter().any(|task| task.id == *id));
     }
@@ -2192,6 +2231,12 @@ fn attach_stage(
     );
     stage.raw_router.leader_byte = shell.leader.byte;
     stage.leader_label = shell.leader.label.clone();
+    // Probed once per attach, from the same source `pio doctor` reports. The
+    // in-pane highlight is pure text analysis and will happily light up a
+    // spell nothing is listening for; this is what lets the badge say so.
+    stage.trigger_wired = orc_core::trigger_grammar::trigger_grammar()
+        .iter()
+        .all(|check| check.ok);
     stage.confirmed_panes = tasks
         .iter()
         .filter_map(|task| {
@@ -2201,9 +2246,10 @@ fn attach_stage(
                 .and(task.assignee_run.clone())
         })
         .collect();
-    // Seed the history watermark. A first sighting is history, not news, so
-    // attaching to a finished board must not replay every dispatch it made.
-    stage.note_task_events(&tasks);
+    // Seed the history watermark: attaching to a finished board must not
+    // replay every dispatch it ever made. Everything that lands *after* this
+    // is news, including a task that appears for the first time.
+    stage.seed_task_events(&tasks);
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
         reports: shell
@@ -3403,6 +3449,7 @@ fn render_stage(
                     confirmed: state.confirmed_panes.contains(&pane.id),
                     phase,
                     emote: emotes.get(&pane.id).copied(),
+                    trigger_wired: state.trigger_wired,
                 },
                 state.theme,
                 state.glyphs,
@@ -3420,6 +3467,7 @@ fn render_stage(
                     confirmed: state.confirmed_panes.contains(&pane.id),
                     phase,
                     emote: emotes.get(&pane.id).copied(),
+                    trigger_wired: state.trigger_wired,
                 },
                 state.theme,
                 state.glyphs,
@@ -3783,10 +3831,26 @@ fn trigger_badge_mark() -> String {
     format!("· {} ", Trigger::GLYPH)
 }
 
+/// The marker that opens a badge for a spell nothing is listening for.
+///
+/// `○` is the register's existing unavailable glyph, so an inert badge reads
+/// as unavailable at a glance and never as a second kind of live.
+fn trigger_inert_mark(glyphs: Glyphs) -> String {
+    format!("· {} ", glyphs.get(Glyph::Unavailable))
+}
+
 /// The `· ◆ DELEGATE` badge naming every spell detected in a conductor pane,
 /// or the empty string when there is none. A glyph and a label, so the trigger
 /// is legible with no colour at all.
-fn trigger_badge(triggers: &[Trigger]) -> String {
+///
+/// When the grammar is not wired the badge says so in words —
+/// `· ○ DELEGATE INERT` — rather than looking identical to a working one.
+/// Highlighting a spell that nothing is listening for is a claim about a
+/// capability that was never probed: on the machine that reported issue #45
+/// no `UserPromptSubmit` hook was registered at all, so every `delegate:`
+/// lit up and none of them did anything. Unavailable is still shown, never
+/// hidden — the conductor did type the word, and that remains true.
+fn trigger_badge(triggers: &[Trigger], wired: bool, glyphs: Glyphs) -> String {
     if triggers.is_empty() {
         return String::new();
     }
@@ -3795,7 +3859,11 @@ fn trigger_badge(triggers: &[Trigger]) -> String {
         .map(|trigger| trigger.label())
         .collect::<Vec<_>>()
         .join(" ");
-    format!(" {}{labels}", trigger_badge_mark())
+    if wired {
+        format!(" {}{labels}", trigger_badge_mark())
+    } else {
+        format!(" {}{labels} INERT", trigger_inert_mark(glyphs))
+    }
 }
 
 /// The glyph and slot a pane's role and reported state earn in its title.
@@ -3825,6 +3893,10 @@ struct PaneChrome {
     focus: bool,
     confirmed: bool,
     phase: usize,
+    /// Whether the trigger grammar can actually fire (issue #45). A spell is
+    /// still shown when it cannot — unavailable is never hidden — but it is
+    /// labelled inert rather than dressed up as working.
+    trigger_wired: bool,
 }
 
 fn render_pane(
@@ -3840,9 +3912,10 @@ fn render_pane(
         confirmed,
         phase,
         emote,
+        trigger_wired,
     } = chrome;
     let (trigger_spans, triggers) = conductor_triggers(pane);
-    let badge = trigger_badge(&triggers);
+    let badge = trigger_badge(&triggers, trigger_wired, glyphs);
     let (state_glyph, state_slot) = pane_state(pane);
     let border_color = if focus {
         theme.border_hi()
@@ -3921,7 +3994,12 @@ fn render_pane(
     let cols = inner.width.min(pane.cols);
     // Resolved once for the pane rather than per cell: the tier cannot change
     // mid-frame, and `None` here is the whole of the monochrome behaviour.
-    let gradient = theme.trigger_gradient();
+    //
+    // An inert grammar takes the same `None` path: the shimmer is what makes
+    // a spell look *live*, so it is the one part that must not run when
+    // nothing is listening. The token keeps its bold, so it stays legible —
+    // the badge is where the bad news is delivered, in words.
+    let gradient = trigger_wired.then(|| theme.trigger_gradient()).flatten();
     let buffer = frame.buffer_mut();
     for row in 0..rows {
         for col in 0..cols {
@@ -4612,6 +4690,92 @@ mod tests {
     // is Claude Code; `\u{279c}` is oh-my-zsh; the bare case keeps back-compat.
     // These are the shapes the earlier bare-only fixtures failed to represent.
     const REAL_PROMPTS: [&str; 6] = ["", "\u{276f} ", "> ", "$ ", "% ", "\u{279c} "];
+
+    #[test]
+    fn an_unwired_grammar_is_badged_inert_instead_of_looking_live() {
+        // Issue #45 check 11. The in-pane highlight is pure text analysis: it
+        // lights up `delegate:` whether or not anything is listening for it.
+        // On the machine that reported the issue nothing was — no
+        // UserPromptSubmit hook was registered at all — so STAGE spent the
+        // session announcing a capability that did not exist.
+        //
+        // Unavailable is still shown, never hidden: the conductor did type
+        // the word. What changes is that the badge says so, in a word, with
+        // its own glyph, and the shimmer that makes a spell look live does
+        // not run.
+        let stream = b"delegate: build the thing\r\n";
+        let render = |wired: bool| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+            let mut state = StageState::new(
+                vec![conductor_pane(stream)],
+                ThemeName::Nocturne.into(),
+                GLYPHS,
+            );
+            state.trigger_wired = wired;
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Sweeping(1)]))
+                .expect("render stage");
+            let buffer = terminal.backend().buffer();
+            (
+                rendered_text(buffer),
+                highlighted_symbols(buffer),
+                trigger_token_cells(buffer),
+            )
+        };
+
+        let (wired_text, wired_span, wired_cells) = render(true);
+        let (inert_text, inert_span, inert_cells) = render(false);
+
+        assert!(
+            wired_text.contains(&super::trigger_badge_mark()),
+            "a wired grammar keeps its live badge: {wired_text:?}"
+        );
+        assert!(
+            !wired_text.contains("INERT"),
+            "and never claims to be inert: {wired_text:?}"
+        );
+
+        assert!(
+            inert_text.contains("DELEGATE INERT"),
+            "an unwired grammar says so in words: {inert_text:?}"
+        );
+        assert!(
+            inert_text.contains(&super::trigger_inert_mark(GLYPHS)),
+            "with the register's unavailable glyph: {inert_text:?}"
+        );
+        assert!(
+            !inert_text.contains(&super::trigger_badge_mark()),
+            "and never wears the live marker: {inert_text:?}"
+        );
+
+        // The word is still on screen and still emphasised — unavailable is
+        // not hidden, and the conductor did type the spell.
+        assert_eq!(
+            inert_cells.len(),
+            "delegate:".chars().count(),
+            "the spell the conductor typed is still painted"
+        );
+        assert!(
+            inert_cells
+                .iter()
+                .all(|cell| cell.modifier.contains(Modifier::BOLD)),
+            "and still emphasised, so it reads as a spell, not as prose"
+        );
+
+        // What it loses is the shimmer, which is the part that reads as live.
+        assert_eq!(
+            wired_span, "delegate:",
+            "a wired spell slides through the gradient"
+        );
+        assert!(
+            inert_span.is_empty(),
+            "an inert one never does: {inert_span:?}"
+        );
+        assert_eq!(wired_cells.len(), inert_cells.len());
+
+        // Two genuinely different frames, not two descriptions of one.
+        assert_ne!(wired_text, inert_text);
+    }
 
     #[test]
     fn conductor_trigger_grammar_highlights_each_spell_in_every_theme() {
@@ -6396,15 +6560,51 @@ mod tests {
     }
 
     #[test]
+    fn a_task_delegated_after_attach_animates_even_if_it_finishes_between_snapshots() {
+        // Issue #45, check 1. The board is polled on snapshots, but
+        // `pio orch delegate` from inside a seated pane creates, assigns and
+        // confirms a task in one synchronous call — so STAGE's first sighting
+        // of it can already be the finished article. Treating that first
+        // sighting as history animated nothing at all, which is exactly the
+        // "STAGE never moved" the issue reports.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        // Attach: the board is empty, so the seeding pass learns nothing.
+        state.seed_task_events(&[]);
+
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert_eq!(
+            state.flights.len(),
+            2,
+            "the outbound dispatch and the inbound confirm both animate"
+        );
+        assert!(
+            state
+                .flights
+                .iter()
+                .all(|flight| flight.worker_id == "pane-1"),
+            "and both are aimed at the seated worker pane"
+        );
+
+        // Still idempotent: re-reading the same board raises nothing more.
+        let raised = state.flights.len();
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert_eq!(
+            state.flights.len(),
+            raised,
+            "a re-read is not a re-dispatch"
+        );
+    }
+
+    #[test]
     fn a_landed_emote_is_never_replayed_by_re_reading_the_board() {
         // The board is re-read on every snapshot, so a naive "the last history
         // entry is `done`" test would re-raise the same packet forever. Only
-        // entries that are new since the last look count — and a first sighting
-        // is history, not news.
+        // entries that are new since the last look count — and the board that
+        // already existed when we attached is history, not news.
         let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
         let finished = [task_with("T1", "pane-1", &[CREATED, ASSIGNED, DONE])];
 
-        state.note_task_events(&finished);
+        state.seed_task_events(&finished);
         assert!(
             state.flights.is_empty(),
             "attaching to a finished board replays nothing"

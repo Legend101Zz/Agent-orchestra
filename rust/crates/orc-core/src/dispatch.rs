@@ -463,10 +463,24 @@ fn effective_cwd(session: &BenchSession, task: &Task) -> Result<Option<String>> 
             )
         })?;
         if metadata.state != "ready" {
+            // `materialize_worktree` records *why* it gave up and leaves the
+            // task creatable, so the refusal only surfaces here — at which
+            // point "worktree is unavailable" on its own tells the caller
+            // nothing it can act on. The stored reason is usually "session
+            // cwd is not a Git work tree", which is a one-line fix the
+            // conductor can make itself (issue #45 defect 4).
             bail!(
-                "ISOLATION REQUIRED: contracted task {} worktree is {}",
+                "ISOLATION REQUIRED: contracted task {} worktree is {}{}. A contracted \
+                 task takes an isolated worktree, so it needs a Git work tree; delegate \
+                 from inside a repository, or use an uncontracted task (no --objective \
+                 /--check), which needs none.",
                 task.id,
-                metadata.state
+                metadata.state,
+                metadata
+                    .reason
+                    .as_deref()
+                    .map(|reason| format!(" ({reason})"))
+                    .unwrap_or_default()
             )
         }
         let path = worktree
@@ -610,10 +624,23 @@ fn deliver(
     if request.prompt.len() > MAX_CAPTURED_BYTES {
         bail!("dispatch prompt exceeds {MAX_CAPTURED_BYTES} bytes; refactor into a smaller prompt")
     }
-    let session = read_session(&request.session)
-        .with_context(|| format!("missing dispatch session {}", request.session))?;
-    let task = read_task(&session.id, &request.task)
-        .with_context(|| format!("missing dispatch task {}", request.task))?;
+    let session = read_session(&request.session).with_context(|| {
+        format!(
+            "missing dispatch session {}; list the ones that exist with `pio session list`",
+            request.session
+        )
+    })?;
+    // Naming the listing command is the difference between a typo and a dead
+    // end: `pio dispatch send` needs a task id that already exists, and issue
+    // #45 records a conductor guessing `T-hello`, then `T0002`, because
+    // nothing told it where the real ids live.
+    let task = read_task(&session.id, &request.task).with_context(|| {
+        format!(
+            "missing dispatch task {}; list this session's tasks with \
+             `pio task list --session {}`",
+            request.task, session.id
+        )
+    })?;
     let task_status = TaskStatus::parse(&task.status).map_err(anyhow::Error::from)?;
     if task_status != TaskStatus::Running {
         bail!("dispatch task {} must be running before dispatch", task.id);
@@ -739,6 +766,12 @@ fn deliver(
         reuse.as_ref(),
         purpose,
     );
+    // Record the pane that was *chosen*, not merely the one that was asked
+    // for. Selecting a seated worker without being told which one is the
+    // whole affordance issue #45 rests on, and until now the durable receipt
+    // stayed empty in exactly that case — so "which pane got this brief?"
+    // could only be answered when the caller already knew.
+    record.pane_id = selected_pane.clone();
 
     // Hold both the provider-facing harness cap and the session-wide
     // max_parallel_workers cap for the real worker lifetime. The detached

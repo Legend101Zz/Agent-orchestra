@@ -3,15 +3,25 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-case "${1:-}" in
-  "") ;;
-  -h|--help)
-    echo "usage: ./install.sh"
-    echo "builds and installs the Rust pio, piod, and pi-orchestra binaries"
-    exit 0
-    ;;
-  *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
-esac
+WIRE_CLAUDE_HOOK="${ORC_INSTALL_WIRE_CLAUDE_HOOK:-0}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      echo "usage: ./install.sh [--wire-claude-hook]"
+      echo "builds and installs the Rust pio, piod, and pi-orchestra binaries"
+      echo
+      echo "  --wire-claude-hook  register the UserPromptSubmit trigger hook in"
+      echo "                      ~/.claude/settings.json. Opt-in and off by"
+      echo "                      default: that file is yours. Backs it up first,"
+      echo "                      merges rather than overwrites, and does nothing"
+      echo "                      at all if the hook is already registered."
+      exit 0
+      ;;
+    --wire-claude-hook) WIRE_CLAUDE_HOOK=1 ;;
+    *) echo "install.sh: unknown option: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 TARGET_DIR="${ORC_INSTALL_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-$HOME/.local/share/pi-orchestra/target}}"
 if [ "${ORC_INSTALL_SKIP_BUILD:-0}" != 1 ]; then
@@ -148,12 +158,75 @@ for skill in pi-delegate orchestrate deliberate; do
 done
 
 echo "==> Claude Code trigger hook"
-# The hook lives in a pi-orchestra-owned dir and is registered by the user in
-# their OWN ~/.claude/settings.json — install.sh never edits protected config,
-# so the checksums below stay identical across runs (issue #10 AC1).
+# The hook lives in a pi-orchestra-owned dir. Registering it means editing
+# ~/.claude/settings.json, which belongs to the user — so that stays opt-in
+# behind --wire-claude-hook (issue #10 AC1 keeps the no-flag checksums
+# identical across runs). What is NOT acceptable, and was the state issue #45
+# found, is finishing quietly while the headline gesture is inert: whichever
+# path we take, the summary at the end says plainly whether `delegate:` works.
 HOOK_SRC="$ROOT/shell/claude-userpromptsubmit-hook.py"
 HOOK_DIR="$HOME/.claude/pi-orchestra"
 HOOK_LINK="$HOOK_DIR/claude-userpromptsubmit-hook.py"
+SETTINGS="$HOME/.claude/settings.json"
+HOOK_SNIPPET="      { \"hooks\": { \"UserPromptSubmit\": [ { \"hooks\": [ { \"type\": \"command\",
+          \"command\": \"$HOOK_LINK\" } ] } ] } }"
+CLAUDE_HOOK_STATE="absent"
+
+# Read-only: is our hook already referenced by settings.json? Never writes,
+# and treats a missing, empty or unparseable file as "not wired" rather than
+# failing the install.
+claude_hook_registered() {
+  [ -f "$SETTINGS" ] || return 1
+  HOOK_LINK="$HOOK_LINK" SETTINGS="$SETTINGS" python3 - <<'PY'
+import json, os, sys
+try:
+    with open(os.environ["SETTINGS"], encoding="utf-8") as handle:
+        settings = json.load(handle)
+except Exception:
+    sys.exit(1)
+target = os.path.basename(os.environ["HOOK_LINK"])
+entries = (settings.get("hooks") or {}).get("UserPromptSubmit") or []
+for entry in entries if isinstance(entries, list) else []:
+    for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
+        if isinstance(hook, dict) and target in str(hook.get("command", "")):
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Opt-in, backed up, idempotent: merges one UserPromptSubmit entry and leaves
+# every other key — and every other hook — exactly as it found them.
+wire_claude_hook() {
+  cp "$SETTINGS" "$SETTINGS.pi-orchestra.bak" 2>/dev/null || true
+  HOOK_LINK="$HOOK_LINK" SETTINGS="$SETTINGS" python3 - <<'PY'
+import json, os, sys
+path, command = os.environ["SETTINGS"], os.environ["HOOK_LINK"]
+try:
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read().strip()
+    settings = json.loads(text) if text else {}
+except FileNotFoundError:
+    settings = {}
+except Exception as error:
+    print(f"    refused to edit {path}: {error}", file=sys.stderr)
+    print("    it is not valid JSON; add the snippet by hand.", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(settings, dict):
+    print(f"    refused to edit {path}: top level is not an object", file=sys.stderr)
+    sys.exit(2)
+hooks = settings.setdefault("hooks", {})
+submit = hooks.setdefault("UserPromptSubmit", [])
+for entry in submit:
+    for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
+        if isinstance(hook, dict) and hook.get("command") == command:
+            sys.exit(0)  # already wired: leave the bytes untouched
+submit.append({"hooks": [{"type": "command", "command": command}]})
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(settings, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
 if [ -f "$HOOK_SRC" ]; then
   mkdir -p "$HOOK_DIR"
   if [ -e "$HOOK_LINK" ] && [ ! -L "$HOOK_LINK" ]; then
@@ -161,9 +234,20 @@ if [ -f "$HOOK_SRC" ]; then
   else
     ln -sfn "$HOOK_SRC" "$HOOK_LINK"
     echo "    linked $HOOK_LINK"
-    echo "    enable it by adding to ~/.claude/settings.json (pi-orchestra never edits it):"
-    echo '      "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command",'
-    echo "        \"command\": \"$HOOK_LINK\" } ] } ] }"
+  fi
+  if claude_hook_registered; then
+    CLAUDE_HOOK_STATE="wired"
+    echo "    already registered in $SETTINGS"
+  elif [ "$WIRE_CLAUDE_HOOK" = 1 ]; then
+    mkdir -p "$HOME/.claude"
+    if wire_claude_hook; then
+      CLAUDE_HOOK_STATE="wired"
+      echo "    registered in $SETTINGS (backup: $SETTINGS.pi-orchestra.bak)"
+    else
+      CLAUDE_HOOK_STATE="unwired"
+    fi
+  else
+    CLAUDE_HOOK_STATE="unwired"
   fi
 fi
 
@@ -196,4 +280,50 @@ fi
 echo "==> protected-config checksums"
 shasum -a 256 "$HOME/.pi/agent/settings.json" "$HOME/.claude/settings.json" \
   "$HOME/.codex/config.toml" "$HOME/.local/bin/pio" 2>/dev/null || true
+
+# The trigger grammar, per harness, LAST — so it is on screen when the install
+# finishes rather than scrolled away. `pio doctor` marks four harnesses
+# conductor-capable; only two of them have an integration surface we can
+# actually write to, and saying so is the whole point of this block. Issue #45
+# check 10: wire every conductor-capable harness, or state which are not and
+# what the user must do.
+echo
+echo "==> trigger grammar (delegate: / orchestrate: / deliberate:)"
+harness_installed() { command -v "$1" >/dev/null 2>&1; }
+report_harness() {
+  # name, whether present, state word, remedy
+  local label="$1" present="$2" state="$3" remedy="$4"
+  if [ "$present" != 1 ]; then
+    printf '    %-13s not installed  —\n' "$label"
+    return
+  fi
+  printf '    %-13s %s\n' "$label" "$state"
+  [ -n "$remedy" ] && printf '    %-13s   %s\n' "" "$remedy"
+  return 0
+}
+
+if [ "$CLAUDE_HOOK_STATE" = "wired" ]; then
+  report_harness "Claude Code" "$(harness_installed claude && echo 1 || echo 0)" \
+    "WIRED — skills + live hook" ""
+else
+  report_harness "Claude Code" "$(harness_installed claude && echo 1 || echo 0)" \
+    "skills linked, hook NOT registered" \
+    "\`delegate:\` will NOT fire until it is. Re-run: ./install.sh --wire-claude-hook"
+  echo
+  echo "    Or add this to $SETTINGS yourself:"
+  echo "$HOOK_SNIPPET"
+  echo
+fi
+report_harness "Codex" "$(harness_installed codex && echo 1 || echo 0)" \
+  "WIRED — static block in ~/.codex/AGENTS.md" \
+  "static text only: no live quota relay and no session context"
+report_harness "Pi/MiniMax" "$(harness_installed pi && echo 1 || echo 0)" \
+  "NOT wired" \
+  "pi has no integration pi-orchestra installs. Paste skills/pi-delegate/SKILL.md into your pi agent instructions by hand."
+report_harness "OpenCode" "$(harness_installed opencode && echo 1 || echo 0)" \
+  "NOT wired" \
+  "opencode has no integration pi-orchestra installs. Paste skills/pi-delegate/SKILL.md into its instructions by hand."
+echo "    Hermes        worker only — needs no trigger grammar"
+echo
+echo "    Verify any time with: pio doctor   (exit 1 while the grammar is inert)"
 echo "done. Open a new shell or run: source ~/.zshrc"
