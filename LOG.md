@@ -32,7 +32,7 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
-| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
+| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | 👀 | `issue-39-trigger-tier-grep-gate` |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ⬜ | — *(merges #43 + #44)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -383,6 +383,33 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-30 — The rainbow now respects a colourless terminal, and the no-hex test looks everywhere, issue #39 (code-puppy)
+Two leftovers from the new look, both about the code meaning what it says. First:
+when you run pi-orchestra with `NO_COLOR` set, or in a terminal that has no
+colour, a `delegate:` you type used to still come out in nine full-colour
+letters — while the code claimed in writing that this mode "drops colour
+entirely". It now really does: the word stays **bold** and the `◆ DELEGATE`
+badge still names it in the pane's title, which is what makes it readable
+without colour. Terminals in between are no longer sent colour codes they can't
+display either — a 256-colour terminal gets the closest match from the 256 it
+has, a 16-colour terminal the closest from its 16, and a full-colour terminal
+looks **exactly** as it did before (proof: every existing saved screenshot in
+the test suite still matches character for character). Second: the test that forbids hard-coded
+colours anywhere outside the one colour file was only looking at the top folder,
+so a file one folder down could break the rule and the test would still pass —
+demonstrated by planting one, watching it pass, then fixing the test and
+watching it fail. It now looks everywhere, and it works out for itself how many
+files it *should* be looking at, so it can't quietly stop looking again.
+
+What this did NOT do: the actual look is unchanged for anyone on a normal
+colour terminal, no new screens or features, and one thing was deliberately left
+alone — if a CLI running *inside* a pane prints its own colours, those still
+come through even with `NO_COLOR` set. That's a separate decision and it's
+written down in the notes rather than changed quietly. This clears the last of
+#13's four review findings, so the new look is fully closed out — what's left
+before launch is #45 (making `delegate:` inside the TUI use the workers already
+on screen) and then the README and screenshots (#14).
 
 ### 2026-07-28 — One capable harness still completes the job honestly, issue #12 (code-puppy)
 With only one capable CLI, pi-orchestra now says exactly what is unavailable,
