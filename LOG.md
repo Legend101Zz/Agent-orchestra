@@ -31,7 +31,7 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
-| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | 👀 | `issue-38-stage-circuit` |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | 🔨 | `issue-38-stage-circuit` ([PR #42](https://github.com/Legend101Zz/Agent-orchestra/pull/42)) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -98,6 +98,17 @@ jump back. Both fixed.
 Six workers all producing at once repaints in **0.157 ms** — the budget is 16.
 
 *Not yet tested locally by you: `./install.sh` from the branch and drive it.*
+
+> **Review 2026-07-30 — FIX (1 item), and it's a test not a behaviour.** All five
+> gates reproduce green and everything I attacked held: `baton.rs` really is
+> byte-identical, the one-worker rail is unchanged to the character, the drag test
+> genuinely counts socket traffic (removing the guard fails it), and the perf doc
+> honestly reports debug *and* release rather than the flattering number. The one
+> gap: `a_dragged_pane_clips_the_wiring…` never overlaps anything — its fixture
+> aims at the spur's end column, not the trunk — so deleting the whole loom clip
+> leaves all 97 tests green. The clipping code is correct; I proved it with a
+> fixture that really overlaps (30 wire cells painted through a pane once the clip
+> is off). Swap the fixture, mutation-check it, and this is an ACCEPT.
 
 **#37 pushed (2026-07-29, `issue-37-theme-persistence`) — you can change the
 theme from inside the app, and it stays changed.** Press your leader chord then
