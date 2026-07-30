@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Multi-worker orchestration of pi/MiniMax M3 delegations with quota guard and control-plane visibility. Use ONLY when the user's message explicitly contains the word "orchestrate" or "orchestrated". Never trigger for ordinary tasks, even heavy ones (use pi-delegate for those).
+description: Multi-worker orchestration of pi-orchestra delegations with quota guard and control-plane visibility. Use ONLY when the user's message explicitly casts the "orchestrate:" trigger or contains the word "orchestrate" or "orchestrated". Never trigger for ordinary tasks, even heavy ones (use pi-delegate for those).
 ---
 
 # Orchestrate (keyword-gated multi-worker mode)
@@ -16,9 +16,20 @@ must not activate.
    with explicit file paths / scope). Read `max_parallel_workers` from
    `~/.orchestra/config.json` (default 3) and never exceed it.
 3. **Launch** workers in the background, attributed to you and grouped as one
-   session. Pick a session id once, export it, then launch every worker under it:
+   session. First settle *which* session — the environment decides, not you:
 
-       export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"
+   - **`$ORC_SESSION` already set?** You are inside a session; its panes are
+     the bench the user is watching. Reuse it as-is. **Do not export a new
+     `ORC_SESSION` and do not create a session** — that would orchestrate an
+     invisible bench while the panes on screen sit idle. Check who is seated
+     with `pio session show --json`, and never put more chunks in flight than
+     there are running workers.
+   - **Unset?** Standalone: pick an id once and export it.
+
+         export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"
+
+   Then launch every worker under it:
+
        pio run "chunk description" --cwd /path --brain <your-brain> --session "$ORC_SESSION" --bg
 
    Each prints a run id. The whole swarm shows up as a single expandable session
@@ -39,7 +50,9 @@ prefer the normalized surface from V1-6 — the same seven operations as MCP too
 (`orch_plan`, `orch_delegate`, `orch_status`, `orch_await`, `orch_review`,
 `orch_cancel`, `orch_finish`) and as `pio orch <verb>` CLI verbs:
 
-    pio session create --brain <you> --worker <harness>        # once per session
+    pio session create --brain <you> --worker <harness>   # STANDALONE ONLY —
+                                                         # never when $ORC_SESSION is set
+    pio session show  --json                             # who is seated here?
     pio orch plan     "<chunk title>" --session <id> --objective "..." --check "..."
     pio orch delegate <harness> --session <id> --task <T> --json  # returns after delivery
     pio orch status   [<T>] --session <id> --json     # poll; whole board when omitted

@@ -1,6 +1,6 @@
 ---
 name: pi-delegate
-description: Delegate heavy, long-context, or token-expensive tasks to the pi CLI running MiniMax M3 (1M context, cheap). Use when a task involves reading many files, scanning large codebases, summarizing long content, batch transformations, refactors across dozens of files, or any work where you'd otherwise burn a lot of tokens.
+description: Hand one bounded task to a cheap worker harness through pi-orchestra. Use ALWAYS when the user's message contains the "delegate:" trigger — this skill owns that spell and outranks any general parallel-agent or subagent skill for it. Also use for heavy, long-context, or token-expensive work: reading many files, scanning large codebases, summarizing long content, batch transformations, refactors across dozens of files, or anything where you'd otherwise burn a lot of tokens.
 ---
 
 # Delegate to pi (MiniMax M3 worker)
@@ -49,10 +49,28 @@ count) — do one bounded hand-off to one worker through the normalized surface:
   `.mcp.json` snippet and never edits protected config).
 - **CLI (universal equivalent):**
 
-      pio session create --brain claude --worker <harness>   # once; note the id
       pio orch delegate <harness> --session <id> \
         --title "<what>" --objective "<done-when>" \
         --check "<acceptance check>" [--allowed <path> --forbidden <rule>] --json
+
+**Where `<id>` comes from decides whether the user sees any of this.** Read
+the environment first; never guess:
+
+- **`$ORC_SESSION` is set — you are already sitting in a session.** Those panes
+  are the bench. Reuse `"$ORC_SESSION"` and dispatch into them: `pio orch
+  delegate` picks the running worker pane whose harness matches, so no
+  `--pane` is needed. Run `pio session show --json` to see who is seated with
+  you and in what state. **Do not run `pio session create`** — a new session
+  has no panes, so the dispatch falls back to a headless worker, the board of
+  the session on screen never changes, and STAGE never moves. It still
+  "works", invisibly, to a worker the user cannot see.
+- **`$ORC_SESSION` is unset — standalone.** There is no bench, so make one:
+  `pio session create --brain claude --worker <harness>` once, and note the id.
+
+A contracted task takes an isolated worktree, so the CLI recipe above needs a
+git repository. Outside one it fails with `ISOLATION REQUIRED` (and, with
+`--json`, an `error.reason` of `isolation_unavailable`). For work that changes
+no files, the uncontracted path below needs no worktree.
 
 `orch_delegate` / `pio orch delegate` returns as soon as the worker receives
 the brief; the worker keeps running in the background. Poll it with
