@@ -22,5 +22,6 @@ pub mod search;
 pub mod single_harness;
 pub mod spawn_guard;
 pub mod tasks;
+pub mod trigger_grammar;
 
 pub use model::{Config, RunMeta, Tokens};
