@@ -756,17 +756,30 @@ mod tests {
         // there is nothing to clip. A drag puts a pane anywhere — including
         // straight over the trunk — and that case was unguarded: the wire was
         // painted across the hosted CLI's own output.
+        // The fixture has to *overlap*, which the first version of this test
+        // did not: it aimed at `routes[0].max()`, which is the far end of a
+        // spur rather than the trunk, so the pane landed six columns clear and
+        // its rows missed the one spur row in range by one. `clip` had nothing
+        // to remove, so removing `clip` changed nothing and the test passed
+        // either way. The case that actually occurs is one worker dragged
+        // across *another* worker's spur row, so that is what this builds.
         let mut areas = wide(3);
-        let trunk = plan(&areas).expect("wired").routes[0]
-            .iter()
-            .map(|(x, _)| *x)
-            .max()
-            .expect("a column to aim at");
+        let spur_row = areas[2].y + areas[2].height / 2;
+        let covered = (75, spur_row);
+        let clear = (67, spur_row);
+        // Worker 3, dragged left and up until it sits on worker 2's spur. Its
+        // left edge stays right of the conductor's gutter so the layout is
+        // still routed rather than falling back to the inlaid tier.
+        areas[3] = Rect::new(70, spur_row - 4, 30, 10);
+        assert!(
+            areas[3].contains(covered.into()),
+            "fixture must actually cover part of a wire"
+        );
 
-        // Park a worker on top of the gutter, as a drag can.
-        areas[2] = Rect::new(trunk.saturating_sub(6), 10, 30, 8);
         let circuit = plan(&areas).expect("wired");
+        assert_eq!(circuit.routing, Routing::Elbows, "still routed, not inlaid");
 
+        // The property: nothing is painted inside a pane.
         for ((x, y), _) in &circuit.loom {
             for (index, pane) in areas.iter().enumerate() {
                 assert!(
@@ -784,8 +797,19 @@ mod tests {
                 );
             }
         }
-        // The wiring degrades rather than vanishing: the workers that are still
-        // clear of the moved pane keep a connector.
+
+        // And the positive half, which is what stops this being vacuous: the
+        // covered cell is gone *and* the rest of the same wire is still there,
+        // so the loom was clipped rather than never having reached that far.
+        let has = |cell: (u16, u16)| circuit.loom.iter().any(|(at, _)| *at == cell);
+        assert!(
+            !has(covered),
+            "the covered cell {covered:?} must be clipped"
+        );
+        assert!(
+            has(clear),
+            "the uncovered part of the same wire {clear:?} must survive"
+        );
         assert!(
             circuit.routes.iter().any(|route| !route.is_empty()),
             "clipping must not erase the whole loom"

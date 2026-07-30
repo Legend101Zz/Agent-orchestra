@@ -618,6 +618,13 @@ struct StageState {
     pulses: BTreeMap<String, PanePulse>,
     /// Messages currently crossing a connector or showing their emote.
     flights: Vec<InFlight>,
+    /// The wiring the last frame planned, kept so the router runs **once** per
+    /// frame instead of once per consumer. `emotes`, `any_in_flight` and
+    /// `retire_flights` all need a route's length, and each re-planning from
+    /// `pane_areas` meant up to four routes per frame for one answer.
+    /// Refreshed by `render_stage`, which is the only place `pane_areas` — the
+    /// input the router reads — is written.
+    wiring: Option<(circuit::Routing, HashMap<String, usize>)>,
     /// How much of each task's history has already been turned into a
     /// message, by task id. Without it every snapshot would re-raise the same
     /// dispatch, and the board is re-read on every snapshot.
@@ -661,6 +668,7 @@ impl StageState {
             focus: 0,
             pane_areas: Vec::new(),
             flights: Vec::new(),
+            wiring: None,
             seen_history: HashMap::new(),
             last_tick: now,
             theme,
@@ -817,32 +825,60 @@ impl StageState {
     /// being redrawn, but a flight that outlived its pane would keep asking
     /// for frames, so it is retired here rather than left to leak.
     fn retire_flights(&mut self, reduced_motion: bool) {
-        let lengths = self.route_lengths();
-        self.flights.retain(|flight| {
-            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
-            len > 0
-                && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
-                    != circuit::Flight::Gone
+        let lengths = self.wiring.take();
+        if let Some((_, lengths)) = lengths.as_ref() {
+            self.flights.retain(|flight| {
+                let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+                len > 0
+                    && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
+                        != circuit::Flight::Gone
+            });
+        }
+        self.wiring = lengths;
+    }
+
+    /// Record the wiring a frame just planned, so the consumers below can read
+    /// a route's length without planning it again.
+    fn record_wiring(&mut self, wiring: Option<&circuit::Circuit>) {
+        self.wiring = wiring.map(|wiring| {
+            (
+                wiring.routing,
+                self.panes
+                    .iter()
+                    .skip(1)
+                    .zip(&wiring.routes)
+                    .map(|(pane, route)| (pane.id.clone(), route.len()))
+                    .collect(),
+            )
         });
     }
 
-    /// How long each worker's connector is this frame, by pane id.
-    fn route_lengths(&self) -> HashMap<String, usize> {
-        circuit::plan(&self.pane_areas).map_or_else(HashMap::new, |wiring| {
-            self.panes
-                .iter()
-                .skip(1)
-                .zip(wiring.routes)
-                .map(|(pane, route)| (pane.id.clone(), route.len()))
-                .collect()
-        })
+    /// How long each worker's connector was on the last painted frame, by pane
+    /// id. `None` before the first paint, which is when `pane_areas` — and so
+    /// the wiring — does not exist yet. Borrowed rather than cloned: three
+    /// callers ask per frame, and cloning the map for each of them gave back
+    /// most of what routing once instead of four times had saved.
+    fn route_lengths(&self) -> Option<&HashMap<String, usize>> {
+        self.wiring.as_ref().map(|(_, lengths)| lengths)
+    }
+
+    /// One worker's connector length on the last painted frame, or 0.
+    fn route_len(&self, worker_id: &str) -> usize {
+        self.route_lengths()
+            .and_then(|lengths| lengths.get(worker_id))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Which tier the router reached, for the honest fallback note on STAGE.
+    fn routing(&self) -> Option<circuit::Routing> {
+        self.wiring.as_ref().map(|(routing, _)| *routing)
     }
 
     /// Whether any message is still crossing or still showing its emote.
     fn any_in_flight(&self, reduced_motion: bool) -> bool {
-        let lengths = self.route_lengths();
         self.flights.iter().any(|flight| {
-            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+            let len = self.route_len(&flight.worker_id);
             len > 0
                 && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
                     != circuit::Flight::Gone
@@ -854,10 +890,9 @@ impl StageState {
     /// Most recent wins when several land at once, so the newest news is what
     /// a pane shows.
     fn emotes(&self, reduced_motion: bool) -> HashMap<String, (circuit::Outcome, bool)> {
-        let lengths = self.route_lengths();
         let mut showing = HashMap::new();
         for flight in &self.flights {
-            let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
+            let len = self.route_len(&flight.worker_id);
             if len == 0 {
                 continue;
             }
@@ -3338,6 +3373,12 @@ fn render_stage(
         area,
     );
     state.pane_areas = stage_areas(area, state);
+    // Route once, before anything asks a question about the wiring. Recording
+    // it here rather than after the pane loop matters: `emotes` needs a
+    // route's length to know whether a message has landed yet, and reading a
+    // cache that this frame had not filled left every emote one frame late.
+    let wiring = circuit::plan(&state.pane_areas);
+    state.record_wiring(wiring.as_ref());
     let areas = state.pane_areas.clone();
     let emotes = state.emotes(motion.is_none());
     if state.zoomed {
@@ -3378,11 +3419,21 @@ fn render_stage(
         }
         // After the panes, so an inlaid rail can sit in a worker's own top
         // border and a wire is never buried under a pane drawn later.
-        render_circuit(frame, state, traffic, motion.is_none());
+        if let Some(wiring) = wiring.as_ref() {
+            render_circuit(frame, state, wiring, traffic, motion.is_none());
+        }
     }
     if state.message.is_empty() {
+        // AC8 asks for a *stated* fallback, not merely a visible one. It leads
+        // the legend rather than trailing it because the width at which the
+        // router gives up is also the width at which the legend gets clipped.
+        let fallback = if state.routing() == Some(circuit::Routing::Inlaid) {
+            "connectors inlaid — too narrow to route · "
+        } else {
+            ""
+        };
         let legend = format!(
-            "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach — mouse: drag a title to move, an edge to resize",
+            "{fallback}typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach — mouse: drag a title to move, an edge to resize",
             leader = state.leader_label
         );
         render_legend(frame, area, &legend, state.theme);
@@ -3532,12 +3583,10 @@ fn render_shadow(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
 fn render_circuit(
     frame: &mut Frame<'_>,
     state: &StageState,
+    wiring: &circuit::Circuit,
     traffic: &[baton::State],
     reduced_motion: bool,
 ) {
-    let Some(wiring) = circuit::plan(&state.pane_areas) else {
-        return;
-    };
     let theme = state.theme;
     let glyphs = state.glyphs;
     let shape = |cell: &(u16, u16)| {
@@ -3586,7 +3635,7 @@ fn render_circuit(
             paint_cell(frame, *cell, paint.symbol, theme.state(paint.slot));
         }
     }
-    render_flights(frame, state, &wiring, reduced_motion);
+    render_flights(frame, state, wiring, reduced_motion);
 }
 
 /// Draw every message in flight over the wiring.
@@ -5988,6 +6037,49 @@ mod tests {
             .draw(|frame| render_stage(frame, state, motion, &traffic))
             .expect("render stage");
         rendered_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn the_narrow_fallback_says_so_instead_of_only_looking_different() {
+        // AC8 asks that connectors "either render or are replaced by a stated
+        // fallback". `Routing` recorded which tier the router reached and its
+        // doc claimed the UI could "say so", but nothing outside the router's
+        // own tests ever read it — the same claims-a-capability shape #13 was
+        // pulled up on. It is now read, and this is what reads it.
+        let wide = ratatui::layout::Rect::new(0, 0, 120, 40);
+        let narrow = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let legend_of = |area: ratatui::layout::Rect| {
+            let mut state = StageState::new(bench(2), ThemeName::Nocturne.into(), GLYPHS);
+            let mut terminal =
+                Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
+            let traffic = state.traffic(false);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, Some(0), &traffic))
+                .expect("render");
+            (state.routing(), rendered_text(terminal.backend().buffer()))
+        };
+
+        let (routing, text) = legend_of(wide);
+        assert_eq!(
+            routing,
+            Some(circuit::Routing::Elbows),
+            "wide enough to route"
+        );
+        assert!(
+            !text.contains("too narrow to route"),
+            "a routed stage must not claim it fell back"
+        );
+
+        let (routing, text) = legend_of(narrow);
+        assert_eq!(
+            routing,
+            Some(circuit::Routing::Inlaid),
+            "no gutter to route"
+        );
+        assert!(
+            text.contains("connectors inlaid — too narrow to route"),
+            "the fallback has to be stated, not merely visible: {text:?}"
+        );
     }
 
     #[test]
