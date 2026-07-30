@@ -86,12 +86,33 @@ explicitly replaces dead symlinks (`install_skill` has a dangling-link branch);
 `printf '{"prompt":"delegate: x"}' | ~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py`.
 
 Two related traps:
-- The new path **contains a space** — quote it everywhere (`git -C "/Volumes/Mrigesh SSD/Agent-orchestra"`).
+- The new path **contains a space** — quote it everywhere (`git -C "/Volumes/Mrigesh SSD/pi-orchestra"`).
   Unquoted paths fail in a way that looks like "repo missing", not "bad quoting".
-- `/Volumes/Mrigesh SSD/pi-orchestra` is a **different, older** checkout. The
-  `~/.zshrc` pi-orchestra block currently sources *that* one's `shell/orchestra.zsh`.
 - The binaries are NOT affected: `~/.local/bin/pio` links into
   `~/.local/share/pi-orchestra/target/release/`, which did not move.
+
+**Correction (2026-07-30): the live checkout is now
+`/Volumes/Mrigesh SSD/pi-orchestra`, not `Agent-orchestra`.** This entry
+originally called `pi-orchestra` "a different, older checkout" — that was true
+when it was written and is not any more. Verified today: `pi-orchestra` tracks
+`origin/main` and holds the merge of PR #47; `Agent-orchestra` is parked on the
+unmerged `issue-12-single-harness-mode` branch, roughly the #12 era. Both have
+the same remote (`Legend101Zz/Agent-orchestra`), which is what makes the mix-up
+easy. `docs/WORKFLOW.md` carried the same stale line and is corrected too.
+
+**The installed links are split across the two checkouts, and nobody meant
+that.** Measured 2026-07-30:
+
+```
+~/.claude/skills/{pi-delegate,orchestrate,deliberate} -> Agent-orchestra/skills/…   (stale checkout)
+~/.claude/pi-orchestra/claude-userpromptsubmit-hook.py -> pi-orchestra/shell/…      (live checkout)
+~/.zshrc line 140                                      -> pi-orchestra/shell/orchestra.zsh
+```
+
+Harmless *today* only because `diff -rq` says the two `skills/` trees are
+byte-identical. It stops being harmless the moment a skill changes on `main` or
+`Agent-orchestra` is deleted to reclaim the disk it was moved for. Fix by
+re-running `./install.sh` from `pi-orchestra` — it replaces the links in place.
 
 ## 2026-07-29 — One theme record: `harnesses.json` is authoritative (#37)
 
@@ -145,3 +166,36 @@ Two related notes:
   July-12 daemon binary in both directions. The version is reserved for a
   change to the meaning of an existing message.
 
+## 2026-07-30 — "monochrome emits no colour" is a claim about the map, not the screen (#39)
+
+`ColorTier` (truecolor / ansi256 / ansi16 / monochrome) is detected once from
+`NO_COLOR`, `TERM` and `COLORTERM`, and **everything the theme map answers with
+— the 17 slots and the 7-stop trigger gradient alike — is resolved through it**
+in `Theme::resolve`. On monochrome that is `Color::Reset` throughout, which is
+why the trigger token has to stay readable by bold plus the `◆ DELEGATE` title
+badge rather than by colour. Truecolor is byte-identical to pre-#39 output;
+every committed golden still matches.
+
+**One colour is deliberately outside that rule: `Theme::pane_color`**, which
+replays a hosted pane's own SGR from the wire at every tier, monochrome
+included. It is **not tier-gated on purpose** — quantising or discarding another
+program's output would be editing it, and in practice the hosted process
+inherits `NO_COLOR` itself and stops emitting colour on its own. Only the
+`Slot` fallback (a pane's *default* fg/bg) goes through the tier.
+
+So a harness printing colour inside its pane can still put colour on a
+`NO_COLOR` screen. That is documented on `pane_color` itself, and it is the
+reason the module doc says "monochrome emits no colour" as a claim about **what
+pi-orchestra paints**, not about the terminal. Whether `pane_color` *should*
+strip colour under `NO_COLOR` is an open decision, deliberately not taken in
+#39 — the ask there was honesty, and the review's blocking finding was that two
+sentences #39 itself added had claimed more than the code did.
+
+Related, same issue: `no_hex_literals_outside_the_theme_map` walks `src/`
+**recursively**, and its exemption compares the **whole relative path** against
+`THEME_MAP`, not the file name. The name-based version was sound only while the
+walk was flat; once it recursed, any `src/<anydir>/theme.rs` escaped the scan —
+including, ironically, the `src/theme/mod.rs` + `src/theme/palette.rs` split
+this 1100-line file is heading for. If the map ever moves, repoint `THEME_MAP`;
+a dedicated assertion fails by name rather than letting the gate scan its own
+table.

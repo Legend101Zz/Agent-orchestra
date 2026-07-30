@@ -63,12 +63,17 @@ Hard rules:
 ## Working setup notes
 
 - Canonical remote: `github.com/Legend101Zz/Agent-orchestra` (`main`).
-- **Checkout location (moved 2026-07-27):** the working checkout is
-  `/Volumes/Mrigesh SSD/Agent-orchestra` — the old `~/Agent-orchestra` is gone
-  (freed disk space). The external SSD must be mounted to work on the repo.
-  Note the **space in the path**: quote it in shell commands (`cd "/Volumes/Mrigesh SSD/Agent-orchestra"`).
-  A second, older checkout `/Volumes/Mrigesh SSD/pi-orchestra` also exists —
-  it is NOT this repo; don't work in it.
+- **Checkout location (moved 2026-07-27, corrected 2026-07-30):** the working
+  checkout is `/Volumes/Mrigesh SSD/pi-orchestra` — the old `~/Agent-orchestra`
+  is gone (freed disk space). The external SSD must be mounted to work on the
+  repo. Note the **space in the path**: quote it in shell commands
+  (`cd "/Volumes/Mrigesh SSD/pi-orchestra"`).
+  A second checkout `/Volumes/Mrigesh SSD/Agent-orchestra` also exists. It is
+  the *same* repo — same remote — but it is stale: parked on the unmerged
+  `issue-12-single-harness-mode` branch at roughly the #12 era. Don't work in
+  it. **This note previously said the opposite** (that `pi-orchestra` was not
+  this repo); that was true when written and cost a later session real time.
+  Confirm with `git log --oneline -1` against `origin/main`, never by path.
 - Nothing above is load-bearing for an agent session: the remote is the source
   of truth, so `git clone` somewhere convenient and `git fetch` first. Never
   assume a path — `git rev-parse --show-toplevel` if you need one.
