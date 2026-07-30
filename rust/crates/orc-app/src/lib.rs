@@ -783,22 +783,42 @@ impl StageState {
         })
     }
 
+    /// Learn the board that already existed, raising nothing.
+    ///
+    /// Attaching to a session with a finished board must not replay every
+    /// dispatch it ever made, so the watermark starts at what is already
+    /// there. This is the *only* thing that may treat history as old news:
+    /// once attached, a task appearing for the first time appeared because
+    /// the conductor just delegated it, and that is precisely the event
+    /// STAGE exists to show.
+    fn seed_task_events(&mut self, tasks: &[TaskSummary]) {
+        for task in tasks {
+            self.seen_history
+                .insert(task.id.clone(), task.history.len());
+        }
+        self.retain_seen(tasks);
+    }
+
     /// Turn newly-appended task history into messages in flight.
     ///
     /// Only the entries that have appeared since the last look are raised, so
     /// re-reading the board — which happens on every snapshot — does not
     /// re-dispatch the same packet forever.
+    ///
+    /// A task with no watermark is *new*, not old: it was created after
+    /// [`Self::seed_task_events`] ran, so its whole history is news. This used
+    /// to skip it, and the cost was the headline gesture of issue #45 — a
+    /// `pio orch delegate` from inside a seated pane creates, assigns and
+    /// confirms a task between two snapshots, so STAGE saw it for the first
+    /// time already finished and animated nothing at all. Every test around
+    /// this passed because each one hand-fed a `created`-only board first,
+    /// sharing the assumption that a task is always seen before it is
+    /// dispatched.
     fn note_task_events(&mut self, tasks: &[TaskSummary]) {
         for task in tasks {
             let seen = self.seen_history.get(&task.id).copied().unwrap_or(0);
             self.seen_history
                 .insert(task.id.clone(), task.history.len());
-            // A first sighting is history, not news: attaching to a session
-            // with a finished board must not replay every dispatch it ever
-            // made.
-            if seen == 0 {
-                continue;
-            }
             let Some(worker_id) = task.assignee_run.clone() else {
                 continue;
             };
@@ -815,6 +835,11 @@ impl StageState {
                 }
             }
         }
+        self.retain_seen(tasks);
+    }
+
+    /// Forget watermarks for tasks that have left the board.
+    fn retain_seen(&mut self, tasks: &[TaskSummary]) {
         self.seen_history
             .retain(|id, _| tasks.iter().any(|task| task.id == *id));
     }
@@ -2201,9 +2226,10 @@ fn attach_stage(
                 .and(task.assignee_run.clone())
         })
         .collect();
-    // Seed the history watermark. A first sighting is history, not news, so
-    // attaching to a finished board must not replay every dispatch it made.
-    stage.note_task_events(&tasks);
+    // Seed the history watermark: attaching to a finished board must not
+    // replay every dispatch it ever made. Everything that lands *after* this
+    // is news, including a task that appears for the first time.
+    stage.seed_task_events(&tasks);
     shell.stage = Some(stage);
     shell.score = Some(ScoreState {
         reports: shell
@@ -6396,15 +6422,47 @@ mod tests {
     }
 
     #[test]
+    fn a_task_delegated_after_attach_animates_even_if_it_finishes_between_snapshots() {
+        // Issue #45, check 1. The board is polled on snapshots, but
+        // `pio orch delegate` from inside a seated pane creates, assigns and
+        // confirms a task in one synchronous call — so STAGE's first sighting
+        // of it can already be the finished article. Treating that first
+        // sighting as history animated nothing at all, which is exactly the
+        // "STAGE never moved" the issue reports.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        // Attach: the board is empty, so the seeding pass learns nothing.
+        state.seed_task_events(&[]);
+
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert_eq!(
+            state.flights.len(),
+            2,
+            "the outbound dispatch and the inbound confirm both animate"
+        );
+        assert!(
+            state
+                .flights
+                .iter()
+                .all(|flight| flight.worker_id == "pane-1"),
+            "and both are aimed at the seated worker pane"
+        );
+
+        // Still idempotent: re-reading the same board raises nothing more.
+        let raised = state.flights.len();
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert_eq!(state.flights.len(), raised, "a re-read is not a re-dispatch");
+    }
+
+    #[test]
     fn a_landed_emote_is_never_replayed_by_re_reading_the_board() {
         // The board is re-read on every snapshot, so a naive "the last history
         // entry is `done`" test would re-raise the same packet forever. Only
-        // entries that are new since the last look count — and a first sighting
-        // is history, not news.
+        // entries that are new since the last look count — and the board that
+        // already existed when we attached is history, not news.
         let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
         let finished = [task_with("T1", "pane-1", &[CREATED, ASSIGNED, DONE])];
 
-        state.note_task_events(&finished);
+        state.seed_task_events(&finished);
         assert!(
             state.flights.is_empty(),
             "attaching to a finished board replays nothing"
