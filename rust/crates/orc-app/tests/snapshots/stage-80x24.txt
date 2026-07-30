@@ -23,7 +23,7 @@ STAGE nocturne truecolor 80x24 minimum
  │                                                                           │▐ 
  ╰───────────────────────────────────────────────────────────────────────────╯▐ 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
- typing goes to the pane — ctrl-g then: n/p focus · z zoom · s swap · b SCORE · 
+ connectors inlaid — too narrow to route · typing goes to the pane — ctrl-g then
 --- styles ---
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 abcccccccccccccccbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaa

@@ -70,11 +70,21 @@ after a 10-frame warm-up.
 
 | profile | ms/frame | budget |
 |---|---|---|
-| `--release` (what `./install.sh` builds) | **0.157** | 16 ms |
-| debug (`cargo test`) | 6.223 | 16 ms |
+| `--release` (what `./install.sh` builds) | **0.23** | 16 ms |
+| debug (`cargo test`) | **3.5** | 16 ms |
 
 The 16 ms budget is the animating cadence itself: if a repaint did not fit in
 one, the loop could not keep the rate it asks for.
+
+**Treat these as an order of magnitude, not a figure.** The same code measured
+0.157 / 6.223 earlier in the session and 0.23 / 3.5 now, and review measured
+3.679 debug against a note claiming 6.223 — a spread of roughly 2× in both
+directions, on an idle-vs-loaded laptop. Bisecting confirmed the drift is
+environmental rather than code: disabling the loom clip changes release by
+0.003 ms, and borrowing the route-length map instead of cloning it changes
+nothing measurable. What the measurement supports is the headroom — two
+orders of magnitude under the budget in the profile users actually run — not
+any particular decimal.
 
 ## AC1 / AC2 / AC5 / AC7 / AC8 — committed goldens
 
@@ -221,3 +231,41 @@ is invisible in practice, because a worker that has just been dispatched to is
 about to produce output. It is recorded here rather than fixed because moving
 the board refresh onto its own signal is a change to how the client watches the
 daemon, which is outside this issue.
+
+
+## Review round 1 (FIX, one item)
+
+**The clipping test was vacuous.** `a_dragged_pane_clips_the_wiring…` aimed its
+fixture at `routes[0]…max()`, which is the far end of a *spur* (column 79), not
+the trunk (column 65). The pane landed six columns clear and its rows missed the
+one spur row in range by one, so `clip` had nothing to remove and deleting
+`clip` entirely still passed all 97 tests.
+
+Rebuilt on the case that actually occurs — one worker dragged across another
+worker's spur row — and it now carries a positive assertion as well as the
+property: the covered cell is gone *and* the uncovered part of the same wire
+survives, so the loom was clipped rather than never having reached that far.
+Mutation-verified this time: removing `clip` fails with
+`wire cell (70, 18) is painted inside pane 3`.
+
+The guard itself was correct; only its test was not. That was the one guard on
+this branch that skipped the mutation check every other one got, which is why
+review called FIX rather than ACCEPT — correctly.
+
+**Both non-blocking notes are also addressed.**
+
+- `Routing` was computed and documented as "so the UI can say so" but never read
+  outside its own tests — the claims-a-capability shape #13 was pulled up on.
+  It is now read: at widths where the router gives up, STAGE's legend leads with
+  `connectors inlaid — too narrow to route`. It leads rather than trails because
+  the width at which routing fails is also the width at which the legend gets
+  clipped. That is what AC8's "stated fallback" was asking for, and the
+  `stage-80x24.txt` golden now shows it. Mutation-verified: blanking the note
+  fails two tests.
+- The router ran up to four times per frame (`route_lengths()` from three call
+  sites plus `render_circuit`'s own `plan()`). It now runs **once**, in
+  `render_stage`, recorded on `StageState` for the three consumers. Ordering
+  matters and cost a round: recording *after* the pane loop left every emote one
+  frame late, because `emotes` needs a route's length to know whether a message
+  has landed. It is recorded immediately after `pane_areas` is written, before
+  anything asks.
