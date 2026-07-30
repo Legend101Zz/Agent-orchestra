@@ -1783,3 +1783,65 @@ hand back to the implementer.
 - AC9 measured: **0.157 ms/frame in release**, 6.223 ms debug, with six workers
   all live plus a message in flight at 150×44. Budget is the 16 ms cadence.
 - **Next: review of #38**, then #39, with #14 last.
+
+## Session — 2026-07-30 (implementer, #39 visual-identity carry-over from #13)
+
+- Branched `issue-39-trigger-tier-grep-gate` from fresh `main` @ `1406840`
+  (after #38's PR #42 merged). Allowed paths: `rust/crates/orc-app/`,
+  `docs/notes/`.
+- **The NO_COLOR decision was (a), collapse it — but per tier, not to nothing.**
+  The issue's own second half ("a 16-colour terminal also receives truecolor
+  SGR") is the argument: the complaint is not that a 16-colour terminal gets
+  colour, it is that it gets SGR it cannot render. So `TRIGGER_RAINBOW` stopped
+  being a bare `[Color; 7]` and became `TRIGGER_GRADIENT`, a row of the theme
+  map with the same three columns as every other row — 24-bit, nearest
+  xterm-256 index, base ANSI collapse — resolved through the same
+  `Theme::resolve` every slot goes through. `Theme::trigger_gradient()` answers
+  `None` on the monochrome tier, so `theme.rs`'s "drops colour entirely" is
+  now true instead of softened.
+- **Truecolor is untouched, and the proof is that no committed golden drifted.**
+  Ten STAGE goldens compare byte-for-byte with the change in. The owner-approved
+  #9 exception (literal stops, not slot names) is preserved exactly where it was
+  approved; what is no longer excepted is the tier, which is #13's rule.
+- The ANSI-256 column is checked, not trusted: a test recomputes a
+  nearest-colour pass over indices 16..=255 and asserts the transcribed indices
+  are what it finds — the pass the design sheet actually asks for.
+- **One consequence taken deliberately, and it is a real one.**
+  `repaint_reasons`' `trigger_ambient` held the loop at 120 ms so the gradient
+  could step. With no gradient it would repaint a token that cannot change —
+  the exact anti-pattern `any_live`'s own doc names ("a repaint cadence held
+  open by something that animates nothing is the same wasted spin the trigger
+  rainbow used to cause"). Gating the colour without gating the guard would
+  have *created* that spin, so the guard moved too.
+- **Both suite holes the issue diagnosed were real and are closed.** The
+  `all(fg == "reset")` net ran over SCORE and HOME only; it now renders STAGE
+  with a live trigger. And `stage_panes()` wrote `codex ready`, so no golden
+  ever went through the highlight path — new `stage_trigger_panes()` fixture,
+  gated at all four tiers (4 new goldens whose legends *are* the AC3 evidence).
+- Mutation-checked in both directions. Restoring the pre-fix render fails three
+  independent tests; removing the repaint clause fails the fourth.
+- **The grep-gate hole was reproduced before being fixed.** With the pre-fix
+  gate (flat `read_dir` + `scanned >= 4`) and `src/widgets/mod.rs` holding five
+  colour literals, the test was **green**. Recursive walk now catches all five
+  with `widgets/mod.rs:<line>` naming the module.
+- AC5: the floor is the crate's **module graph**, not a constant — `mod x;`
+  parsed transitively from `lib.rs`/`main.rs` and resolved to `x.rs` or
+  `x/mod.rs`. It reads source text rather than the same directory walk, so it is
+  an independent check: cripple the walk back to flat and the gate fails on the
+  floor itself, per-file *and* on the count, each independently. Demo module
+  deleted; `git status` clean of it.
+- Noted, not fixed (out of scope, recorded in the evidence note): `pane_color`
+  still replays a hosted pane's own SGR at every tier including monochrome. It
+  is documented behaviour with a stated reason and the app claims nothing else,
+  but it is the one remaining path that can put colour on a `NO_COLOR` screen.
+- Gates: all five green. `orc-app` lib tests 94 → 99 (measured against a stashed
+  tree), workspace 304 passed. The known storage flake
+  `delegate_confirms_while_running…` appeared once and passed on re-run; it is
+  in `orc-cli`, which this branch does not touch.
+- Evidence: `docs/notes/2026-07-30-issue-39-evidence.md`.
+- **Next: review of #39**, then #45 (which #46 added to the board while this
+  branch was open), with #14 (README + screenshots) last. Note for
+  whoever picks that up: `docs/WORKFLOW.md`'s checkout note is stale — it says
+  `/Volumes/Mrigesh SSD/pi-orchestra` "is NOT this repo", but that checkout is
+  the one tracking `origin/main` today (`Agent-orchestra/` beside it is months
+  behind, at the #12 era). Outside this issue's allowed paths, so left alone.
