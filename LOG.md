@@ -33,6 +33,7 @@ ship-log entries are part of finishing an issue.*
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ⬜ | — *(merges #43 + #44)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
