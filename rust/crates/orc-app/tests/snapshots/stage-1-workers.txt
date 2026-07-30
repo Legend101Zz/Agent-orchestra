@@ -1,8 +1,8 @@
-STAGE phosphor truecolor 100x30
+STAGE nocturne truecolor 1 workers 100x30
 --- text ---
                                                                                                     
-                                                                     ╭ ● PI-M3  LIVE ────────────╮  
-                                                                     │pi-m3 ready                │▐ 
+                                                                     ╭ ● PI-M3-0  LIVE ──────────╮  
+                                                                     │pi-m3-0 ready              │▐ 
  ╭ ◆ CODEX  LIVE ──────────────────────────────────╮                 │                           │▐ 
  │codex ready                                      │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
@@ -32,7 +32,7 @@ STAGE phosphor truecolor 100x30
  typing goes to the pane — ctrl-g then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q 
 --- styles ---
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcccccccccccccccbbbbbbbbbbbbbaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afgggggggggggggggfffffffffffffffffffffffffffffffffffaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
@@ -62,15 +62,15 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbb
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll
 --- legend ---
-a fg=reset bg=#050c07 mod=-
-b fg=#164a29 bg=#08130c mod=-
-c fg=#48f57a bg=#08130c mod=bold
-d fg=#48f57a bg=#08130c mod=-
-e fg=#164a29 bg=#050c07 mod=dim
-f fg=#1f6b3a bg=#08130c mod=-
-g fg=#a9ffc3 bg=#08130c mod=bold
-h fg=#a9ffc3 bg=#050c07 mod=bold
-i fg=#155f2e bg=#050c07 mod=dim
-j fg=#d6ffe2 bg=#050c07 mod=bold
-k fg=#48f57a bg=#050c07 mod=bold
-l fg=#279c4b bg=#050c07 mod=dim
+a fg=reset bg=#0a0c11 mod=-
+b fg=#262c3a bg=#10131b mod=-
+c fg=#c4cad6 bg=#10131b mod=bold
+d fg=#c4cad6 bg=#10131b mod=-
+e fg=#262c3a bg=#0a0c11 mod=dim
+f fg=#39425a bg=#10131b mod=-
+g fg=#5ad1c8 bg=#10131b mod=bold
+h fg=#5ad1c8 bg=#0a0c11 mod=bold
+i fg=#454c60 bg=#0a0c11 mod=dim
+j fg=#e6b450 bg=#0a0c11 mod=bold
+k fg=#8ea2ff bg=#0a0c11 mod=bold
+l fg=#727b8f bg=#0a0c11 mod=dim

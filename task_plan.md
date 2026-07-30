@@ -35,7 +35,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 (✅ merged 2026-07-28, PR #35) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — (✅ merged 2026-07-29, PR #36) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 (✅ merged 2026-07-29, PR #41) |
-| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (👀 pushed 2026-07-30, `issue-38-stage-circuit`) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
@@ -100,15 +100,18 @@ storage-dependent (fails on an external-SSD checkout, passes on internal disk).
 
 Two unfiled follow-ups from #37's review, both worth their own issue:
 
-- **The bounded-probe flake family — three tests, one cause.** Alongside
+- **The bounded-probe flake family — four tests, one cause.** Alongside
   `background_dispatch.rs:195`'s sub-1s budget, `discovery.rs:35`'s
   `VERSION_PROBE_TIMEOUT = 2s` (`harness_cli::harness_list_is_additive…`) and
   `probe.rs:55`'s `HELP_PROBE_TIMEOUT = 5s` (`doctor_cli::doctor_probes…`) all
   lose to process spawn on an external-SSD checkout under load. Confirmed
   pre-existing, not caused by #37: interleaved A/B of the discovery one on the
-  same volume gave branch 8/8, `origin/main` 7/8. The fix is one decision about
+  same volume gave branch 8/8, `origin/main` 7/8. **A fourth was identified
+  during #38** — `orc-cli::quota_guard::cli_dispatch_at_cap_is_queued_then_drains…`,
+  1 failure in 8, same A/B method giving branch 9/10 and `origin/main` 9/10 on
+  the same volume (#38 touches only `orc-app`). The fix is one decision about
   how these budgets are set (scale, or make them env-tunable in tests), not
-  three patches.
+  four patches.
 - **`handle_raw_event`'s dispatch layer has no test.** Deleting its
   `route_leader(...)` call — which kills `<leader>` `t`/`q`/`h`/`b`/`v`/`?` on
   HOME, SCORE and RUNS — leaves `orc-app` at 69 passed, 0 failed; so does

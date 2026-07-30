@@ -1,0 +1,77 @@
+STAGE nocturne truecolor 6 workers 100x30
+--- text ---
+                                                                                                    
+                                                                       ╭ ● PI-M3-0  LIVE ────────╮  
+                                                      ▓▒▒░░────────── ●│pi-m3-0 ready            │▐ 
+ ╭ ◆ CODEX  LIVE ──────────────────────────────────╮  ▓                ╰─────────────────────────╯▐ 
+ │codex ready                                      │▐ │                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ │                                                 │▐ │              ╭ ● PI-M3-1  LIVE ──────────╮  
+ │                                                 │▐ ├············ ●│pi-m3-1 ready              │▐ 
+ │                                                 │▐ │              ╰───────────────────────────╯▐ 
+ │                                                 │▐ │               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ │                                                 │▐ │              ╭ ● PI-M3-2  LIVE ──────────╮  
+ │                                                 │▐ ├──────────▓▒ ●│pi-m3-2 ready              │▐ 
+ │                                                 │▐ │              ╰───────────────────────────╯▐ 
+ │                                                 │▐◆┤               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ │                                                 │▐ │              ╭ ● PI-M3-3  LIVE ──────────╮  
+ │                                                 │▐ ├───▓▒░░───── ●│pi-m3-3 ready              │▐ 
+ │                                                 │▐ │              ╰───────────────────────────╯▐ 
+ │                                                 │▐ │               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ │                                                 │▐ │              ╭ ● PI-M3-4  LIVE ──────────╮  
+ │                                                 │▐ ├············ ●│pi-m3-4 ready              │▐ 
+ │                                                 │▐ │              ╰───────────────────────────╯▐ 
+ │                                                 │▐ │               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+ │                                                 │▐ │                ╭ ● PI-M3-5  LIVE ────────╮  
+ │                                                 │▐ ╰──────────▓▓▒▒ ●│pi-m3-5 ready            │▐ 
+ ╰─────────────────────────────────────────────────╯▐                  ╰─────────────────────────╯▐ 
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▐ 
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ typing goes to the pane — ctrl-g then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q 
+--- styles ---
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaadeeeeffffffffffagbhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajkkkkkkkkkkkkkkkjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjaadaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafffffffffffffagbhhhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafffffffffffleagbhhhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiefaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiaffffleeefffffagbhhhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafffffffffffffagbhhhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiia
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiafaaaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbaa
+ajhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhjiaffffffffffflleeagbhhhhhhhhhhhhhhhhhhhhhhhhhbia
+ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjiaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbia
+aaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiaaaaaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiia
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+--- legend ---
+a fg=reset bg=#0a0c11 mod=-
+b fg=#262c3a bg=#10131b mod=-
+c fg=#c4cad6 bg=#10131b mod=bold
+d fg=#e6b450 bg=#0a0c11 mod=bold+dim
+e fg=#5ad1c8 bg=#0a0c11 mod=bold
+f fg=#454c60 bg=#0a0c11 mod=dim
+g fg=#8ea2ff bg=#0a0c11 mod=bold
+h fg=#c4cad6 bg=#10131b mod=-
+i fg=#262c3a bg=#0a0c11 mod=dim
+j fg=#39425a bg=#10131b mod=-
+k fg=#5ad1c8 bg=#10131b mod=bold
+l fg=#e6b450 bg=#0a0c11 mod=bold
+m fg=#727b8f bg=#0a0c11 mod=dim
