@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use orc_core::adapter::summarize_registry;
 use orc_core::bench::{
-    create_session, list_sessions, load_harness_registry, write_harness_registry,
+    create_session, list_sessions, load_harness_registry, read_session, write_harness_registry,
 };
 use orc_core::contract::{TaskBudget, TaskContract, TaskLimits, render_brief};
 use orc_core::control::{self, LaunchOptions};
@@ -420,6 +420,17 @@ enum SessionCommand {
     },
     /// List durable sessions.
     List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one session: its brain, working directory and seated panes.
+    ///
+    /// Defaults to `$ORC_SESSION`, so a conductor running inside a pane can
+    /// ask "where am I, and who is seated with me?" without knowing its own
+    /// id (issue #45). Read-only: it never creates a session or a registry.
+    Show {
+        /// Session id to show; defaults to `$ORC_SESSION`.
+        session: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1399,7 +1410,93 @@ fn print_outcome(outcome: &OrchOutcome, json: bool) -> Result<()> {
     Ok(())
 }
 
+impl OrchCommand {
+    /// The `orch_*` verb this variant carries, for the failure envelope.
+    fn verb(&self) -> &'static str {
+        match self {
+            Self::Plan { .. } => "orch_plan",
+            Self::Delegate { .. } => "orch_delegate",
+            Self::Status { .. } => "orch_status",
+            Self::Await { .. } => "orch_await",
+            Self::Review { .. } => "orch_review",
+            Self::Cancel { .. } => "orch_cancel",
+            Self::Finish { .. } => "orch_finish",
+        }
+    }
+
+    /// Whether the caller asked for machine-readable output.
+    fn wants_json(&self) -> bool {
+        match self {
+            Self::Plan { json, .. }
+            | Self::Delegate { json, .. }
+            | Self::Status { json, .. }
+            | Self::Await { json, .. }
+            | Self::Review { json, .. }
+            | Self::Cancel { json, .. }
+            | Self::Finish { json, .. } => *json,
+        }
+    }
+}
+
+/// Classify a failure into a stable slug a caller can branch on.
+///
+/// The words are the ones the rest of the system already uses: the durable
+/// board writes `isolation_unavailable` as a history action, and dispatch
+/// refuses with `WORKER UNAVAILABLE` / `UNKNOWN HARNESS` in those exact
+/// words. Reusing them keeps one vocabulary rather than inventing a second
+/// one that only the JSON envelope speaks.
+fn orch_failure_reason(message: &str) -> &'static str {
+    if message.contains("ISOLATION REQUIRED") {
+        "isolation_unavailable"
+    } else if message.contains("WORKER UNAVAILABLE") {
+        "worker_unavailable"
+    } else if message.contains("UNKNOWN HARNESS") || message.contains("unknown harness") {
+        "unknown_harness"
+    } else if message.contains("quota-blocked") {
+        "quota_blocked"
+    } else if message.contains("session is required") || message.contains("missing dispatch session")
+    {
+        "session_missing"
+    } else if message.contains("missing dispatch task") || message.contains("no such task") {
+        "task_missing"
+    } else {
+        "error"
+    }
+}
+
+/// `--json` answers in JSON on *every* outcome, including failure.
+///
+/// Issue #45 defect 4: `pio orch delegate … --json` against a non-git cwd
+/// printed `ISOLATION REQUIRED: …` on stderr, exit 1, and left stdout
+/// **empty**. A caller that had been promised JSON got nothing to parse and
+/// no way to tell "it failed" from "it printed nothing", which is how a
+/// six-second success came to be reported as silence.
 fn dispatch_orch(command: OrchCommand) -> Result<i32> {
+    let json = command.wants_json();
+    let verb = command.verb();
+    if !json {
+        return run_orch(command);
+    }
+    match run_orch(command) {
+        Ok(code) => Ok(code),
+        Err(error) => {
+            let message = format!("{error:#}");
+            let reason = orch_failure_reason(&message);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "verb": verb,
+                    "ok": false,
+                    "error": { "reason": reason, "message": message },
+                }))?
+            );
+            eprintln!("{message}");
+            Ok(if reason == "quota_blocked" { 3 } else { 1 })
+        }
+    }
+}
+
+fn run_orch(command: OrchCommand) -> Result<i32> {
     match command {
         OrchCommand::Plan {
             title,
@@ -1634,6 +1731,42 @@ fn dispatch_session_command(command: SessionCommand) -> Result<i32> {
                         session.brain,
                         session.workers.join(","),
                         session.cwd
+                    );
+                }
+            }
+            Ok(0)
+        }
+        SessionCommand::Show { session, json } => {
+            let id = session
+                .or_else(|| std::env::var("ORC_SESSION").ok())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!("session id is required; pass one or set ORC_SESSION")
+                })?;
+            // `read_session` surfaces a bare io::Error for a missing file,
+            // which reads as a broken install rather than a typo.
+            let session = read_session(&id).map_err(|error| {
+                anyhow!(
+                    "unknown session {id}: {error}; list the ones that exist with `pio session list`"
+                )
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&session)?);
+            } else {
+                println!(
+                    "{}  brain={}  cwd={}",
+                    session.id, session.brain, session.cwd
+                );
+                if session.panes.is_empty() {
+                    println!(
+                        "no panes — this is a headless session; \
+                         dispatch falls back to a background worker"
+                    );
+                }
+                for pane in &session.panes {
+                    println!(
+                        "  {:<9} {:<10} {:<9} {}",
+                        pane.role, pane.harness, pane.state, pane.id
                     );
                 }
             }

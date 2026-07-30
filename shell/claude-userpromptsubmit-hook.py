@@ -214,6 +214,152 @@ def quota_relay(pio: str | None) -> list[str]:
     return lines
 
 
+# --- Where am I? (issue #45) --------------------------------------------------
+
+
+class Seat:
+    """Where this conductor is sitting, when it is sitting anywhere.
+
+    A brain launched into a pi-orchestra pane already carries `ORC_SESSION`,
+    `ORC_PANE_ID` and `ORC_WORKERS` in its environment (the daemon puts them
+    there). Nothing used to read them, so the injected guidance told a seated
+    brain to `pio session create` — a *second*, pane-less session whose
+    dispatches went to headless workers nobody could see, while the three
+    panes on screen sat idle. That is issue #45.
+
+    The environment says *that* we are seated; the durable session record says
+    *with whom*, and is the only fresh answer (`ORC_WORKERS` is frozen at
+    launch and never learns that a worker died). We prefer the record and fall
+    back to the environment, because a degraded seat is still worth far more
+    than a wrong `session create`.
+    """
+
+    def __init__(self, session: str, pane: str | None, workers_env: str | None) -> None:
+        self.session = session
+        self.pane = pane
+        self.workers: list[dict[str, str]] = []
+        self.role: str | None = None
+        self.cwd: str | None = None
+        self.brain: str | None = None
+        self.note: str | None = None
+        for pane_id, harness in _parse_worker_offer(workers_env):
+            self.workers.append(
+                {"id": pane_id, "harness": harness, "state": "unknown"}
+            )
+        if pane and pane.endswith("-brain"):
+            self.role = "brain"
+        elif pane and "-worker-" in pane:
+            self.role = "worker"
+
+    def adopt_record(self, record: object) -> None:
+        """Overlay the durable session record; ignore anything unusable."""
+        if not isinstance(record, dict):
+            return
+        cwd, brain = record.get("cwd"), record.get("brain")
+        self.cwd = cwd if isinstance(cwd, str) else self.cwd
+        self.brain = brain if isinstance(brain, str) else self.brain
+        panes = record.get("panes")
+        if not isinstance(panes, list):
+            return
+        seated = []
+        for entry in panes:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("id") == self.pane and isinstance(entry.get("role"), str):
+                self.role = entry["role"]
+            if entry.get("role") != "worker":
+                continue
+            seated.append(
+                {
+                    "id": str(entry.get("id", "?")),
+                    "harness": str(entry.get("harness", "?")),
+                    "state": str(entry.get("state", "unknown")),
+                }
+            )
+        # Only replace the frozen env offer once the record really answered.
+        if seated or any(entry.get("role") == "worker" for entry in panes if isinstance(entry, dict)):
+            self.workers = seated
+
+    def running_workers(self) -> list[dict[str, str]]:
+        return [w for w in self.workers if w["state"] in ("running", "unknown")]
+
+    def lines(self) -> list[str]:
+        """The seat, stated plainly, as the first thing the conductor reads."""
+        out = [
+            "YOU ARE ALREADY INSIDE A pi-orchestra SESSION. The panes on screen"
+            " are the bench — dispatch into them, and the user watches it happen.",
+            f"  session:  {self.session}   <- REUSE THIS. Do NOT run `pio session create`.",
+            f"  your pane: {self.pane or 'unknown'}"
+            f"   role={self.role or 'unknown'}"
+            + (f"   harness={self.brain}" if self.brain else ""),
+            f"  cwd:      {self.cwd or os.getcwd()}",
+        ]
+        if self.workers:
+            out.append("  workers seated with you:")
+            out.extend(
+                f"    {w['harness']:<10} {w['state']:<9} {w['id']}" for w in self.workers
+            )
+        else:
+            out.append(
+                "  workers seated with you: none recorded — check `pio session show"
+                " --json` before promising a delegation."
+            )
+        if self.note:
+            out.append(f"  note: {self.note}")
+        out.append(
+            "Creating a second session is the one thing that breaks this: a new"
+            " session has no panes, so dispatch falls back to a headless worker,"
+            " the board of the session you are sitting in never changes, and STAGE"
+            " never moves. It would still 'work' — invisibly, to a worker the user"
+            " cannot see."
+        )
+        return out
+
+
+def _parse_worker_offer(raw: str | None) -> list[tuple[str, str]]:
+    """Parse `ORC_WORKERS`: `<pane-id>=<harness>` pairs, comma separated."""
+    offers: list[tuple[str, str]] = []
+    for chunk in (raw or "").split(","):
+        pane_id, separator, harness = chunk.partition("=")
+        if separator and pane_id.strip() and harness.strip():
+            offers.append((pane_id.strip(), harness.strip()))
+    return offers
+
+
+def read_seat(pio: str | None) -> Seat | None:
+    """Detect the seat from the environment, then enrich it from `pio`.
+
+    Never raises and never blocks for long: the hook's contract is that a
+    false negative costs one turn of help, never a prompt.
+    """
+    session = os.environ.get("ORC_SESSION", "").strip()
+    if not session:
+        return None
+    seat = Seat(session, os.environ.get("ORC_PANE_ID") or None, os.environ.get("ORC_WORKERS"))
+    if pio is None:
+        seat.note = "pio not found, so this is the environment's account, not the session record."
+        return seat
+    try:
+        timeout = float(os.environ.get("ORC_HOOK_QUOTA_TIMEOUT", "6"))
+    except ValueError:
+        timeout = 6.0
+    try:
+        done = subprocess.run(
+            [pio, "session", "show", session, "--json"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        seat.adopt_record(json.loads(done.stdout))
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        seat.note = (
+            "could not read the session record; the seat below comes from the"
+            " environment and worker states may be stale."
+        )
+    return seat
+
+
 # --- Per-verb routing guidance (the exact pio / MCP invocation) --------------
 
 _SINGLE_HARNESS = (
@@ -231,37 +377,103 @@ _CONFIRMED = (
 )
 
 
-def guidance(verbs: list[str]) -> list[str]:
+_COLLECT = (
+    "Delegate returns as soon as the worker has the brief, while the worker "
+    "keeps running — so it returning is NOT the answer, and its silence is not "
+    "failure. COLLECT THE RESULT before you report anything: block with "
+    "`orch_await` / `pio orch await <T> --session <id> --json` for the answer, "
+    "usage and exit code, or poll `orch_status` / `pio orch status <T>`, and "
+    "read the worker's stream with `pio show <run>`. Reporting \"no output\" "
+    "without awaiting is how a six-second success gets reported as silence."
+)
+
+
+def _seated_delegate_block(seat: Seat) -> str:
+    """`delegate:` for a conductor that is already sitting on the bench."""
+    running = seat.running_workers()
+    harness = running[0]["harness"] if running else "<harness>"
+    offered = ", ".join(sorted({worker["harness"] for worker in running})) or "none"
+    return (
+        "delegate: — one bounded hand-off to a worker ALREADY SEATED WITH YOU.\n"
+        f"  Seated and running: {offered}.\n"
+        "  Reuse this session. Dispatch selects the running worker pane whose\n"
+        "  harness matches, so you do NOT need --pane:\n"
+        f'    pio orch delegate {harness} --session "$ORC_SESSION" \\\n'
+        '      --title "<what>" --objective "<done-when>" \\\n'
+        '      --check "<acceptance check>" --json\n'
+        "  MCP equivalent: `orch_delegate` with session set to $ORC_SESSION.\n"
+        "  Do NOT run `pio session create` — you are in a session. And do not\n"
+        "  spawn your own subagents for this: the user cast `delegate:` to move\n"
+        "  work onto the bench they are watching.\n"
+        "  If the cwd is not a git repository, a contracted task cannot take a\n"
+        "  worktree; either delegate from a repo, or send an uncontracted brief\n"
+        "  (`pio task add` → `assign` → `start` → `pio dispatch send`), which\n"
+        "  needs no isolation.\n"
+        f"  {_COLLECT}\n"
+        "  `--dispatch-timeout` bounds the background worker; contract "
+        "`--timeout` is metadata only.\n"
+        f"  {_CONFIRMED}"
+    )
+
+
+def _standalone_delegate_block() -> str:
+    """`delegate:` outside pi-orchestra: there is no bench, so make one."""
+    return (
+        "delegate: — one bounded hand-off to one worker.\n"
+        "  You are NOT inside a pi-orchestra session (no $ORC_SESSION), so\n"
+        "  create one first — this is the standalone path only.\n"
+        "  Preferred (MCP): call the `orch_delegate` tool with a task "
+        "contract {harness, session, title, objective, acceptance_checks}.\n"
+        "  CLI equivalent:\n"
+        "    pio session create --brain claude --worker <harness>   # once; note the id\n"
+        "    pio orch delegate <harness> --session <id> \\\n"
+        '      --title "<what>" --objective "<done-when>" \\\n'
+        '      --check "<acceptance check>" --json\n'
+        "  Run it from inside a git repository: a contracted task takes an\n"
+        "  isolated worktree, and outside a repo it cannot. For a task that\n"
+        "  changes no files, `pio task add` → `assign` → `start` →\n"
+        "  `pio dispatch send <T> <harness> \"<brief>\"` needs no worktree.\n"
+        f"  {_COLLECT}\n"
+        "  `--dispatch-timeout` bounds the background worker; contract "
+        "`--timeout` is metadata only.\n"
+        f"  {_CONFIRMED}"
+    )
+
+
+def guidance(verbs: list[str], seat: Seat | None = None) -> list[str]:
     """Instruction blocks for each detected verb (exact invocations)."""
     blocks: list[str] = []
     if "delegate" in verbs:
         blocks.append(
-            "delegate: — one bounded hand-off to one worker.\n"
-            "  Preferred (MCP): call the `orch_delegate` tool with a task "
-            "contract {harness, session, title, objective, acceptance_checks}.\n"
-            "  CLI equivalent:\n"
-            "    pio session create --brain claude --worker <harness>   # once; note the id\n"
-            "    pio orch delegate <harness> --session <id> \\\n"
-            "      --title \"<what>\" --objective \"<done-when>\" \\\n"
-            "      --check \"<acceptance check>\" --json\n"
-            "  Delegate returns immediately after delivery while the worker "
-            "continues in the background. Poll with `orch_status` / "
-            "`pio orch status <T>`; block for answer + exit code with "
-            "`orch_await` / `pio orch await <T>`.\n"
-            "  `--dispatch-timeout` bounds the background worker; contract "
-            "`--timeout` is metadata only.\n"
-            f"  {_CONFIRMED}"
+            _seated_delegate_block(seat) if seat else _standalone_delegate_block()
         )
     if "orchestrate" in verbs:
+        session_ref = '"$ORC_SESSION"' if seat else "<id>"
         blocks.append(
             "orchestrate: — dependency-aware decomposition across the bench.\n"
-            "  1. Quota first (relayed above). If BLOCKED, ask the user before delegating.\n"
+            + (
+                "  0. You are already in a session — reuse "
+                f"{session_ref}. Do NOT create one, and do NOT export a new\n"
+                "     ORC_SESSION: the bench you would orchestrate is the one on"
+                " screen.\n"
+                if seat
+                else "  0. No $ORC_SESSION: create one with `pio session create`"
+                " first.\n"
+            )
+            + "  1. Quota first (relayed above). If BLOCKED, ask the user before delegating.\n"
             "  2. Decompose into independent chunks; never exceed "
-            "`max_parallel_workers` (~/.orchestra/config.json, default 3).\n"
-            "  3. Per chunk: `orch_plan` then `orch_delegate` (or `pio orch plan` "
-            "/ `pio orch delegate <harness> --session <id> ...`).\n"
+            "`max_parallel_workers` (~/.orchestra/config.json, default 3)"
+            + (
+                " — and never more chunks in flight than there are seated"
+                " workers.\n"
+                if seat
+                else ".\n"
+            )
+            + "  3. Per chunk: `orch_plan` then `orch_delegate` (or `pio orch plan` "
+            f"/ `pio orch delegate <harness> --session {session_ref} ...`).\n"
             "  4. Watch with `orch_status`/`orch_await`; move with "
-            "`orch_review` then `orch_finish` (or `pio orch review|finish <T>`).\n"
+            "`orch_review` then `orch_finish` (or `pio orch review|finish <T>`). "
+            "Await every chunk before reporting — delivery is not completion.\n"
             "  5. Verify each worker's output against real files, synthesize "
             "yourself, and report per-worker status + `tokens.total`/`cost_usd` "
             "+ `pio stats` + post-run `pio quota`."
@@ -284,8 +496,15 @@ def guidance(verbs: list[str]) -> list[str]:
     return blocks
 
 
-def build_context(verbs: list[str], quota_lines: list[str]) -> str:
-    """Assemble the additive context injected back into the conductor."""
+def build_context(
+    verbs: list[str], quota_lines: list[str], seat: Seat | None = None
+) -> str:
+    """Assemble the additive context injected back into the conductor.
+
+    When we are seated, the seat leads. Everything after it is a detail of
+    *how* to delegate; where you already are decides whether any of it is
+    right at all.
+    """
     spells = ", ".join(f"`{verb}:`" for verb in verbs)
     header = (
         f"pi-orchestra trigger detected: {spells}. You (the conductor) are "
@@ -295,7 +514,12 @@ def build_context(verbs: list[str], quota_lines: list[str]) -> str:
     quota_block = "Quota (from `pio quota`):\n" + "\n".join(
         f"  {line}" for line in quota_lines
     )
-    return "\n\n".join([header, quota_block, *guidance(verbs)])
+    parts = [header]
+    if seat is not None:
+        parts.append("\n".join(seat.lines()))
+    parts.append(quota_block)
+    parts.extend(guidance(verbs, seat))
+    return "\n\n".join(parts)
 
 
 def run_hook(stdin_text: str) -> int:
@@ -312,7 +536,8 @@ def run_hook(stdin_text: str) -> int:
     if not verbs:
         return 0  # ordinary prose passes through untouched
     pio = find_pio()
-    context = build_context(verbs, quota_relay(pio))
+    seat = read_seat(pio)
+    context = build_context(verbs, quota_relay(pio), seat)
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
@@ -322,7 +547,11 @@ def run_hook(stdin_text: str) -> int:
     print(json.dumps(output))
     # A short human acknowledgment on stderr shows up in the transcript.
     spells = ", ".join(f"{verb}:" for verb in verbs)
-    print(f"pi-orchestra: {spells} detected — routing through pio.", file=sys.stderr)
+    where = f" into session {seat.session}" if seat else ""
+    print(
+        f"pi-orchestra: {spells} detected — routing through pio{where}.",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -385,6 +614,191 @@ def _quota_checks(expect) -> None:
             expect(f"quota {name} end-to-end via stub pio", marker in relayed)
 
 
+SEATED_RECORD = {
+    "id": "bin-1785416854-0000",
+    "brain": "claude",
+    "cwd": "/Users/comreton/.local/bin",
+    "panes": [
+        {
+            "id": "bin-1785416854-0000-brain",
+            "harness": "claude",
+            "role": "brain",
+            "state": "running",
+        },
+        {
+            "id": "bin-1785416854-0000-worker-1",
+            "harness": "hermes",
+            "role": "worker",
+            "state": "running",
+        },
+        {
+            "id": "bin-1785416854-0000-worker-2",
+            "harness": "pi-m3",
+            "role": "worker",
+            "state": "stopped",
+        },
+    ],
+}
+
+
+def _stub_pio(directory: str, name: str, stdout: str, code: int = 0) -> str:
+    """A fake `pio` that answers one command with fixed output."""
+    path = os.path.join(directory, name)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(f"#!/bin/sh\nprintf '%s' '{stdout}'\nexit {code}\n")
+    os.chmod(path, 0o755)
+    return path
+
+
+def _with_env(**overrides: str | None):
+    """Set env vars for one block, restoring whatever was there before."""
+    previous = {key: os.environ.get(key) for key in overrides}
+
+    def restore() -> None:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    for key, value in overrides.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    return restore
+
+
+def _seat_checks(expect) -> None:
+    """The two paths are told apart by the environment, never by a guess.
+
+    Issue #45: a conductor seated in a pane must reuse `$ORC_SESSION`; a
+    standalone one must still create a session exactly as it does today. Both
+    are pinned here so neither can quietly become the other.
+    """
+    restore = _with_env(ORC_SESSION=None, ORC_PANE_ID=None, ORC_WORKERS=None)
+    try:
+        # --- Standalone: no ORC_SESSION, so no seat and the old recipe stands.
+        expect("standalone has no seat", read_seat(None) is None)
+        standalone = build_context(["delegate"], ["Quota ok"], None)
+        expect("standalone still creates a session", "pio session create" in standalone)
+        expect("standalone says it is standalone", "NOT inside a pi-orchestra" in standalone)
+        expect("standalone names how to collect", "orch await" in standalone)
+        expect(
+            "standalone states the git precondition",
+            "git repository" in standalone,
+        )
+
+        # --- Seated: the environment alone is enough to detect the seat.
+        restore()
+        restore = _with_env(
+            ORC_SESSION="bin-1785416854-0000",
+            ORC_PANE_ID="bin-1785416854-0000-brain",
+            ORC_WORKERS="bin-1785416854-0000-worker-1=hermes,"
+            "bin-1785416854-0000-worker-2=pi-m3",
+        )
+        env_only = read_seat(None)
+        expect("seated detected from env alone", env_only is not None)
+        expect("env seat keeps the session id", env_only.session == "bin-1785416854-0000")
+        expect("env seat derives the brain role", env_only.role == "brain")
+        expect(
+            "env seat parses ORC_WORKERS",
+            [w["harness"] for w in env_only.workers] == ["hermes", "pi-m3"],
+        )
+        expect("env-only seat says so", "pio not found" in (env_only.note or ""))
+
+        # --- Seated, enriched by the real session record through a stub pio.
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = _stub_pio(tmp, "pio-seated", json.dumps(SEATED_RECORD))
+            seat = read_seat(stub)
+            expect("record seat has no degradation note", seat.note is None)
+            expect("record seat learns the cwd", seat.cwd == "/Users/comreton/.local/bin")
+            expect("record seat learns the role", seat.role == "brain")
+            expect(
+                "record seat learns worker state",
+                [(w["harness"], w["state"]) for w in seat.workers]
+                == [("hermes", "running"), ("pi-m3", "stopped")],
+            )
+            expect(
+                "a stopped worker is not offered",
+                [w["harness"] for w in seat.running_workers()] == ["hermes"],
+            )
+
+            context = build_context(["delegate"], ["Quota ok"], seat)
+            # AC2: session, pane, role, cwd and seated workers, all named.
+            for label, needle in (
+                ("session", "bin-1785416854-0000"),
+                ("pane", "bin-1785416854-0000-brain"),
+                ("role", "role=brain"),
+                ("cwd", "/Users/comreton/.local/bin"),
+                ("workers", "hermes"),
+            ):
+                expect(f"seated context names the {label}", needle in context)
+            expect("seated context says reuse", "REUSE THIS" in context)
+            expect(
+                "seated context forbids session create",
+                "Do NOT run `pio session create`" in context,
+            )
+            expect(
+                "seated context never teaches session create",
+                "pio session create" not in context.replace(
+                    "Do NOT run `pio session create`", ""
+                ),
+            )
+            expect(
+                "seated context reuses $ORC_SESSION",
+                '--session "$ORC_SESSION"' in context,
+            )
+            expect(
+                "seated context picks a seated harness",
+                "pio orch delegate hermes" in context,
+            )
+            expect("seated context names how to collect", "orch await" in context)
+            expect(
+                "seated context warns STAGE would not move",
+                "STAGE" in context and "never moves" in context,
+            )
+            # The seat leads: it must precede the routing detail.
+            expect(
+                "the seat is stated before the recipe",
+                context.index("YOU ARE ALREADY INSIDE")
+                < context.index("pio orch delegate hermes"),
+            )
+            # orchestrate: must not mint a second session either.
+            orchestrated = build_context(["orchestrate"], ["Quota ok"], seat)
+            expect(
+                "seated orchestrate reuses the session",
+                "do NOT export a new" in orchestrated,
+            )
+
+        # --- A pio that cannot answer degrades honestly, never silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = _stub_pio(tmp, "pio-broken", "not json at all", 1)
+            degraded = read_seat(broken)
+            expect("an unreadable record still yields a seat", degraded is not None)
+            expect(
+                "and says the seat is the environment's account",
+                "environment" in (degraded.note or ""),
+            )
+            expect(
+                "and still refuses to create a session",
+                "Do NOT run `pio session create`"
+                in build_context(["delegate"], ["Quota ok"], degraded),
+            )
+
+        # --- A worker pane is seated too; the role must not be assumed.
+        restore()
+        restore = _with_env(
+            ORC_SESSION="bin-1785416854-0000",
+            ORC_PANE_ID="bin-1785416854-0000-worker-1",
+            ORC_WORKERS=None,
+        )
+        worker_seat = read_seat(None)
+        expect("a worker pane reports the worker role", worker_seat.role == "worker")
+    finally:
+        restore()
+
+
 def _selftest() -> int:
     checks: list[tuple[str, bool]] = []
 
@@ -425,6 +839,7 @@ def _selftest() -> int:
     )
 
     _quota_checks(expect)
+    _seat_checks(expect)
 
     failures = [name for name, ok in checks if not ok]
     for name, ok in checks:
