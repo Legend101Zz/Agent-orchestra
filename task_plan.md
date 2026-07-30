@@ -38,6 +38,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (👀 phase 1 pushed 2026-07-31, `issue-49-watchable-delegation`) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
@@ -45,7 +46,38 @@ record. (Issue numbers are filled in as issues are created.)
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
 #37, #38, #39 and #45 are merged. Every V1 feature is in; #14 (README) is the
-last original V1 item and all that stands between here and launch.**
+last original V1 item and all that stands between here and launch. #49 phase 1
+is pushed and awaiting review.**
+
+**#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
+now records that a worker *answered*, and the animation is driven from that.**
+Defect 1 was the whole issue: `delivery_confirmed` is written by `mark_started`
+immediately after `command.spawn()` and `persist_terminal`'s success arm
+appended no history at all, so `circuit::message_for` was classifying "a
+process started" as the return packet — the answer appeared to arrive
+milliseconds after the brief left, on every delegation ever made, and nothing
+durable ever said an answer had arrived. `orc_core::tasks` gains
+`record_execution` / `record_review_execution`; `delivery_confirmed` is
+reclassified `(Outbound, Confirmed)`, which is what it always meant. Measured
+against a 1.5 s worker: delivery confirmed at 69 ms, `execution_succeeded` at
+1.63 s. An adversarial review pass before pushing found and fixed seven real
+defects (a stranded legend note with no repaint reason, an 80-column legend
+overflow, the reduced-motion connector still `bold+dim`, an answer able to
+overtake its own brief on the wire, the confirmed badge surviving a failed
+execution, three untested new action words, and one tautological test, now
+deleted). Also in phase 1: a `notify` watcher on `~/.orchestra/tasks` giving
+board changes their own wake path (defect 4); `FLIGHT_MS_PER_CELL = 30`
+replacing the two-cells-per-60 ms frame counter at identical speed (defect 5);
+and the departure beat. **Decision 2 resolved in-branch: no trail** — the sheet
+makes shape one of three separation legs and it is the only one that survives
+on the monochrome tier, and the ASCII column has no unclaimed directional
+character; argument in `findings.md`, sheet amended REV 2026.07c. Phases 2 and
+3 not started; Decision 1 remains the product owner's. Carried out of scope and
+reported on the issue: `orc-daemon`'s `task_board` truncates a task's history
+to the last eight entries and `note_task_events`' watermark is a length into
+that window, so a task past eight entries stops animating — the completion
+event brings a full contracted lifecycle to nine, and the fix needs a field the
+daemon populates.
 
 #13 (PR #36) merged with its review verdict outstanding — FIX, 4 items — so
 those findings were live on `main` and were re-homed rather than dropped: #37
