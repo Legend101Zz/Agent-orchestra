@@ -32,7 +32,7 @@ ship-log entries are part of finishing an issue.*
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
-| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | 👀 | `issue-39-trigger-tier-grep-gate` |
+| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | 🔨 | `issue-39-trigger-tier-grep-gate` · PR #47 · reviewed 🔨 FIX (2) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ⬜ | — *(merges #43 + #44)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -410,6 +410,8 @@ written down in the notes rather than changed quietly. This clears the last of
 #13's four review findings, so the new look is fully closed out — what's left
 before launch is #45 (making `delegate:` inside the TUI use the workers already
 on screen) and then the README and screenshots (#14).
+
+> **Review 2026-07-30 (Claude): 🔨 FIX (2).** All 5 gates re-run green, all 6 acceptance checks re-verified independently and all 4 mutation claims reproduced — but `Theme::resolve`'s new "every colour the crate emits comes through here" and the module doc's new "without exception" are both false while `pane_color` replays a pane's SGR at the monochrome tier, which is the same claim-vs-behaviour gap AC1 forbids; and the gate's `theme.rs` exemption is keyed on the file *name*, so now that the walk recurses `src/<anydir>/theme.rs` escapes the colour scan and a future `src/theme/` split would make the gate fire on its own map.
 
 ### 2026-07-28 — One capable harness still completes the job honestly, issue #12 (code-puppy)
 With only one capable CLI, pi-orchestra now says exactly what is unavailable,
