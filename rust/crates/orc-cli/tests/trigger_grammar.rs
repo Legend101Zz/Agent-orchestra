@@ -25,7 +25,10 @@ fn repository_root() -> PathBuf {
 /// what made the current bug invisible, since every skill mentions its verb
 /// in prose somewhere.
 fn description_of(skill: &str) -> String {
-    let path = repository_root().join("skills").join(skill).join("SKILL.md");
+    let path = repository_root()
+        .join("skills")
+        .join(skill)
+        .join("SKILL.md");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let mut lines = text.lines();
