@@ -1729,3 +1729,57 @@ hand back to the implementer.
   `route_leader` call kills every leader command on HOME/SCORE/RUNS and still
   passes 69/69. Both predate this fix round; the second was missed in round 1.
 - **Next: #38** (STAGE as a live circuit), then #39, with #14 last.
+
+## Session — 2026-07-29/30 (implementer, #38 STAGE as a live circuit)
+
+- Branched `issue-38-stage-circuit` from fresh `main` @ `4eb784c`, after #37
+  merged, to avoid TUI conflicts. Five commits.
+- **First commit was the #13 carry-over, as the issue's comment required.** The
+  baton froze mid-sweep because of *when* `run_shell_loop` repainted, not the
+  frame maths: on the frame `pulse.done()` flipped, every "still moving" reason
+  went false at once and `redraw` had been cleared after the previous draw, so
+  the idle rail was computed and never painted. `StageState` now records the
+  `baton::State` it actually painted and forces a redraw when the resolved
+  state differs — which also covers Steady→Idle under reduced motion.
+- The repaint decision moved out of the loop into `RepaintReasons`, a pure
+  value. `run_shell_loop` wants a real terminal, a real socket and a live event
+  source, so it is unreachable from a test; leaving the guard inline would have
+  left the one thing that commit changed unverifiable except by eye. That is
+  also the first half of the `run_shell_loop` testability gap the recon flagged.
+- Decided and pinned the inverted-signal note: **a trigger animates the
+  rainbow, never the rail.** `has_live_trigger` reads what a pane displays; the
+  rail reports what a pane produced. The rainbow keeps its own 120 ms cadence
+  rather than holding the shell at the baton's 16 ms.
+- **Asked before implementing the return animation**, as instructed — the sheet
+  said the baton is one direction only. Mrigesh chose two vocabularies: the
+  baton spec is untouched and a separate "Message in flight" section was added.
+  That also leaves the identity HTML correct rather than quietly contradicted,
+  which matters because the HTML is outside this issue's allowed paths.
+- New `circuit` module: one port on the conductor, a vertical trunk, one spur
+  per worker. `baton.rs` is byte-identical — a route of any length *samples* the
+  twelve-cell rail, and where the sheet's endpoints fit the rail keeps exactly
+  twelve cells and samples 1:1, so the single-worker case still paints
+  `_fillBaton`'s own frames.
+- Attribution is per pane **id**, not index, because `s` swaps panes and a
+  session can gain or lose one.
+- Geometry now defers entirely while the mouse is down. Measured: **119 blocking
+  round-trips across 60 drag frames before, 2 after** — the 119 by reverting the
+  guard and printing the count, not by estimating it.
+- Six defects surfaced that the issue did not list; four of them were found by
+  *reading the goldens or running the tests*, not by reasoning. Full list in
+  `docs/notes/2026-07-30-stage-circuit-evidence.md`. The two worth repeating:
+  a mouse **release** re-armed the drag (SGR reports it as the same button code
+  with an `m` suffix, and the press branch keyed on the code alone), and the
+  layout debounce could not see a drag's own writes, so a move was never
+  persisted unless a clamp happened to bite.
+- **`baton_row`, the test helper, was matching the wrong row** — the first row
+  containing any rail character, but `·` is also a title separator and `─` is
+  the pane border, both above the rail. Every baton test using it had been
+  passing for the wrong reason.
+- Four mutations re-introduced deliberately to confirm the new tests catch them.
+- Gates: all five green. `orc-app` 72 → 92 tests, workspace 124. One
+  pre-existing storage-dependent flake re-observed
+  (`delegate_confirms_while_running…`), already filed in `task_plan.md`.
+- AC9 measured: **0.157 ms/frame in release**, 6.223 ms debug, with six workers
+  all live plus a message in flight at 150×44. Budget is the 16 ms cadence.
+- **Next: review of #38**, then #39, with #14 last.

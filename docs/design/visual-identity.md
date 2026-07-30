@@ -92,11 +92,58 @@ accent reserved for interactive/active.
   when idle, count badge updated ≤1×/sec. No travel, no sweep.
 - Braille ⠿ spinner = conductor thinking; block sparkline ▁▂▃▅▇ = worker tok/s.
 
+## Message in flight
+
+*(Added REV 2026.07b for #38. The baton spec above is unchanged — this is a
+second vocabulary sharing the same geometry, not an amendment to the first.
+The two are deliberately separable: the baton says a pane **is producing**, a
+message says a discrete thing **was sent**, and the one-direction rule belongs
+to the baton alone.)*
+
+- The ambient pulse is a *condition* — it loops for as long as output flows.
+  A message is an *event*: it has a source, a destination and an outcome, so
+  it traverses its connector exactly **once** and lands. It never loops.
+- Packet = a single directional cell, not the pulse's three-cell ramp:
+  `▶` travelling conductor → worker, `◀` travelling worker → conductor.
+  ASCII column: `>` and `<`. Direction is the meaning, so the glyph carries it
+  and colour never has to.
+- ~60 ms/frame, two cells/frame — deliberately faster than the 110 ms ambient
+  sweep. A dispatch should read as a snap, not as flow.
+- Colour from the map, never a new slot: `brain` outbound (the conductor's
+  intent leaving), `confirmed` on a confirmed delivery, `failed` on a failure.
+- It rides **over** the connector's current state; the rail underneath keeps
+  whatever it was already doing. A worker can be mid-pulse and receive a
+  dispatch in the same frame, and both must stay legible.
+- Reduced-motion equivalent: no travel. The connector holds solid in the
+  message's colour for the traverse duration, then the emote lands. Same
+  information, no packet anywhere on the rail.
+- Distinguishable from the ambient pulse by all three of shape (one cell vs
+  three), behaviour (crosses once vs loops) and colour — so removing any one
+  of them still leaves the two tellable apart.
+
+**Connection topology.** Where the ambient rail is drawn is now a function of
+how many workers there are — one rail at mid-height stops meaning anything past
+one worker. The routing spec (elbows → bus → single rail, with its honest
+degradations at and below 80×24) lives in
+`docs/notes/2026-07-29-stage-circuit-topology.md`; it is new design rather than
+a transcription of the identity HTML, which has no multi-worker topology at
+all, so it is written up for review before being promoted into this sheet.
+
 ## Signature moments
 
 - **✓ TASK CONFIRMED** — a tactile stamp: row flashes reverse-video for one
   frame, glyph stamps in scaling down, settles to a steady badge with a gold
-  (`confirmed`) underline.
+  (`confirmed`) underline. This is the app's **one** landing language; anything
+  that arrives somewhere uses it rather than inventing a second vocabulary.
+- **The landing emote** (added REV 2026.07b for #38) — what a
+  *message in flight* does when it reaches its destination pane. Same three
+  beats as ✓ TASK CONFIRMED, with the glyph and slot naming the outcome:
+  `◑ DISPATCHED` in `brain` on the receiving worker, `✓ CONFIRMED` in
+  `confirmed` on the conductor, `✕ FAILED` in `failed`. It is short-lived —
+  it holds for ~1.2 s and then leaves, restoring the row underneath exactly.
+  It never takes focus, never blocks input, and never survives the pane that
+  raised it. Under reduced motion the flash frame is dropped: it appears
+  already settled, holds, and leaves.
 - **⏻ CONDUCTOR DOWN** — calm and recoverable, never alarming: muted coral,
   slow breath (not a blink), elapsed time, clear `R` to recover. Workers hold
   their last state.

@@ -148,7 +148,13 @@ mod tests {
 
     use orc_proto::{HarnessSummary, PaneSnapshot, SessionSummary, TaskSummary, TerminalCell};
 
-    use super::{ColorTier, GlyphTier, Glyphs, HEIGHT, Theme, ThemeName, WIDTH, gate};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::{
+        ColorTier, GlyphTier, Glyphs, HEIGHT, Theme, ThemeName, WIDTH, gate, serialize,
+        snapshot_dir,
+    };
     use crate::baton;
     use crate::{
         HomeData, HomeState, ScoreState, ShellState, ShellView, StageState, render_home,
@@ -269,6 +275,140 @@ mod tests {
             .collect()
     }
 
+    /// A conductor plus `count` workers, so the topology is pinned at the
+    /// worker counts AC1 names rather than only at the one the rest of the
+    /// suite happens to use.
+    fn stage_panes_n(count: usize) -> Vec<PaneSnapshot> {
+        let mut panes = stage_panes();
+        let worker = panes[1].clone();
+        panes.truncate(1);
+        for index in 0..count {
+            let mut next = worker.clone();
+            next.id = format!("pane-{}", index + 1);
+            next.title = format!("pi-m3-{index}");
+            for cell in &mut next.cells {
+                cell.text = String::new();
+            }
+            for (column, glyph) in format!("{} ready", next.title).chars().enumerate() {
+                next.cells[column].text = glyph.to_string();
+            }
+            panes.push(next);
+        }
+        panes
+    }
+
+    /// AC1: with one, three and six workers every worker has its own visible
+    /// connector, and the wiring is pinned cell by cell — text *and* style, so
+    /// a wire that lost its colour would not slip through as "the shapes are
+    /// the same". Traffic differs per worker so the goldens also show that the
+    /// connectors are independently addressable.
+    #[test]
+    fn the_topology_is_snapshotted_at_one_three_and_six_workers() {
+        let theme = Theme::from(ThemeName::Nocturne);
+        for count in [1, 3, 6] {
+            let mut stage = StageState::new(stage_panes_n(count), theme, UNICODE);
+            let traffic = (0..count)
+                .map(|index| match index % 3 {
+                    0 => baton::State::Sweeping(2),
+                    1 => baton::State::Idle,
+                    _ => baton::State::Sweeping(5),
+                })
+                .collect::<Vec<_>>();
+            gate(
+                &format!("stage-{count}-workers"),
+                &format!("STAGE nocturne truecolor {count} workers {WIDTH}x{HEIGHT}"),
+                |frame| render_stage(frame, &mut stage, None, &traffic),
+            );
+        }
+    }
+
+    /// AC5: a dispatch, a confirmed return and a plain stdout tick are three
+    /// visibly different frames, pinned rather than asserted-to-differ.
+    ///
+    /// `mark_output` used to treat a task event exactly as a stdout tick, so
+    /// all three of these were the same picture. They now differ on shape (one
+    /// directional cell against the ambient three-cell ramp), on direction,
+    /// and on slot — three axes, so removing any one still leaves them
+    /// tellable apart.
+    #[test]
+    fn the_message_vocabulary_is_snapshotted_against_the_ambient_pulse() {
+        let theme = Theme::from(ThemeName::Nocturne);
+        // 180 ms in: three frames at 60 ms, two cells each, so the packet is
+        // six cells along whichever way it is going.
+        let raised = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(180))
+            .unwrap_or_else(std::time::Instant::now);
+        let cases = [
+            (
+                "stage-message-dispatch",
+                "outbound dispatch",
+                Some((
+                    crate::circuit::Direction::Outbound,
+                    crate::circuit::Outcome::Dispatched,
+                )),
+                baton::State::Idle,
+            ),
+            (
+                "stage-message-return",
+                "inbound confirmed return",
+                Some((
+                    crate::circuit::Direction::Inbound,
+                    crate::circuit::Outcome::Confirmed,
+                )),
+                baton::State::Idle,
+            ),
+            (
+                "stage-message-output",
+                "plain stdout tick",
+                None,
+                baton::State::Sweeping(2),
+            ),
+        ];
+        for (name, what, message, rail) in cases {
+            let mut stage = StageState::new(stage_panes_n(1), theme, UNICODE);
+            if let Some((direction, outcome)) = message {
+                stage.flights = vec![crate::InFlight {
+                    worker_id: "pane-1".to_owned(),
+                    direction,
+                    outcome,
+                    raised,
+                }];
+            }
+            gate(
+                name,
+                &format!("STAGE nocturne truecolor {what} {WIDTH}x{HEIGHT}"),
+                |frame| render_stage(frame, &mut stage, Some(0), &[rail]),
+            );
+        }
+    }
+
+    /// AC8: at the design sheet's minimum viewport the connectors are still
+    /// there. Below the routing width `stage_areas` stacks the panes and there
+    /// is no gutter, so this golden is the evidence for the inlaid fallback —
+    /// what replaces the wires, rather than nothing at all.
+    #[test]
+    fn the_minimum_viewport_still_shows_every_connector() {
+        let theme = Theme::from(ThemeName::Nocturne);
+        let mut stage = StageState::new(stage_panes_n(2), theme, UNICODE);
+        let traffic = vec![baton::State::Sweeping(1), baton::State::Idle];
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("80x24 terminal");
+        terminal
+            .draw(|frame| render_stage(frame, &mut stage, None, &traffic))
+            .expect("render stage");
+        let actual = serialize(
+            "STAGE nocturne truecolor 80x24 minimum",
+            terminal.backend().buffer(),
+        );
+        let path = snapshot_dir().join("stage-80x24.txt");
+        if std::env::var_os("ORC_UPDATE_SNAPSHOTS").is_some() {
+            std::fs::write(&path, &actual).expect("write snapshot");
+            return;
+        }
+        let expected = std::fs::read_to_string(&path).expect("stage-80x24 snapshot");
+        assert_eq!(expected, actual, "80x24 STAGE drifted");
+    }
+
     fn runs_shell(theme: Theme) -> ShellState {
         let mut shell = ShellState {
             view: ShellView::Runs,
@@ -320,7 +460,7 @@ mod tests {
             gate(
                 &format!("stage-{slug}"),
                 &format!("STAGE {slug} truecolor {WIDTH}x{HEIGHT}"),
-                |frame| render_stage(frame, &mut stage, None, baton::State::Sweeping(2)),
+                |frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]),
             );
 
             let mut score = score_state();
@@ -366,7 +506,7 @@ mod tests {
         gate(
             "stage-no-color",
             &format!("STAGE nocturne monochrome {WIDTH}x{HEIGHT}"),
-            |frame| render_stage(frame, &mut stage, None, baton::State::Sweeping(2)),
+            |frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]),
         );
     }
 
@@ -408,7 +548,7 @@ mod tests {
         gate(
             "stage-ascii",
             &format!("STAGE nocturne truecolor ascii-glyphs {WIDTH}x{HEIGHT}"),
-            |frame| render_stage(frame, &mut stage, None, baton::State::Sweeping(2)),
+            |frame| render_stage(frame, &mut stage, None, &[baton::State::Sweeping(2)]),
         );
     }
 }
