@@ -1940,3 +1940,91 @@ hand back to the implementer.
   `./install.sh` from the live checkout, which is Mrigesh's to run.
 - **Next: #45** — the last feature before launch — then #14 (README +
   screenshots) last.
+
+## 2026-07-30 — Claude (implementer) — #45: a seated conductor dispatches to its own panes
+
+Branch `issue-45-seated-conductor` from `main` @ `887651f`, in a worktree at
+`/Volumes/Mrigesh SSD/wt-issue-45` (the checkout is shared with concurrent
+sessions; `findings.md` records why HEAD moving under you is a real hazard).
+Pushed for review. Evidence:
+`docs/notes/2026-07-30-issue-45-seated-conductor.md`.
+
+- **The issue's diagnosis was right but incomplete.** It says both halves are
+  already built and one injected line wires them apart. Three of the four links
+  were indeed fine. The fourth was independently broken: `note_task_events`
+  skipped any task whose watermark was unset, on the reasoning that "a first
+  sighting is history, not news". True of the board that existed at attach —
+  and `attach_stage` already seeds the watermark for exactly that board, so the
+  guard ran twice. The second time was wrong: a task created *after* attach also
+  has no watermark, and `orch delegate` creates, assigns and confirms one inside
+  one synchronous call, so STAGE's first sighting is the finished article.
+  Measured before fixing: **0 flights raised, not a partial animation**. Fixing
+  only the hook would have routed the dispatch correctly and still shown
+  nothing. Split into `seed_task_events` (the only thing allowed to treat
+  history as old news) and `note_task_events`.
+- **The hook now reads the environment first.** `ORC_SESSION`/`ORC_PANE_ID`/
+  `ORC_WORKERS` have always been in every pane; nothing read them. The injected
+  context leads with the seat — session, pane, role, cwd, seated workers — and
+  says reuse, never recreate. Worker state comes from the durable record, not
+  `ORC_WORKERS`, which is frozen at launch and never learns a worker died.
+  Standalone is unchanged; both paths pinned by `--selftest` (50 checks).
+- **Two skills carried the same bug independently.** `orchestrate` exported a
+  *new* `ORC_SESSION` over the one it was handed; `pi-delegate` and the Codex
+  block taught `session create` with no environment guard. All fixed — the hook
+  alone would not have been enough for a brain that reached the skill directly.
+- **New: `pio session show [<id>] --json`**, defaulting to `$ORC_SESSION`. The
+  one read-only call that answers "who is seated with me". Chosen over filtering
+  `session list --json` in Python: that parses every session on the machine (43
+  here) and has no unknown-session semantics. `session create` was not an option
+  for a hook — it calls `load_harness_registry()`, which *writes*.
+- **`pio doctor` gained a trigger-grammar section** (hook installed / registered
+  / skills installed), pass/fail per line with the fix printed, reflected in the
+  exit code. Tells a dangling symlink apart from a missing file — the dangling
+  case is the one this repo has already hit, and `progress.md`'s own previous
+  entry records the skills links still pointing at the stale checkout.
+- **`install.sh --wire-claude-hook`** makes the `settings.json` edit opt-in
+  rather than impossible: backed up, merged not overwritten, byte-identical on a
+  second run (verified by checksum), and it preserves the user's own hooks. The
+  installer now ends with a per-harness wiring summary instead of a bare `done.`
+- **Deliberate non-delivery: Pi and OpenCode are reported, not wired.** Neither
+  `~/.agents/skills` nor `~/.config/opencode/skill` exists to probe, and writing
+  into an unverified config path is the exact claim AGENTS.md forbids. Check 10
+  permits reporting. Needs its own issue.
+- **`--json` now answers in JSON on every outcome**, with a machine-readable
+  `error.reason` drawn from the vocabulary the board already writes
+  (`isolation_unavailable`, `worker_unavailable`, `unknown_harness`). Writing
+  the test corrected my own assumption: an unknown *harness* does not error at
+  all — dispatch persists a failed record and reports it inside a normal
+  outcome, which is better than I had assumed, so the test pins what is true.
+- **The isolation refusal now names its cause.** `materialize_worktree` swallows
+  "session cwd is not a Git work tree" into a task state, so dispatch reported
+  only "worktree is unavailable". Cause and remedy are now both in the message,
+  and the precondition is stated in all five places the recipe appears.
+- **STAGE stops advertising what it cannot do** (check 11). The highlight's
+  whole input was `pane.role` + `pane.cells` — no capability field exists in
+  `PaneSnapshot` — so it lit up `delegate:` on a machine where nothing was
+  listening. The badge now reads `· ○ DELEGATE INERT` and the shimmer does not
+  run; the word stays bold and on screen, because the conductor did type it.
+- **Also fixed while proving check 1:** `record.pane_id` was populated from the
+  pane the caller *asked* for, so an auto-selected seated pane left the durable
+  receipt empty — "which pane got this brief?" was answerable only if you
+  already knew.
+- **Gates: 318 passed, 0 failed**, fmt/clippy/doc/release all clean. One flake
+  seen and attributed rather than waved away — `background_dispatch.rs`'s sub-1s
+  wall-clock assertion, which LOG.md already documents twice as pre-existing;
+  3/3 in isolation, clean on re-runs. A second early failure was mine, in the
+  new check-1 test (it read the outcome once while the detached supervisor was
+  still writing the confirmation), and is fixed by polling the durable board —
+  which is what STAGE actually does.
+- **Not demonstrated: the live TUI run.** A paned session can only be created by
+  the daemon's `launch_session`, driven by pressing `n`. Every link underneath
+  it is proven against the real `orch::delegate` in
+  `orc-app/tests/task_vocabulary.rs` — no second session, the seated worker
+  chosen without being named, the board pointing at that pane, both animation
+  events derived from real history. The watch-it-move demo is the local test
+  step.
+- **Left alone as out-of-contract, needing follow-up issues:** `uninstall.sh`
+  (should unwire what `--wire-claude-hook` can now wire), `README.md` (its
+  "never edits protected config" promise and its pane-env paragraph), Pi/OpenCode
+  wiring, and `ORC_DELEGATE_HINT` in `orc-daemon`, still pre-rename `orc`.
+- **Next: review**, then #14 (README + screenshots) last.
