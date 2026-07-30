@@ -766,6 +766,12 @@ fn deliver(
         reuse.as_ref(),
         purpose,
     );
+    // Record the pane that was *chosen*, not merely the one that was asked
+    // for. Selecting a seated worker without being told which one is the
+    // whole affordance issue #45 rests on, and until now the durable receipt
+    // stayed empty in exactly that case — so "which pane got this brief?"
+    // could only be answered when the caller already knew.
+    record.pane_id = selected_pane.clone();
 
     // Hold both the provider-facing harness cap and the session-wide
     // max_parallel_workers cap for the real worker lifetime. The detached
