@@ -37,15 +37,15 @@ record. (Issue numbers are filled in as issues are created.)
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 (✅ merged 2026-07-29, PR #41) |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
-| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (👀 pushed 2026-07-30, `issue-45-seated-conductor`) |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
-#37, #38 and #39 are merged. #45 is the last feature; #14 (README) is the last
-original V1 item and goes after it.**
+#37, #38, #39 and #45 are merged. Every V1 feature is in; #14 (README) is the
+last original V1 item and all that stands between here and launch.**
 
 #13 (PR #36) merged with its review verdict outstanding — FIX, 4 items — so
 those findings were live on `main` and were re-homed rather than dropped: #37
@@ -86,7 +86,19 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**#45 pushed (2026-07-30, `issue-45-seated-conductor`), awaiting review** — a
+**#45 merged (2026-07-31, PR #48 as `490487e`) — reviewed FIX, merged with both
+findings open.** The headline was independently verified against the real
+`orch::delegate` (no second session; the only harness-matching seated pane
+selected without `--pane`; the board and both animation events landing on it),
+and five gates were green on a reviewer's own run — 319 tests, 0 failed. What
+merged unfixed is honesty debt, not routing: `skills/orchestrate/SKILL.md` still
+shows the contracted recipe with no git-worktree precondition, and STAGE's
+`trigger_wired` is still one global `~/.claude` probe applied to every brain pane
+regardless of harness, so a Pi/OpenCode brain shows a live `DELEGATE` badge for a
+grammar `install.sh` reports as NOT wired. **Both need a follow-up issue before
+#14 closes V1.** Detail in LOG.md under the #45 entry.
+
+Originally, when pushed — a
 conductor seated in a TUI pane now reads `ORC_SESSION`/`ORC_PANE_ID` and
 dispatches into the workers already on screen instead of creating a second,
 pane-less session. Two bugs, not one: the injected `session create` guidance,
