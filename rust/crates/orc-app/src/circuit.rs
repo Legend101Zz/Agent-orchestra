@@ -151,8 +151,8 @@ impl Wire {
                 }
             }
             // A dead end: linked upward or downward and nowhere else. Drawn as
-            // a vertical stub rather than dropped, so a clipped route still
-            // shows where it went.
+            // a vertical stub rather than dropped, so a route whose neighbour
+            // was clipped away still shows which way it was heading.
             (_, _, false, false) => {
                 if ascii {
                     "|"
@@ -263,9 +263,31 @@ pub fn plan(panes: &[Rect]) -> Option<Circuit> {
     let routed = leftmost >= brain.right().saturating_add(1 + MIN_GUTTER)
         && workers.iter().all(|worker| worker.x > brain.right());
     if routed {
-        Some(elbows(*brain, workers, leftmost))
+        let mut wiring = elbows(*brain, workers, leftmost);
+        wiring.clip(panes);
+        Some(wiring)
     } else {
+        // The inlaid fallback is deliberately drawn *on* a pane's own top
+        // border, so clipping it against that pane would erase it.
         Some(inlaid(workers))
+    }
+}
+
+impl Circuit {
+    /// Drop every wire cell that would be painted inside a pane.
+    ///
+    /// In the layouts `stage_areas` computes there is nothing to clip — the
+    /// gutter is the gutter. But once a pane has been dragged it can be
+    /// anywhere, including straight over the trunk, and AC1's "no connector
+    /// overlaps a pane" has to hold then too. Painting a wire across a hosted
+    /// CLI's output would be worse than a wire with a gap in it, and the gap
+    /// is honest: it says the pane is on top.
+    fn clip(&mut self, panes: &[Rect]) {
+        let covered = |cell: &(u16, u16)| panes.iter().any(|pane| pane.contains((*cell).into()));
+        self.loom.retain(|(at, _)| !covered(at));
+        for route in &mut self.routes {
+            route.retain(|cell| !covered(cell));
+        }
     }
 }
 
@@ -458,6 +480,56 @@ impl Outcome {
             Self::Confirmed => "TASK CONFIRMED",
             Self::Failed => "TASK FAILED",
         }
+    }
+}
+
+/// Classify one task-history entry into the message vocabulary.
+///
+/// Takes the action *and* the destination status, because completion is not an
+/// action at all: `orc_core::tasks::move_task` records **every** status
+/// transition as `moved` and puts the target in `to`. The first version of this
+/// matched on the action word alone and on four words nothing in the workspace
+/// writes (`dispatched`, `delivery_started`, `done`, `failed`), so a finished
+/// task raised nothing and three arms were dead. Every test around it passed,
+/// because they all built their own history and shared the same wrong
+/// assumption — which is why the test that pins this now drives the real
+/// `orc-core` API (`tests/task_vocabulary.rs`).
+///
+/// The full vocabulary `orc-core` writes is fifteen actions. Only traffic
+/// between the conductor and a worker animates; the rest stay silent, and each
+/// silence is a decision rather than an omission:
+///
+/// - `created`, `isolated`, `report_persisted` — bookkeeping.
+/// - `delivery_queued` — the brief is waiting on a quota slot. Nothing has
+///   left the conductor yet, so nothing should appear to cross the wire.
+/// - `merged` — always follows `moved`→`done`, which has already animated.
+/// - `moved` to anything but `done` — an intermediate status change, not an
+///   arrival.
+///
+/// Takes primitives rather than a proto type so this module stays free of the
+/// protocol and the vocabulary is testable from anywhere. The whole table is
+/// pinned against the real API in `tests/task_vocabulary.rs`.
+#[must_use]
+pub fn message_for(action: &str, to: Option<&str>) -> Option<(Direction, Outcome)> {
+    match (action, to) {
+        // The brief being handed over. `reassigned` is the same event with a
+        // different previous owner.
+        ("assigned" | "reassigned", _) => Some((Direction::Outbound, Outcome::Dispatched)),
+        ("delivery_confirmed" | "review_delivery_confirmed", _) | ("moved", Some("done")) => {
+            Some((Direction::Inbound, Outcome::Confirmed))
+        }
+        // `drop_task` and the isolation/merge failures record their own action
+        // word rather than a `moved` transition — which is exactly the kind of
+        // thing guessing at this table got wrong.
+        (
+            "delivery_failed"
+            | "review_delivery_failed"
+            | "dropped"
+            | "merge_conflict"
+            | "isolation_unavailable",
+            _,
+        ) => Some((Direction::Inbound, Outcome::Failed)),
+        _ => None,
     }
 }
 
@@ -675,6 +747,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_dragged_pane_clips_the_wiring_rather_than_being_painted_over() {
+        // AC1's "no connector overlaps a pane" was only ever tested against the
+        // layouts `stage_areas` computes, where the gutter is the gutter and
+        // there is nothing to clip. A drag puts a pane anywhere — including
+        // straight over the trunk — and that case was unguarded: the wire was
+        // painted across the hosted CLI's own output.
+        let mut areas = wide(3);
+        let trunk = plan(&areas).expect("wired").routes[0]
+            .iter()
+            .map(|(x, _)| *x)
+            .max()
+            .expect("a column to aim at");
+
+        // Park a worker on top of the gutter, as a drag can.
+        areas[2] = Rect::new(trunk.saturating_sub(6), 10, 30, 8);
+        let circuit = plan(&areas).expect("wired");
+
+        for ((x, y), _) in &circuit.loom {
+            for (index, pane) in areas.iter().enumerate() {
+                assert!(
+                    !pane.contains((*x, *y).into()),
+                    "wire cell {:?} is painted inside pane {index}",
+                    (x, y)
+                );
+            }
+        }
+        for (index, route) in circuit.routes.iter().enumerate() {
+            for cell in route {
+                assert!(
+                    !areas.iter().any(|pane| pane.contains((*cell).into())),
+                    "worker {index}'s packet would travel through a pane at {cell:?}"
+                );
+            }
+        }
+        // The wiring degrades rather than vanishing: the workers that are still
+        // clear of the moved pane keep a connector.
+        assert!(
+            circuit.routes.iter().any(|route| !route.is_empty()),
+            "clipping must not erase the whole loom"
+        );
     }
 
     #[test]

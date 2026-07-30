@@ -554,25 +554,6 @@ impl InFlight {
     }
 }
 
-/// Classify a task history action into the message vocabulary.
-///
-/// Presentation only — this reads the board the daemon already keeps and
-/// changes nothing about how work is dispatched.
-fn message_for(action: &str) -> Option<(circuit::Direction, circuit::Outcome)> {
-    match action {
-        "dispatched" | "assigned" | "delivery_started" => {
-            Some((circuit::Direction::Outbound, circuit::Outcome::Dispatched))
-        }
-        "delivery_confirmed" | "done" => {
-            Some((circuit::Direction::Inbound, circuit::Outcome::Confirmed))
-        }
-        "delivery_failed" | "failed" => {
-            Some((circuit::Direction::Inbound, circuit::Outcome::Failed))
-        }
-        _ => None,
-    }
-}
-
 /// One pane's own output pulse.
 ///
 /// Keyed by pane id rather than held once for the whole stage: a connector that
@@ -814,7 +795,9 @@ impl StageState {
                 continue;
             };
             for entry in task.history.iter().skip(seen) {
-                if let Some((direction, outcome)) = message_for(&entry.action) {
+                if let Some((direction, outcome)) =
+                    circuit::message_for(&entry.action, entry.to.as_deref())
+                {
                     self.flights.push(InFlight {
                         worker_id: worker_id.clone(),
                         direction,
@@ -1940,7 +1923,7 @@ fn render_help(frame: &mut Frame<'_>, theme: Theme, leader: &str) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n\n  THEME\n  {leader} t cycles nocturne, ember, phosphor on every screen, and\n  asks the daemon to remember it: the next launch opens the same.\n  pio config set theme <name> does it from a shell; pio config get\n  theme reports what is stored. No file to edit.\n  Set the leader with app.leader_key in ~/.orchestra/harnesses.json.\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
+            "  PI ORCHESTRA / HELP\n\n  FIRST USE\n  n creates a session: choose a brain, edit worker offers, choose a cwd.\n  The brain plans; available workers receive explicit durable task briefs.\n\n  CONTROL\n  In STAGE everything you type goes to the focused pane. Commands need\n  the leader first: press {leader}, release, then one key.\n  {leader} n/p focus · {leader} z zoom · {leader} s swap · {leader} b SCORE\n  {leader} h HOME · {leader} v views · {leader} ? help · {leader} q detach\n  {leader} twice sends the literal chord to the pane.\n  Outside STAGE, bare V cycles HOME, SCORE, RUNS and ? opens help.\n  Mouse: drag a title to move a pane, an edge or corner to resize it;\n  the layout is remembered. Every other click goes to the focused pane.\n\n  THEME\n  {leader} t cycles nocturne, ember, phosphor on every screen, and\n  asks the daemon to remember it: the next launch opens the same.\n  pio config set theme <name> does it from a shell; pio config get\n  theme reports what is stored. No file to edit.\n  Set the leader with app.leader_key in ~/.orchestra/harnesses.json.\n\n  DURABILITY AND RECOVERY\n  Closing the client detaches; pi-orchestra attach replays the session.\n  SCORE is the durable task board. Delivery is shown only after confirmation.\n  Missing executables are UNAVAILABLE. R recovers a supported dead brain.\n  If recovery fails, reattach and inspect SCORE, orc task list, and orc list.\n\n  Esc or ? closes help.",
         ))
         .style(Style::default().fg(theme.fg()).bg(theme.overlay())),
         area,
@@ -3399,7 +3382,7 @@ fn render_stage(
     }
     if state.message.is_empty() {
         let legend = format!(
-            "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach",
+            "typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach — mouse: drag a title to move, an edge to resize",
             leader = state.leader_label
         );
         render_legend(frame, area, &legend, state.theme);
@@ -5919,6 +5902,12 @@ mod tests {
                     text.contains("pio config set theme"),
                     "help must name the CLI path ({width}x{height})"
                 );
+                // Edge-resize is new in #38 and has no keybinding to discover
+                // it by, so help is the only place a user could find it.
+                assert!(
+                    text.contains("an edge or corner to resize"),
+                    "help must teach mouse resize ({width}x{height})"
+                );
             }
         }
     }
@@ -5954,8 +5943,19 @@ mod tests {
         assert_eq!(translated, b"\x1b[<0;2;2M");
     }
 
-    /// A task whose history ends in `action`, assigned to `pane`.
-    fn task_with(id: &str, pane: &str, actions: &[&str]) -> TaskSummary {
+    /// A task with the given `(action, to)` history, assigned to `pane`.
+    ///
+    /// The pairs are the words `orc-core` really writes — see
+    /// `tests/task_vocabulary.rs`. Spelling them out rather than passing bare
+    /// action words is deliberate: completion is a `moved` transition whose
+    /// meaning lives entirely in `to`, and the first version of these tests
+    /// invented four action words that nothing writes.
+    const CREATED: (&str, Option<&str>) = ("created", Some("backlog"));
+    const ASSIGNED: (&str, Option<&str>) = ("assigned", None);
+    const CONFIRMED: (&str, Option<&str>) = ("delivery_confirmed", None);
+    const DONE: (&str, Option<&str>) = ("moved", Some("done"));
+
+    fn task_with(id: &str, pane: &str, actions: &[(&str, Option<&str>)]) -> TaskSummary {
         TaskSummary {
             id: id.to_owned(),
             title: "brief".to_owned(),
@@ -5969,11 +5969,11 @@ mod tests {
             diff: None,
             history: actions
                 .iter()
-                .map(|action| TaskHistorySummary {
+                .map(|(action, to)| TaskHistorySummary {
                     at: "2026-07-29T09:00:00Z".to_owned(),
                     actor: "brain".to_owned(),
                     action: (*action).to_owned(),
-                    to: None,
+                    to: to.map(str::to_owned),
                 })
                 .collect(),
         }
@@ -6010,19 +6010,15 @@ mod tests {
         assert!(!output.contains("TASK DISPATCHED"));
 
         // 2. A dispatch: outbound, one directional cell, and its own emote.
-        state.note_task_events(&[task_with("T1", "pane-1", &["created"])]);
-        state.note_task_events(&[task_with("T1", "pane-1", &["created", "dispatched"])]);
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED])]);
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED])]);
         let dispatched = stage_text(&mut state, false);
         assert!(dispatched.contains('▶'), "outbound packet: {dispatched:?}");
         assert!(!dispatched.contains('◀'), "and not the inbound one");
 
         // 3. A confirmed return: inbound, the other direction.
         state.flights.clear();
-        state.note_task_events(&[task_with(
-            "T1",
-            "pane-1",
-            &["created", "dispatched", "delivery_confirmed"],
-        )]);
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
         let returned = stage_text(&mut state, false);
         assert!(returned.contains('◀'), "inbound packet: {returned:?}");
         assert!(!returned.contains('▶'), "and not the outbound one");
@@ -6100,11 +6096,7 @@ mod tests {
         // entries that are new since the last look count — and a first sighting
         // is history, not news.
         let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
-        let finished = [task_with(
-            "T1",
-            "pane-1",
-            &["created", "dispatched", "done"],
-        )];
+        let finished = [task_with("T1", "pane-1", &[CREATED, ASSIGNED, DONE])];
 
         state.note_task_events(&finished);
         assert!(
@@ -6123,7 +6115,7 @@ mod tests {
         state.note_task_events(&[task_with(
             "T1",
             "pane-1",
-            &["created", "dispatched", "done", "delivery_confirmed"],
+            &[CREATED, ASSIGNED, DONE, CONFIRMED],
         )]);
         assert_eq!(state.flights.len(), 1);
     }
