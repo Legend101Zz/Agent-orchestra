@@ -33,7 +33,7 @@ ship-log entries are part of finishing an issue.*
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
-| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | 👀 | `issue-45-seated-conductor` *(merges #43 + #44)* |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | 🔨 | `issue-45-seated-conductor` *(merges #43 + #44)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -105,6 +105,18 @@ the real code rather than a stand-in — no second session, the right seated
 worker chosen without being told which, the board pointing at that pane, and
 both animation events derived from a real dispatch. Five gates green, 318
 tests. Evidence: `docs/notes/2026-07-30-issue-45-seated-conductor.md`.
+
+> **Reviewed 2026-07-31 — FIX (👀→🔨).** Headline verified independently through
+> the real `orch::delegate`: no second session, the only harness-matching seated
+> pane chosen without `--pane`, board and both animation events landing on it;
+> five gates green on my own run (319 tests, 0 failed), and checks 2–7 and 9 all
+> reproduced, including mutating a skill description to prove the drift gate
+> bites. Two blockers: `skills/orchestrate/SKILL.md` carries the contracted
+> `--objective/--check` recipe with **no** git-worktree precondition, so check 8's
+> "everywhere the recipe appears" is unmet; and `trigger_wired` is one global
+> `~/.claude` probe applied to every brain pane regardless of harness, so a
+> Pi/OpenCode brain shows a **live** `DELEGATE` badge for a grammar `install.sh`
+> reports as not wired three lines earlier — check 11 inverted.
 
 **#38 pushed (2026-07-30, `issue-38-stage-circuit`) — the line between the
 brain and the workers is now real wiring, and dragging a pane stopped
