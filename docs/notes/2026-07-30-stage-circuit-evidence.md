@@ -145,3 +145,79 @@ rather than trusting that they would:
   review before promotion. `docs/design/visual-identity.md` gained only the
   message-in-flight amendment that was approved, and the HTML needs no
   amendment at all because the baton's one-direction rule is untouched.
+
+## Live run (2026-07-30)
+
+Everything above is `TestBackend`. This section is the real binaries: `piod`
+hosting real PTYs, the real `pi-orchestra` client driven through a real PTY at
+150×44, with its frames read back through the project's own VT emulator
+(`orc-pty`) so what is quoted is what a terminal would show.
+
+Isolated: private `ORC_HOME`, private socket, and a harness registry pointing
+every "agent" at a shell script that prints a banner and a tick per second — no
+real agent CLI was launched and no tokens were spent. The session was created
+through the actual `n` → brain → workers → cwd flow, not by writing records.
+
+**Topology, 1 conductor + 3 workers, live:**
+
+```
+╭ ◆ CLAUDE  running ──────────────────────╮                   │[agent] tick 3   │
+│[agent] tick 1                           │▐ ╭────────────── ●│  PI-M3
+│                                         │▐ ░
+│                                         │▐ ▓
+│                                         │▐◆┼──▓▒░─────── ●│  HERMES
+│                                         │▐ │
+│                                         │▐ ╰·············· ●│  CLAUDE (worker)
+```
+
+Three independent connectors, the `◆┼` port, `╭`/`╰` trunk ends and `├` taps —
+and note the bottom rail is `··············`, a **decayed idle rail**. That is
+the #13 carry-over fix visible in the running app: before it, that rail would
+have been a packet stranded mid-sweep.
+
+**Edge-resize, live.** Pressing the conductor's right edge and dragging 25
+columns left moved the border from column 77 to column 52, and the wiring
+stretched with it — the rail grew from 12 cells to 37, sampling onto the longer
+route. The border tracked the cursor *during* the drag (local repaint) and
+stayed put after release.
+
+**Message in flight, live.** A task assigned to worker-2 through `pio task
+assign` while attached:
+
+```
+│▐◆┼──▶▒░─────── ●│                     <- outbound packet crossing
+╭ ● HERMES  running · ◑ TASK DISPATCHED ───╮   <- emote on the receiving worker
+```
+
+It landed on HERMES and on no other pane — per-worker attribution in the real
+app. The emote held for four frames (~1.6 s at the capture rate, consistent
+with the 1.2 s hold) and left.
+
+**The return, live.** Marking that task done, the packet is visible travelling
+back and rounding the corner:
+
+| frame | screen |
+|---|---|
+| 397 | `╰·········◀···· ●` — leaving worker-3 |
+| 440 | `▐ ◀` — travelling **up the vertical trunk** |
+| 473 | `◆◀············ ●` — arriving at the conductor's port |
+| 502+ | `◆ CLAUDE running · ✓ TASK CONFIRMED` — emote on the **conductor** |
+
+That is the two-vocabulary design end to end: the ambient rail keeps its
+one-direction rule, and the discrete message crosses back the other way as its
+own thing.
+
+### One limitation the live run exposed
+
+**A task event is only noticed on the next pane-output tick.** The client
+re-reads the task board inside the `UiEvent::Snapshot` arm, so if every pane is
+silent a dispatch will not animate until something prints. Observed directly: a
+session whose fake agents had stopped showed a correct board (`assigned`,
+`moved` → `done` in the history) and no animation at all, because no snapshot
+arrived to trigger the re-read.
+
+This is pre-existing — the board refresh has always lived in that arm — and it
+is invisible in practice, because a worker that has just been dispatched to is
+about to produce output. It is recorded here rather than fixed because moving
+the board refresh onto its own signal is a change to how the client watches the
+daemon, which is outside this issue.
