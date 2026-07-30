@@ -1892,3 +1892,51 @@ hand back to the implementer.
   moved; the only non-doc, non-test change this round is the exemption predicate.
 - **Next: re-review of #39**, then #45, with #14 last.
 
+
+## Session — 2026-07-30 (reviewer, #39 merged: post-merge verification + doc sync)
+
+- Mrigesh merged PR #47 (`1be106e`) without waiting on the re-review of the fix
+  round, so the re-review was run against `main` after the fact instead of the
+  branch before it. **Verdict it would have been: ACCEPT.** Recorded that way in
+  `LOG.md` rather than as a clean 🧪→✅, because the order matters to anyone
+  reading the log later.
+- Gates re-run on the merged tree, all five green: fmt 0, clippy 0,
+  `cargo test --workspace` 0 failures (`orc-app` lib **101 passed**, matching the
+  fix round's claimed 99 → 101), `RUSTDOCFLAGS="-D warnings" cargo doc` 0,
+  `cargo build --release --locked` 0. No flake on this run.
+- Both blocking findings confirmed closed in `768fadc`, by reading the code not
+  the claim: the module doc and `Theme::resolve` now scope their claims to what
+  the theme map emits and name `pane_color` as the one colour outside it, and
+  the gate compares `relative == Path::new(THEME_MAP)`.
+- Mutation-checked finding 2 rather than trusting it: restoring
+  `file_name() == "theme.rs"` leaves `widgets/theme.rs`'s `Color::Indexed(199)`
+  unreported and fails **exactly one** test — the new synthetic-tree gate,
+  `the_exemption_is_the_theme_map_itself_and_nothing_else_named_like_it`. So the
+  fix is real and its test is not vacuous. Reverted; tree clean.
+- Docs synced on `main` (pushed directly, no branch — merge bookkeeping):
+  - `LOG.md` — #39 row 👀 → ✅, merge verdict appended under the ship-log entry.
+  - `task_plan.md` — #38 and #39 marked merged, #45 added to the issue map (it
+    was on the LOG status board but never in the plan of record), the order line
+    and the #13-findings paragraph brought up to date. All four of #13's review
+    findings are now discharged across #37/#38/#39.
+  - `findings.md` — new 2026-07-30 entry recording the durable #39 decision:
+    the tier resolves everything the theme map answers with, and `pane_color` is
+    deliberately outside it, so "monochrome emits no colour" is a claim about
+    what pi-orchestra paints. Whether `pane_color` should strip colour under
+    `NO_COLOR` stays an open decision.
+- **Fixed the stale checkout note** the #39 implementer flagged and correctly
+  left alone as out-of-path. `docs/WORKFLOW.md` and `findings.md` both said
+  `/Volumes/Mrigesh SSD/pi-orchestra` "is NOT this repo"; it is, and it is the
+  one tracking `origin/main`. `Agent-orchestra` beside it is parked on the
+  unmerged `issue-12-single-harness-mode` branch. Both corrected, with the old
+  claim named so the correction is legible.
+- Measured while checking that: **the installed links are split across the two
+  checkouts.** `~/.claude/skills/{pi-delegate,orchestrate,deliberate}` point into
+  the *stale* `Agent-orchestra`, while the `UserPromptSubmit` hook and the
+  `~/.zshrc` block point into the live `pi-orchestra`. Harmless today only
+  because `diff -rq` says the two `skills/` trees are byte-identical — not once
+  a skill changes on `main`, or once `Agent-orchestra` is deleted to reclaim the
+  disk the move was for. Recorded in `findings.md`; the fix is one
+  `./install.sh` from the live checkout, which is Mrigesh's to run.
+- **Next: #45** — the last feature before launch — then #14 (README +
+  screenshots) last.

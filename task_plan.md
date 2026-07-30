@@ -35,15 +35,17 @@ record. (Issue numbers are filled in as issues are created.)
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | V1-10 Single-harness mode (honest degradation + self-review) | #4, #6 (✅ merged 2026-07-28, PR #35) |
 | [#13](https://github.com/Legend101Zz/Agent-orchestra/issues/13) | V1-11 Visual identity v1: three themes + glyphs + baton | — (✅ merged 2026-07-29, PR #36) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 (✅ merged 2026-07-29, PR #41) |
-| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (👀 pushed 2026-07-30, `issue-38-stage-circuit`) |
-| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
+| [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
-**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13 and
-#37 are merged. #14 (README) is the last original V1 item.**
+**Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
+#37, #38 and #39 are merged. #45 is the last feature; #14 (README) is the last
+original V1 item and goes after it.**
 
 #13 (PR #36) merged with its review verdict outstanding — FIX, 4 items — so
 those findings were live on `main` and were re-homed rather than dropped: #37
@@ -51,13 +53,19 @@ those findings were live on `main` and were re-homed rather than dropped: #37
 instead of decaying), #39 (the trigger rainbow ignores `NO_COLOR`; the no-hex
 gate doesn't recurse). #37 and #38 also carry the UX work Mrigesh asked for
 after testing: a real theme switcher, per-worker connectors, and drag-resize
-that doesn't round-trip the daemon every frame. **#37 (PR #41) is now merged**,
-so finding 1 is discharged: `t` no longer escapes the theme map, the chord
-reaches all four screens, and the choice survives a relaunch through a daemon
-round trip (`ClientRequest::SetTheme`) rather than a client-side file write.
-`harnesses.json`'s `app.theme` is the authoritative record and `config.json`'s
-copy is derived from it — see the 2026-07-29 entry in `findings.md`. Two of
-#13's four findings remain, in #38 and #39.
+that doesn't round-trip the daemon every frame. **All four findings are now
+discharged (2026-07-30).** #37 (PR #41): `t` no longer escapes the theme map,
+the chord reaches all four screens, and the choice survives a relaunch through a
+daemon round trip (`ClientRequest::SetTheme`) rather than a client-side file
+write — `harnesses.json`'s `app.theme` is the authoritative record and
+`config.json`'s copy is derived from it, see the 2026-07-29 entry in
+`findings.md`. #38 (PR #42): the baton paints the frame it computed instead of
+freezing mid-sweep, and the single floating dash became one routed connector per
+worker. #39 (PR #47): the trigger gradient resolves through the colour tier, so
+`NO_COLOR` really does drop it to bold, and the no-hex gate walks the whole
+`src/` tree instead of only its top folder. One colour is deliberately left
+outside that rule — a hosted pane's own SGR, replayed by `Theme::pane_color` at
+every tier; see the 2026-07-30 entry in `findings.md`.
 The delegation core is now sound. #28 (PR #29) fixed the pipe-buffer deadlock
 that had made every non-trivial delegation fail since #8; #30 (PR #31) then
 separated *delivery* from *execution* — `orch delegate` returns once the brief is
@@ -78,9 +86,11 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**Next: #38** — TUI work on top of #13, so land it before #14's screenshots.
-#39 is small and independent; it can slot in anywhere. **#14 goes last**, once
-the screens are what the launch photos should show.
+**Next: #45** — the last feature before launch: a conductor seated in a TUI pane
+must dispatch to the workers already on screen rather than spawning its own, and
+the dispatch must be visible on STAGE. It supersedes #43 and #44, and it builds
+on #38's wiring, which is why it waited. **#14 goes last**, once the screens are
+what the launch photos should show.
 
 Open and unfiled: the shipped screen *layouts* are thinner than the mockups
 in `docs/design/visual-identity/`. The palette, glyph register and baton match
