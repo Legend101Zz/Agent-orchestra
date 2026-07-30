@@ -31,7 +31,7 @@ ship-log entries are part of finishing an issue.*
 | [#10](https://github.com/Legend101Zz/Agent-orchestra/issues/10) | Claude Code & Codex react to trigger words even outside pi-orchestra | ✅ | merged (PR #27) |
 | [#12](https://github.com/Legend101Zz/Agent-orchestra/issues/12) | With only one CLI installed: still useful, honestly says so | ✅ | merged (PR #35) |
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
-| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | 🔨 | `issue-38-stage-circuit` ([PR #42](https://github.com/Legend101Zz/Agent-orchestra/pull/42)) |
+| [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ⬜ | — |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -109,6 +109,21 @@ Six workers all producing at once repaints in **0.157 ms** — the budget is 16.
 > leaves all 97 tests green. The clipping code is correct; I proved it with a
 > fixture that really overlaps (30 wire cells painted through a pane once the clip
 > is off). Swap the fixture, mutation-check it, and this is an ACCEPT.
+>
+> **Fix + merge (2026-07-30, `d755714`, then PR #42 merged as `1406840`) — 🧪→✅.**
+> All three items closed, and closed better than asked. The clipping test is
+> rebuilt on the case that actually happens — one worker dragged across another
+> worker's spur row — and now carries a *positive* assertion that the fixture
+> really covers a wire, so it can't quietly go vacuous again; deleting the clip
+> now fails with `wire cell (70, 18) is painted inside pane 3`. `Routing` is read
+> at last: at widths where the router gives up, STAGE's legend leads with
+> `connectors inlaid — too narrow to route`, which is what AC8's "stated fallback"
+> was actually asking for. And the router now runs once per frame instead of four
+> times — with the honest footnote that it produced **no measurable win**, plus a
+> correction I'd have missed: my run and theirs disagreed on the repaint cost by
+> 1.8×, so the committed decimal was replaced with the claim that survives
+> re-measurement — two orders of magnitude of headroom under the 16 ms budget, in
+> the profile users actually run.
 
 **#37 pushed (2026-07-29, `issue-37-theme-persistence`) — you can change the
 theme from inside the app, and it stays changed.** Press your leader chord then
