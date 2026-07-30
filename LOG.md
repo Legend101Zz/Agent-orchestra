@@ -33,9 +33,78 @@ ship-log entries are part of finishing an issue.*
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
-| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ⬜ | — *(merges #43 + #44)* |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | 👀 | `issue-45-seated-conductor` *(merges #43 + #44)* |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
+
+**#45 pushed (2026-07-30, `issue-45-seated-conductor`) — the `delegate:` you
+type in the TUI now goes to the workers you can see.**
+
+Here is what was happening. You pressed `n`, got a brain and two workers in
+three panes, told the brain `delegate:` — and it quietly built a *second*,
+invisible set of workers somewhere off-screen and gave the job to those. The
+job got done, correctly, in about six seconds. You just never saw any of it.
+The three panes you were looking at sat there doing nothing the whole time,
+and the brain, which had no way to collect the answer either, reported back
+that nothing had happened.
+
+The cause was one instruction. Everything a brain knows about how to delegate
+comes from a block of text pi-orchestra injects the moment you type the word,
+and that text opened with "create a session first". Correct advice when you
+are using Claude Code on its own. Inside the TUI it is the bug — you are
+*already* in a session, and making a new one is precisely what sends the work
+somewhere you cannot watch. The brain had no way to know better: the pane it
+lives in has always carried its session and its neighbours in its environment,
+and nothing had ever read them.
+
+So now it reads them, and leads with where it is: this is your session, this
+is your pane, these are the workers sitting with you, reuse them, and do not
+create anything. Two of the skill files were making the same mistake on their
+own — one of them actively threw away the session id it had been handed — so
+those are fixed too.
+
+**A second bug was hiding behind the first, and would have survived fixing
+it.** STAGE deliberately ignores a task the first time it sees it, so that
+attaching to an old session does not replay every dispatch it ever made. But a
+delegation is created, sent and confirmed in one go — faster than the screen
+refreshes — so STAGE's *first* look at a brand-new task was already the
+finished article, and it ignored the whole thing. Zero animation, not a
+partial one. Every test passed because every test hand-built its board one
+step at a time. Fixing only the instruction would have got the work to the
+right pane and still shown you nothing.
+
+**Three things you can now check yourself.** `pio doctor` has a new section
+that says whether `delegate:` actually works on this machine — the honest
+answer on the machine that reported this was "it never has", because the hook
+was never registered, and nothing anywhere said so. It exits non-zero while
+the grammar is inert, and it can tell "the file is missing" from "the link
+points at a checkout you moved", which is a real thing that has already
+happened here. `./install.sh --wire-claude-hook` will now do the registering
+for you if you want it — backed up first, and running it twice leaves the file
+byte-for-byte identical. And the installer no longer ends on "done." while
+the headline gesture is dead: it finishes with a line per harness saying which
+are wired and which are not.
+
+On that last point, one deliberate non-delivery: **Pi and OpenCode are
+reported as not wired rather than wired.** Neither has a skills directory on
+this machine to look at, and guessing where to write a file would be claiming
+something I had not checked — which is the one thing AGENTS.md tells me not to
+do. The issue explicitly allows saying so instead. It wants its own issue.
+
+Also fixed: `--json` now always answers in JSON, including when it fails (it
+used to print the error on the side channel and leave stdout empty, so a
+failure and a silence looked identical); errors now name the command that
+lists valid task ids, instead of leaving the brain to guess `T-hello` then
+`T0002` as it did; and every instruction that starts a worker now says in the
+same breath how to collect the answer.
+
+**What I could not run: the live TUI recording.** A session with real panes
+can only be made by pressing `n` in the TUI, so the "watch the packet cross"
+demo is yours to do at test time. Everything underneath it is proven against
+the real code rather than a stand-in — no second session, the right seated
+worker chosen without being told which, the board pointing at that pane, and
+both animation events derived from a real dispatch. Five gates green, 318
+tests. Evidence: `docs/notes/2026-07-30-issue-45-seated-conductor.md`.
 
 **#38 pushed (2026-07-30, `issue-38-stage-circuit`) — the line between the
 brain and the workers is now real wiring, and dragging a pane stopped

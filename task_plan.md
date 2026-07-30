@@ -37,7 +37,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | V1-15 Persist the chosen theme + `<leader> t` switcher; unify the two config files | #13 (✅ merged 2026-07-29, PR #41) |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
-| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (👀 pushed 2026-07-30, `issue-45-seated-conductor`) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
@@ -86,11 +86,25 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**Next: #45** — the last feature before launch: a conductor seated in a TUI pane
-must dispatch to the workers already on screen rather than spawning its own, and
-the dispatch must be visible on STAGE. It supersedes #43 and #44, and it builds
-on #38's wiring, which is why it waited. **#14 goes last**, once the screens are
-what the launch photos should show.
+**#45 pushed (2026-07-30, `issue-45-seated-conductor`), awaiting review** — a
+conductor seated in a TUI pane now reads `ORC_SESSION`/`ORC_PANE_ID` and
+dispatches into the workers already on screen instead of creating a second,
+pane-less session. Two bugs, not one: the injected `session create` guidance,
+*and* an independent defect in `note_task_events` that made STAGE ignore any
+task it first saw already finished — which a delegation always is, since it is
+created, sent and confirmed inside one synchronous call. Fixing the guidance
+alone would have routed the work correctly and still animated nothing.
+
+Carried out of scope, needing their own issues: **Pi and OpenCode trigger-grammar
+wiring** (reported honestly by `install.sh` rather than guessed at — neither has
+a skills directory on this machine to probe); **`uninstall.sh` unwiring** the
+`settings.json` entry `install.sh --wire-claude-hook` can now add; **`README.md`**
+lines 98-100 and 150, which now overstate "never edits protected config" and
+understate what the pane environment is for; and **`ORC_DELEGATE_HINT`** in
+`orc-daemon`, still handing every pane pre-rename `orc` vocabulary. All four sat
+outside #45's allowed paths.
+
+**#14 goes last**, once the screens are what the launch photos should show.
 
 Open and unfiled: the shipped screen *layouts* are thinner than the mockups
 in `docs/design/visual-identity/`. The palette, glyph register and baton match
