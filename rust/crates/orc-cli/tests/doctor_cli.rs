@@ -45,10 +45,44 @@ fn counting_harness(bin: &Path, name: &str, tokens: &str, log: &Path) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// A `$HOME` whose `.claude` has the trigger grammar fully wired.
+///
+/// `pio doctor` now also reports whether `delegate:` can fire (issue #45), and
+/// that answer comes from `~/.claude`. Without a faked HOME these capability
+/// tests would read the developer's own machine and their exit code would
+/// depend on whether *they* had registered the hook — so the fake is wired,
+/// keeping every pre-existing assertion about probing exactly as it was.
+fn wired_home(root: &Path) -> PathBuf {
+    let home = root.join("fake-home");
+    let claude = home.join(".claude");
+    let hook = claude.join("pi-orchestra/claude-userpromptsubmit-hook.py");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    fs::write(&hook, "#!/bin/sh\n").unwrap();
+    for skill in ["pi-delegate", "orchestrate", "deliberate"] {
+        fs::create_dir_all(claude.join("skills").join(skill)).unwrap();
+    }
+    fs::write(
+        claude.join("settings.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "hooks": { "UserPromptSubmit": [
+                { "hooks": [ { "type": "command", "command": hook.to_string_lossy() } ] }
+            ] }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    home
+}
+
 fn run(home: &Path, bin: &Path, args: &[&str]) -> Output {
+    run_with_home(home, bin, &wired_home(home), args)
+}
+
+fn run_with_home(orc_home: &Path, bin: &Path, home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pio"))
         .args(args)
-        .env("ORC_HOME", home)
+        .env("ORC_HOME", orc_home)
+        .env("HOME", home)
         .env("PATH", bin)
         .output()
         .unwrap()
@@ -63,7 +97,11 @@ fn reports(home: &Path, bin: &Path, args: &[&str]) -> Vec<Value> {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    serde_json::from_slice(&out.stdout).unwrap()
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    payload["harnesses"]
+        .as_array()
+        .expect("doctor --json carries a harnesses array")
+        .clone()
 }
 
 fn row<'a>(reports: &'a [Value], name: &str) -> &'a Value {
@@ -311,6 +349,143 @@ fn doctor_write_preserves_unknown_fields_at_every_layer() {
             .unwrap()
             .contains(&Value::from("telepathy"))
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Trigger-grammar checks (issue #45, check 5) -----------------------------
+
+/// A `$HOME` with nothing pi-orchestra wired into it.
+fn bare_home(root: &Path) -> PathBuf {
+    let home = root.join("bare-home");
+    fs::create_dir_all(home.join(".claude")).unwrap();
+    home
+}
+
+fn grammar_section(stdout: &str) -> &str {
+    stdout
+        .split_once("TRIGGER GRAMMAR")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| panic!("doctor printed no TRIGGER GRAMMAR section:\n{stdout}"))
+}
+
+#[test]
+fn doctor_reports_the_trigger_grammar_as_wired_and_exits_zero() {
+    let root = root("grammar-wired");
+    let home = root.join("orchestra");
+    let bin = root.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fake_harness(&bin, "claude", "-p --resume --output-format");
+
+    let out = run_with_home(&home, &bin, &wired_home(&root), &["doctor"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let section = grammar_section(&stdout);
+    for check in ["hook installed", "hook registered", "skills installed"] {
+        assert!(section.contains(check), "missing `{check}`:\n{section}");
+    }
+    assert!(
+        !section.contains("FAIL"),
+        "a fully wired home reports no failure:\n{section}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a wired grammar exits 0:\n{section}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn doctor_fails_and_prints_the_fix_when_the_grammar_is_inert() {
+    // Issue #45 defect 2: on the reporting machine `~/.claude/settings.json`
+    // had no `hooks` key at all, so `delegate:` had never once fired — and
+    // nothing anywhere said so. Each line must name its own fix, and the
+    // exit code must carry the verdict so a script can act on it.
+    let root = root("grammar-inert");
+    let home = root.join("orchestra");
+    let bin = root.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fake_harness(&bin, "claude", "-p --resume --output-format");
+
+    let out = run_with_home(&home, &bin, &bare_home(&root), &["doctor"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let section = grammar_section(&stdout);
+    assert_eq!(
+        section.matches("FAIL").count(),
+        3,
+        "all three checks fail on a bare home:\n{section}"
+    );
+    assert!(
+        section.contains("install.sh"),
+        "every failure names what to run:\n{section}"
+    );
+    assert!(
+        section.contains("--wire-claude-hook"),
+        "registration names the opt-in flag:\n{section}"
+    );
+    assert!(
+        section.contains("UserPromptSubmit"),
+        "and prints the settings.json snippet:\n{section}"
+    );
+    assert!(
+        section.contains("will NOT fire"),
+        "and says plainly that the spells are inert:\n{section}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an inert grammar is reflected in the exit code:\n{section}"
+    );
+
+    // --json agrees with the human rendering, in both content and exit code.
+    let out = run_with_home(&home, &bin, &bare_home(&root), &["doctor", "--json"]);
+    let payload: Value = serde_json::from_slice(&out.stdout).expect("doctor --json is JSON");
+    let checks = payload["trigger_grammar"].as_array().unwrap();
+    assert_eq!(checks.len(), 3);
+    assert!(checks.iter().all(|check| check["ok"] == Value::Bool(false)));
+    assert!(
+        checks
+            .iter()
+            .all(|check| check["fix"].as_str().is_some_and(|fix| !fix.is_empty())),
+        "a failing check always carries its fix: {checks:?}"
+    );
+    assert_eq!(out.status.code(), Some(1), "--json exits the same way");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn doctor_tells_a_dangling_hook_link_apart_from_a_missing_one() {
+    // The failure that actually bit: everything install.sh links is an
+    // absolute symlink into the checkout, so moving the checkout leaves the
+    // link dangling and `delegate:` stops firing with no error at all. "Run
+    // install.sh to link it" is the wrong advice there — the link exists.
+    let root = root("grammar-dangling");
+    let home = root.join("orchestra");
+    let bin = root.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+
+    let fake = root.join("moved-home");
+    let hook = fake.join(".claude/pi-orchestra/claude-userpromptsubmit-hook.py");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(root.join("gone/checkout/hook.py"), &hook).unwrap();
+
+    let out = run_with_home(&home, &bin, &fake, &["doctor"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let section = grammar_section(&stdout);
+    assert!(
+        section.contains("dangling symlink"),
+        "a dangling link is named as such:\n{section}"
+    );
+    assert!(
+        section.contains("has moved"),
+        "and its fix is to relink, not to install:\n{section}"
+    );
+    assert_eq!(out.status.code(), Some(1));
 
     let _ = fs::remove_dir_all(&root);
 }

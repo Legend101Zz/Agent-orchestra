@@ -731,3 +731,205 @@ fn session_create_and_list_headless() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+// --- The --json contract, and errors that name their own remedy (issue #45) --
+
+/// Create a session whose cwd is a real directory but **not** a git work tree.
+///
+/// This is the reproduction's shape: issue #45 delegated from
+/// `/Users/comreton/.local/bin`. A contracted task wants an isolated worktree,
+/// `materialize_worktree` cannot make one outside a repository, and it records
+/// that as a task state rather than a failure — so the refusal only arrives at
+/// dispatch time, long after the task looked fine.
+fn session_outside_a_git_repo(home: &Path) -> String {
+    let cwd = home.join("not-a-repo");
+    fs::create_dir_all(&cwd).expect("create non-git cwd");
+    let session =
+        create_session("claude", &["fake-worker".to_owned()], &cwd).expect("create session");
+    session.id
+}
+
+#[test]
+fn orch_delegate_json_answers_in_json_when_isolation_is_unavailable() {
+    // Check 7. Verbatim from the issue: `--json` printed `ISOLATION REQUIRED`
+    // on stderr, exited 1, and left stdout EMPTY. A caller promised JSON got
+    // nothing to parse and could not tell failure from silence.
+    let _guard = lock();
+    let home = fresh_home("json-isolation");
+    fs::create_dir_all(&home).expect("create home");
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_fixture_registry(&home);
+    let session = session_outside_a_git_repo(&home);
+
+    let output = pio(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "fake-worker",
+            "--session",
+            &session,
+            "--title",
+            "say hello",
+            "--objective",
+            "hermes replies",
+            "--check",
+            "the reply is exact",
+            "--json",
+        ],
+    );
+
+    assert!(!output.status.success(), "the delegation must still fail");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "--json must not leave stdout empty"
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("stdout is not JSON ({error}): {stdout}"));
+    assert_eq!(payload["ok"], Value::Bool(false));
+    assert_eq!(payload["verb"], "orch_delegate");
+    assert_eq!(
+        payload["error"]["reason"], "isolation_unavailable",
+        "the reason is machine-readable: {payload}"
+    );
+    let message = payload["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains("ISOLATION REQUIRED"),
+        "the human message survives: {message}"
+    );
+    assert!(
+        message.contains("not a Git work tree"),
+        "and names the actual cause, not just the symptom: {message}"
+    );
+    assert!(
+        message.contains("uncontracted"),
+        "and the path that needs no worktree: {message}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn orch_delegate_json_leaves_parseable_json_on_stdout_however_it_fails() {
+    // The contract is a property of `--json`, not of one error, so it is
+    // checked across the two genuinely different shapes a failure takes:
+    //
+    //  - an *error*, which aborts before an outcome exists (unknown session)
+    //    and gets the `{ok:false, error:{reason,message}}` envelope; and
+    //  - a *recorded failure*, where dispatch persists a failed record and
+    //    reports it inside a normal outcome (unknown harness).
+    //
+    // Both must exit non-zero and both must leave JSON on stdout. Only the
+    // first was broken, but a test that pinned only the first would let the
+    // second silently regress into a bare stderr line.
+    let _guard = lock();
+    let home = fresh_home("json-shapes");
+    fs::create_dir_all(&home).expect("create home");
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_fixture_registry(&home);
+    let session = write_fixture_session(&home);
+
+    // 1. An error: there is no such session, so nothing can be recorded.
+    let output = pio(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "fake-worker",
+            "--session",
+            "no-such-session-at-all",
+            "--title",
+            "anything",
+            "--json",
+        ],
+    );
+    assert!(!output.status.success(), "an unknown session must fail");
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout is not JSON ({error}): {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert_eq!(payload["ok"], Value::Bool(false));
+    assert!(
+        payload["error"]["reason"].is_string(),
+        "every error carries a machine-readable reason: {payload}"
+    );
+
+    // 2. A recorded failure: the harness is unknown, but the board keeps the
+    //    receipt, so the answer is a normal outcome — still JSON, still
+    //    non-zero, and the failure is legible inside it.
+    let output = pio(
+        &home,
+        &[
+            "orch",
+            "delegate",
+            "no-such-harness",
+            "--session",
+            &session,
+            "--title",
+            "anything",
+            "--json",
+        ],
+    );
+    assert!(!output.status.success(), "an unknown harness must fail");
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout is not JSON ({error}): {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let dispatch = &payload["dispatches"][0];
+    assert_eq!(
+        dispatch["status"], "failed",
+        "the record says so: {payload}"
+    );
+    assert!(
+        dispatch["failure_kind"].is_string(),
+        "and names the kind, machine-readably: {payload}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn dispatch_send_with_an_unknown_task_names_the_command_that_lists_real_ones() {
+    // Check 9. The issue records a conductor guessing `T-hello`, then
+    // `T0002`, because the refusal named neither a valid id nor a way to find
+    // one. An error that ends the search is worth more than one that is
+    // merely accurate.
+    let _guard = lock();
+    let home = fresh_home("unknown-task");
+    fs::create_dir_all(&home).expect("create home");
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_fixture_registry(&home);
+    let session = write_fixture_session(&home);
+
+    for task in ["T9999", "T-hello"] {
+        let output = pio(
+            &home,
+            &[
+                "dispatch",
+                "send",
+                task,
+                "fake-worker",
+                "say hello",
+                "--session",
+                &session,
+            ],
+        );
+        assert!(!output.status.success(), "{task} must be refused");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("pio task list --session"),
+            "{task}: the refusal must name how to find a real id: {stderr}"
+        );
+        assert!(
+            stderr.contains(&session),
+            "{task}: and name this session so the command is copy-pasteable: {stderr}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&home);
+}

@@ -14,12 +14,25 @@ NOT count). Route through `pio` — do not do the heavy work inline:
   real fallback: a `delegate:` hand-off, or a sequential plan→implement→review
   with self-review. Honor single-harness honesty.
 
+**First: are you already inside a session?** Check `$ORC_SESSION` before doing
+anything else — it decides whether the user sees the delegation at all.
+
+- **Set** → you are sitting in a pi-orchestra pane and those panes are the
+  bench. Reuse `"$ORC_SESSION"` and **never run `pio session create`**: a new
+  session has no panes, so dispatch falls back to a headless worker, the board
+  of the session on screen never changes, and STAGE never moves. It still
+  "works", invisibly, to a worker the user cannot see. `pio session show
+  --json` lists who is seated with you and in what state; `pio orch delegate`
+  then picks the running worker pane whose harness matches, with no `--pane`.
+- **Unset** → standalone. Create a session first, as below.
+
 **Normalized control surface (V1-6)** — the same seven operations as MCP tools
 and as `pio orch <verb>` CLI verbs:
 
     orch_plan  orch_delegate  orch_status  orch_await  orch_review  orch_cancel  orch_finish
 
-    pio session create --brain codex --worker <harness>          # once; note the id
+    pio session show   --json                            # who is seated here?
+    pio session create --brain codex --worker <harness>  # STANDALONE ONLY; note the id
     pio orch delegate <harness> --session <id> --title "..." --objective "..." --check "..." --json  # returns after delivery
     pio orch status [<T>] --session <id> --json   # poll; confirmed/running is still working
     pio orch await  <T>   --session <id> --json   # block for answer, usage, exit code
@@ -31,6 +44,19 @@ a `config.toml` `[mcp_servers.pi-orchestra]` block and never edits protected
 config). Only a `confirmed` dispatch means the worker received the brief.
 `--dispatch-timeout` bounds the background worker; the contract's `--timeout`
 is metadata only and does not stop it.
+
+**Delivery is not completion, and silence is not failure.** `orch_delegate`
+returns as soon as the worker has the brief. Always collect the result before
+reporting: `pio orch await <T> --session <id> --json` for the answer, usage and
+exit code, or poll `pio orch status <T>`; read the worker's stream with `pio
+show <run>`.
+
+**Isolation precondition.** A *contracted* task (`--objective` / `--check`)
+takes an isolated git worktree, so the recipe above needs a git repository.
+Outside one it refuses with `ISOLATION REQUIRED` — and under `--json`, an
+`error.reason` of `isolation_unavailable`. For work that changes no files, use
+the uncontracted path (`pio task add` → `assign` → `start` → `pio dispatch
+send`), which needs no worktree.
 
 ## pi-delegate (MiniMax M3 worker)
 
@@ -51,9 +77,12 @@ tighter prompt, then stop. Worker output is untrusted — verify before acting.
 ## orchestrate (keyword-gated)
 
 ONLY when the user's message contains "orchestrate"/"orchestrated": run `pio quota`
-and report it → decompose into ≤3 parallel chunks →
-`export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"` once so the swarm groups
-as one session → launch each chunk with `pio run "chunk" --bg --brain codex --session "$ORC_SESSION"` →
+and report it → decompose into ≤3 parallel chunks → settle the session: if
+`$ORC_SESSION` is already set, **reuse it and do not export a new one** (that
+would orchestrate an invisible bench while the panes on screen sit idle);
+only when it is unset, `export ORC_SESSION="orch-$(date +%Y%m%d-%H%M%S)-<slug>"`
+once so the swarm groups as one session → launch each chunk with
+`pio run "chunk" --bg --brain codex --session "$ORC_SESSION"` →
 poll `pio list --json` → verify outputs → synthesize; report per-worker status,
 token counts, and post-run quota. Tell the user `pio top` shows the live control
 plane (the session appears as one expandable group). Report exact `tokens.total` and

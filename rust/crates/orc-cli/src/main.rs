@@ -24,6 +24,7 @@ use orc_core::registry::list_runs;
 use orc_core::runner::Mode;
 use orc_core::single_harness::{self, SINGLE_HARNESS_MESSAGE, provider_model_args};
 use orc_core::tasks::{self, NewTask, TaskActor, TaskStatus};
+use orc_core::trigger_grammar;
 
 #[derive(Clone, Debug, ValueEnum)]
 enum Brain {
@@ -1335,9 +1336,22 @@ fn print_model_probe(key: &str, probe: &ModelProbe, json: bool) -> Result<i32> {
 
 fn dispatch_doctor(json: bool, refresh: bool) -> Result<i32> {
     let reports = probe::doctor(&DoctorOptions { refresh })?;
+    // Whether the trigger grammar is *wired* is not a property of any harness
+    // binary, so it cannot be a probe row — but it is exactly the kind of
+    // thing doctor exists to answer, and issue #45 records a machine where
+    // `delegate:` had never once fired because nothing said it was inert.
+    let grammar = trigger_grammar::trigger_grammar();
+    let failed = grammar.iter().any(|check| !check.ok);
+    let exit = i32::from(failed);
     if json {
-        println!("{}", serde_json::to_string_pretty(&reports)?);
-        return Ok(0);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "harnesses": reports,
+                "trigger_grammar": grammar,
+            }))?
+        );
+        return Ok(exit);
     }
     let width = reports
         .iter()
@@ -1377,7 +1391,29 @@ fn dispatch_doctor(json: bool, refresh: bool) -> Result<i32> {
         }
         println!();
     }
-    Ok(0)
+    // The trigger grammar, pass/fail per line, with the fix printed on any
+    // failure. Colour is never load-bearing here: each state pairs a glyph
+    // with a word.
+    println!(
+        "\nTRIGGER GRAMMAR (\u{2713} wired \u{b7} \u{2717} inert — `delegate:` needs all three)"
+    );
+    for check in &grammar {
+        let mark = if check.ok { "\u{2713}" } else { "\u{2717}" };
+        let state = if check.ok { "ok  " } else { "FAIL" };
+        println!("{mark} {state}  {:<16}  {}", check.name, check.detail);
+        if let Some(fix) = &check.fix {
+            for line in fix.lines() {
+                println!("           fix: {line}");
+            }
+        }
+    }
+    if failed {
+        println!(
+            "\n`delegate:` / `orchestrate:` / `deliberate:` will NOT fire until the \
+             failures above are fixed."
+        );
+    }
+    Ok(exit)
 }
 
 fn orch_actor(actor: TaskActorArg) -> OrchActor {
@@ -1454,7 +1490,8 @@ fn orch_failure_reason(message: &str) -> &'static str {
         "unknown_harness"
     } else if message.contains("quota-blocked") {
         "quota_blocked"
-    } else if message.contains("session is required") || message.contains("missing dispatch session")
+    } else if message.contains("session is required")
+        || message.contains("missing dispatch session")
     {
         "session_missing"
     } else if message.contains("missing dispatch task") || message.contains("no such task") {
@@ -1740,9 +1777,7 @@ fn dispatch_session_command(command: SessionCommand) -> Result<i32> {
             let id = session
                 .or_else(|| std::env::var("ORC_SESSION").ok())
                 .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow!("session id is required; pass one or set ORC_SESSION")
-                })?;
+                .ok_or_else(|| anyhow!("session id is required; pass one or set ORC_SESSION"))?;
             // `read_session` surfaces a bare io::Error for a missing file,
             // which reads as a broken install rather than a typo.
             let session = read_session(&id).map_err(|error| {
