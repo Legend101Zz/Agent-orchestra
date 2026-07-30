@@ -979,6 +979,80 @@ pub fn record_queued(session: &str, id: &str, actor: TaskActor, detail: String) 
     Ok(task)
 }
 
+/// Record that a dispatched worker finished executing, and how it ended.
+///
+/// The event the board never had. [`record_delivery`] is written the instant
+/// the worker *process starts* — its own detail says "worker running" — so
+/// until now a dispatch's last durable word was that it had begun, and nothing
+/// on the board ever said the answer had arrived (issue #49). This is written
+/// by the detached supervisor once the child has actually exited and both of
+/// its output streams have been drained to EOF, so for a worker that takes
+/// five minutes the two events are five minutes apart. Nothing chooses that
+/// gap.
+///
+/// `succeeded` is the same observation that sets the dispatch record's
+/// `execution_status`, and the two action words are that field's own
+/// vocabulary, so a reader can match one against the other. It sets no
+/// linkage: `assignee_run` was established at delivery and a worker finishing
+/// does not change which pane it ran on.
+pub fn record_execution(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    succeeded: bool,
+    detail: String,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    append_history(
+        &mut task,
+        actor,
+        if succeeded {
+            "execution_succeeded"
+        } else {
+            "execution_failed"
+        },
+        None,
+        None,
+        Some(detail),
+    );
+    write_task(&task)?;
+    Ok(task)
+}
+
+/// Record that a reviewer finished, without replacing the executor's linkage.
+///
+/// The reviewer's half of [`record_execution`], kept separate for the same
+/// reason [`record_review_delivery`] is: a review dispatch runs against the
+/// same task but is not the work, and collapsing the two would make a
+/// reviewer's verdict indistinguishable from the executor's answer.
+pub fn record_review_execution(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    succeeded: bool,
+    detail: String,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    append_history(
+        &mut task,
+        actor,
+        if succeeded {
+            "review_execution_succeeded"
+        } else {
+            "review_execution_failed"
+        },
+        None,
+        None,
+        Some(detail),
+    );
+    write_task(&task)?;
+    Ok(task)
+}
+
 /// Move a running task to review.
 pub fn review_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {
     move_task(session, id, TaskStatus::Review, actor)

@@ -350,8 +350,11 @@ mod tests {
     #[test]
     fn the_message_vocabulary_is_snapshotted_against_the_ambient_pulse() {
         let theme = Theme::from(ThemeName::Nocturne);
-        // 180 ms in: three frames at 60 ms, two cells each, so the packet is
-        // six cells along whichever way it is going.
+        // 180 ms in: at one cell every `FLIGHT_MS_PER_CELL`, the packet is six
+        // cells along whichever way it is going. The same six cells the
+        // pre-#49 cadence reached in three 60 ms frames of two — the speed did
+        // not change, only how finely it is sampled — so this golden pins that
+        // equivalence as well as the frame.
         let raised = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_millis(180))
             .unwrap_or_else(std::time::Instant::now);

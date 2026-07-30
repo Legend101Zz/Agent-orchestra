@@ -552,6 +552,16 @@ impl InFlight {
             circuit::Direction::Inbound => panes.first(),
         }
     }
+
+    /// The pane the departure beat plays on — the mirror of
+    /// [`Self::destination`]. A dispatch leaves the conductor; an answer
+    /// leaves the worker that produced it.
+    fn origin<'a>(&'a self, panes: &'a [PaneSnapshot]) -> Option<&'a PaneSnapshot> {
+        match self.direction {
+            circuit::Direction::Outbound => panes.first(),
+            circuit::Direction::Inbound => panes.iter().find(|pane| pane.id == self.worker_id),
+        }
+    }
 }
 
 /// One pane's own output pulse.
@@ -618,6 +628,18 @@ struct StageState {
     pulses: BTreeMap<String, PanePulse>,
     /// Messages currently crossing a connector or showing their emote.
     flights: Vec<InFlight>,
+    /// Traffic that had no wire to cross, and when STAGE noticed.
+    ///
+    /// Issue #45's dispatch falls back to a run or dispatch id whenever no
+    /// seated pane matches the harness, so a delegation can be entirely real
+    /// and entirely elsewhere. The flight raised for one was aimed at nothing:
+    /// `retire_flights` dropped it on the first frame with no animation and no
+    /// error, which is the one outcome STAGE is not allowed to have (#49's
+    /// acceptance check 7). Such a flight is no longer raised at all — the
+    /// legend says so instead, for exactly as long as the packet it replaced
+    /// would have been on screen, so the note is as transient as the traffic
+    /// it stands in for.
+    offstage: Vec<(String, Instant)>,
     /// The wiring the last frame planned, kept so the router runs **once** per
     /// frame instead of once per consumer. `emotes`, `any_in_flight` and
     /// `retire_flights` all need a route's length, and each re-planning from
@@ -681,6 +703,7 @@ impl StageState {
             focus: 0,
             pane_areas: Vec::new(),
             flights: Vec::new(),
+            offstage: Vec::new(),
             wiring: None,
             seen_history: HashMap::new(),
             last_tick: now,
@@ -831,25 +854,87 @@ impl StageState {
     fn note_task_events(&mut self, tasks: &[TaskSummary]) {
         for task in tasks {
             let seen = self.seen_history.get(&task.id).copied().unwrap_or(0);
-            self.seen_history
-                .insert(task.id.clone(), task.history.len());
+            // The watermark only moves once there is a wire to aim at.
+            //
+            // A task is created and assigned before anything links it to a
+            // pane: `pio orch delegate` passes no run to `assign_task`, and it
+            // is the detached supervisor's `record_delivery` that writes the
+            // link, in a different process some time later. Advancing past
+            // `assigned` while the link is still missing threw the outbound
+            // packet away — and threw it away *more often the more promptly
+            // the board was read*, which is why #45 never saw it and why #49's
+            // wake path would have. Holding costs nothing: the entries are
+            // re-read, never re-raised, and the watermark catches up in one go
+            // the moment the link lands.
             let Some(worker_id) = task.assignee_run.clone() else {
                 continue;
             };
-            for entry in task.history.iter().skip(seen) {
-                if let Some((direction, outcome)) =
-                    circuit::message_for(&entry.action, entry.to.as_deref())
-                {
-                    self.flights.push(InFlight {
-                        worker_id: worker_id.clone(),
-                        direction,
-                        outcome,
-                        raised: Instant::now(),
-                    });
+            self.seen_history
+                .insert(task.id.clone(), task.history.len());
+            let traffic = task
+                .history
+                .iter()
+                .skip(seen)
+                .filter_map(|entry| circuit::message_for(&entry.action, entry.to.as_deref()))
+                .collect::<Vec<_>>();
+            if traffic.is_empty() {
+                continue;
+            }
+            // Aimed at a run that is not one of these panes: real traffic,
+            // genuinely somewhere else. Say so rather than raising a packet
+            // with no route, which is what used to be dropped in silence. One
+            // note per message, exactly as the seated branch below raises one
+            // flight per message — a single note for a whole batch would have
+            // the legend undercount the traffic it exists to admit to.
+            if !self.panes.iter().skip(1).any(|pane| pane.id == worker_id) {
+                for _ in &traffic {
+                    self.offstage.push((worker_id.clone(), Instant::now()));
                 }
+                continue;
+            }
+            for (direction, outcome) in traffic {
+                if direction == circuit::Direction::Inbound {
+                    self.land_outbound(&worker_id);
+                }
+                self.flights.push(InFlight {
+                    worker_id: worker_id.clone(),
+                    direction,
+                    outcome,
+                    raised: Instant::now(),
+                });
             }
         }
         self.retain_seen(tasks);
+    }
+
+    /// Bring any brief still shown crossing to `worker_id` to its destination,
+    /// because something has just come back from there.
+    ///
+    /// Travel time is a function of the wire's length, so on a long connector
+    /// a genuinely fast worker can answer while its own brief is still drawn
+    /// mid-flight — and then two packets cross in opposite directions on one
+    /// wire, which is the picture issue #49 opens with. The events are real and
+    /// their times are real; what is not real is the brief, because an answer
+    /// coming back is proof that it arrived. So it arrives: the outbound flight
+    /// is advanced to its landing rather than deleted, which keeps its emote on
+    /// the worker's card and puts the two beats back in the order they actually
+    /// happened.
+    fn land_outbound(&mut self, worker_id: &str) {
+        let len = self.route_len(worker_id);
+        if len == 0 {
+            return;
+        }
+        let landed = Instant::now()
+            .checked_sub(circuit::travel_time(len))
+            .unwrap_or_else(Instant::now);
+        for flight in &mut self.flights {
+            if flight.worker_id == worker_id
+                && flight.direction == circuit::Direction::Outbound
+                && flight.raised > landed
+            {
+                flight.raised = landed;
+            }
+        }
     }
 
     /// Forget watermarks for tasks that have left the board.
@@ -864,14 +949,32 @@ impl StageState {
     /// being redrawn, but a flight that outlived its pane would keep asking
     /// for frames, so it is retired here rather than left to leak.
     fn retire_flights(&mut self, reduced_motion: bool) {
+        // An off-stage note stands in for a packet, so it lives exactly as long
+        // as that packet would have.
+        self.offstage
+            .retain(|(_, raised)| raised.elapsed() < circuit::EMOTE_HOLD);
         let lengths = self.wiring.take();
         if let Some((_, lengths)) = lengths.as_ref() {
+            let mut stranded = Vec::new();
             self.flights.retain(|flight| {
                 let len = lengths.get(&flight.worker_id).copied().unwrap_or(0);
-                len > 0
-                    && circuit::flight(reduced_motion, flight.raised.elapsed(), len)
-                        != circuit::Flight::Gone
+                if len == 0 {
+                    // `note_task_events` only ever aims a flight at a pane that
+                    // was on the stage, so reaching here means the wire went
+                    // away underneath it: the pane left, or a dragged pane is
+                    // covering its whole route. The message is retired either
+                    // way — a flight that outlived its wire would keep asking
+                    // for frames it cannot use — but it is counted, not
+                    // dropped in silence.
+                    stranded.push(flight.worker_id.clone());
+                    return false;
+                }
+                circuit::flight(reduced_motion, flight.raised.elapsed(), len)
+                    != circuit::Flight::Gone
             });
+            for worker_id in stranded {
+                self.offstage.push((worker_id, Instant::now()));
+            }
         }
         self.wiring = lengths;
     }
@@ -924,27 +1027,73 @@ impl StageState {
         })
     }
 
+    /// Whether any packet is actually *moving* this instant.
+    ///
+    /// The narrower half of [`Self::any_in_flight`], and the one that earns the
+    /// travel cadence. A landed emote holds for [`circuit::EMOTE_HOLD`] with
+    /// only its 90 ms flash boundary to catch, and under reduced motion there
+    /// is no travel at all — asking for a frame every 15 ms through either is
+    /// the wasted spin [`Self::any_live`]'s doc describes, paid on every hosted
+    /// pane on the stage.
+    fn any_travelling(&self, reduced_motion: bool) -> bool {
+        !reduced_motion
+            && self.flights.iter().any(|flight| {
+                let len = self.route_len(&flight.worker_id);
+                len > 0
+                    && matches!(
+                        circuit::flight(reduced_motion, flight.raised.elapsed(), len),
+                        circuit::Flight::Travelling(_)
+                    )
+            })
+    }
+
     /// The emote to stamp on each pane this frame, by pane id.
     ///
-    /// Most recent wins when several land at once, so the newest news is what
-    /// a pane shows.
-    fn emotes(&self, reduced_motion: bool) -> HashMap<String, (circuit::Outcome, bool)> {
+    /// Two beats now, not one: a message *leaving* stamps its origin and a
+    /// message *landing* stamps its destination, which is issue #49's spec
+    /// step 1 — the hand-off you can see — paired with the arrival that was
+    /// already there. They are read off the same clock as the packet, so
+    /// neither can be showing at a moment when the packet is not where it
+    /// says.
+    ///
+    /// Most recent wins when several beats fall on one pane, so the newest
+    /// news is what it shows.
+    ///
+    /// Under reduced motion nothing travels: `circuit::flight` is `Landed`
+    /// from the first frame, so there is no departure to see and the arrival
+    /// emote carries the whole event. That is the sheet's own reduced-motion
+    /// rule — same information, no packet anywhere on the rail — rather than
+    /// a beat quietly dropped.
+    fn emotes(&self, reduced_motion: bool) -> HashMap<String, circuit::Emote> {
         let mut showing = HashMap::new();
         for flight in &self.flights {
             let len = self.route_len(&flight.worker_id);
             if len == 0 {
                 continue;
             }
-            let circuit::Flight::Landed { since } =
-                circuit::flight(reduced_motion, flight.raised.elapsed(), len)
-            else {
-                continue;
+            let since = flight.raised.elapsed();
+            let (pane, beat, held) = match circuit::flight(reduced_motion, since, len) {
+                circuit::Flight::Travelling(step) if step < circuit::DEPART_CELLS => (
+                    flight.origin(&self.panes),
+                    circuit::Beat::Leaving(flight.direction),
+                    since,
+                ),
+                circuit::Flight::Landed { since: held } => {
+                    (flight.destination(&self.panes), circuit::Beat::Landed, held)
+                }
+                circuit::Flight::Travelling(_) | circuit::Flight::Gone => continue,
             };
-            if let Some(pane) = flight.destination(&self.panes) {
+            if let Some(pane) = pane {
                 // "Under reduced motion the flash frame is dropped: it appears
                 // already settled, holds, and leaves."
-                let flashing = !reduced_motion && since < circuit::EMOTE_FLASH;
-                showing.insert(pane.id.clone(), (flight.outcome, flashing));
+                showing.insert(
+                    pane.id.clone(),
+                    circuit::Emote {
+                        beat,
+                        outcome: flight.outcome,
+                        flashing: !reduced_motion && held < circuit::EMOTE_FLASH,
+                    },
+                );
             }
         }
         showing
@@ -1000,6 +1149,16 @@ enum UiEvent {
     Snapshot(Vec<PaneSnapshot>),
     WatchFailed(String),
     RunsChanged,
+    /// A durable task board changed on disk.
+    ///
+    /// Issue #49's defect 4. Task events used to be noticed only inside the
+    /// `Snapshot` arm, and `Snapshot` is emitted only when a pane's PTY output
+    /// sequence changes — so a delegation between quiet panes was seen
+    /// whenever a pane next happened to speak, or after the loop's 30 s
+    /// timeout, whichever came first. The board is a set of files this client
+    /// can watch directly, so it now does: "something changed" is decoupled
+    /// from "a pane said something".
+    BoardChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2185,6 +2344,7 @@ pub fn run_initial(
     spawn_screen_watch(socket, Arc::clone(&shell.watch_session), events_tx.clone());
     spawn_runs_watch(events_tx.clone());
     spawn_reports_watch(events_tx.clone());
+    spawn_board_watch(events_tx.clone());
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -2212,6 +2372,40 @@ pub fn run_initial(
     result
 }
 
+/// Which panes carry the steady `✓ TASK CONFIRMED` badge.
+///
+/// The most recent entry that says something about *how the dispatch went*
+/// decides it — not the most recent entry of any kind. Reading
+/// `history.last()` only ever worked because `delivery_confirmed` happened to
+/// be the last durable word a dispatch wrote, and issue #49 ends that:
+/// `execution_succeeded` is appended after it once the worker finishes.
+/// `last()` would have quietly taken the badge off every pane on the stage,
+/// and no test would have failed.
+///
+/// `execution_failed` counts, and has to: a worker that took the brief and
+/// then died still has a `delivery_confirmed` behind it, so a rule that looked
+/// only at deliveries would leave `✓ TASK CONFIRMED` sitting on a pane whose
+/// work failed. `execution_succeeded` deliberately does not appear here — it
+/// is not a negation, and the badge means the same thing after it as before.
+fn confirmed_panes(tasks: &[TaskSummary]) -> std::collections::HashSet<String> {
+    tasks
+        .iter()
+        .filter_map(|task| {
+            task.history
+                .iter()
+                .rev()
+                .find(|history| {
+                    matches!(
+                        history.action.as_str(),
+                        "delivery_confirmed" | "delivery_failed" | "execution_failed"
+                    )
+                })
+                .filter(|history| history.action == "delivery_confirmed")
+                .and(task.assignee_run.clone())
+        })
+        .collect()
+}
+
 fn attach_stage(
     commands: &mut BenchClient,
     shell: &mut ShellState,
@@ -2237,15 +2431,7 @@ fn attach_stage(
     stage.trigger_wired = orc_core::trigger_grammar::trigger_grammar()
         .iter()
         .all(|check| check.ok);
-    stage.confirmed_panes = tasks
-        .iter()
-        .filter_map(|task| {
-            task.history
-                .last()
-                .filter(|history| history.action == "delivery_confirmed")
-                .and(task.assignee_run.clone())
-        })
-        .collect();
+    stage.confirmed_panes = confirmed_panes(&tasks);
     // Seed the history watermark: attaching to a finished board must not
     // replay every dispatch it ever made. Everything that lands *after* this
     // is news, including a task that appears for the first time.
@@ -2281,7 +2467,13 @@ fn attach_stage(
 struct RepaintReasons {
     /// An event arrived since the last draw.
     pending: bool,
-    /// The baton is mid-pulse and motion is allowed: the packet is travelling.
+    /// A worker's **ambient baton** is mid-pulse and motion is allowed, so its
+    /// rail is sweeping. Named before there was anything else in motion; it
+    /// has never had anything to do with a message packet, which is what
+    /// `in_flight` below reports. The comment here used to say "the packet is
+    /// travelling", and issue #49 records the cost of believing it: a faster
+    /// poll was assumed to speed the packet up, when the packet's own cadence
+    /// was the thing standing still.
     animating: bool,
     /// The baton is mid-pulse but motion is reduced: the rail is static, and
     /// this only exists so the decay to idle is noticed promptly.
@@ -2296,6 +2488,23 @@ struct RepaintReasons {
     trigger_ambient: bool,
     /// A message is crossing a connector, or its emote is still showing.
     in_flight: bool,
+    /// A packet is actually *moving* this instant — not merely holding its
+    /// landed emote.
+    ///
+    /// Split from `in_flight` because the two want different cadences, and
+    /// conflating them was a regression: `in_flight` stays true for the whole
+    /// of [`circuit::EMOTE_HOLD`], 1.2 s during which the only thing that can
+    /// change is the 90 ms flash boundary — and under reduced motion, where
+    /// `circuit::flight` is `Landed` from the first frame and the flash is
+    /// suppressed, nothing on screen can change at all. Holding the shell at
+    /// the travel cadence through that redraws every hosted pane ~80 times for
+    /// nothing.
+    travelling: bool,
+    /// A message could not be shown because its worker is not a pane here, and
+    /// the legend is saying so. It needs a frame to *stop* saying it: on a
+    /// quiet stage nothing else would ask for one, so the note would sit there
+    /// until the next unrelated event — up to the loop's 30 s timeout.
+    offstage: bool,
     home_ambient: bool,
     runs_ambient: bool,
 }
@@ -2309,23 +2518,32 @@ impl RepaintReasons {
             || self.stage_changed
             || self.trigger_ambient
             || self.in_flight
+            || self.offstage
             || self.home_ambient
             || self.runs_ambient
     }
 
     /// How long the loop may sleep before looking again.
     ///
-    /// The shortest cadence any live reason needs. `stage_changed` is absent
-    /// on purpose: it is satisfied by the draw it just asked for, so it must
-    /// not hold the loop at a fast cadence afterwards.
+    /// The shortest cadence any live reason needs, so the tiers are ordered
+    /// fastest first. `travelling` leads because it is the quickest of them:
+    /// the packet crosses a cell every [`circuit::FLIGHT_MS_PER_CELL`], which
+    /// is faster than the baton's frame. `stage_changed` is absent on purpose:
+    /// it is satisfied by the draw it just asked for, so it must not hold the
+    /// loop at a fast cadence afterwards.
     const fn wait(self) -> Duration {
-        if self.animating {
+        if self.travelling {
+            // Half a cell's worth of travel, so no cell the packet lands on
+            // aliases away between two polls.
+            Duration::from_millis(circuit::FLIGHT_MS_PER_CELL / 2)
+        } else if self.animating {
             Duration::from_millis(16)
         } else if self.in_flight {
-            // The packet advances every `FLIGHT_FRAME_MS`; waking at half that
-            // keeps each frame from aliasing against the poll.
-            Duration::from_millis(circuit::FLIGHT_FRAME_MS / 2)
-        } else if self.home_ambient || self.trigger_ambient {
+            // A landed emote, holding. Its only boundary is the 90 ms flash,
+            // so this stays the cadence the packet itself used before it was
+            // given one of its own.
+            Duration::from_millis(30)
+        } else if self.home_ambient || self.trigger_ambient || self.offstage {
             Duration::from_millis(120)
         } else if self.stage_live || self.runs_ambient {
             Duration::from_millis(500)
@@ -2353,12 +2571,37 @@ fn repaint_reasons(shell: &ShellState, pending: bool) -> RepaintReasons {
             && shell.theme.trigger_gradient().is_some()
             && stage.is_some_and(|stage| stage.has_live_trigger()),
         in_flight: stage.is_some_and(|stage| stage.any_in_flight(shell.reduced_motion)),
+        travelling: stage.is_some_and(|stage| stage.any_travelling(shell.reduced_motion)),
+        offstage: stage.is_some_and(|stage| !stage.offstage.is_empty()),
         home_ambient: !shell.reduced_motion && !shell.help && shell.view == ShellView::Home,
         // The RUNS embed repaints on a modest tick so quota/history updates
         // arriving on the App's internal channel become visible without a
         // keypress. This is data refresh, not animation, so it is kept under
         // reduced_motion; App::refresh is internally rate-limited to 500 ms.
         runs_ambient: !shell.help && shell.view == ShellView::Runs,
+    }
+}
+
+/// Re-read the attached session's task board and turn what is new into
+/// messages.
+///
+/// Called from both wake paths — a pane produced output, or the board itself
+/// changed — because a task event means the same thing whichever noticed it
+/// first. A task event is not a stdout tick: it has a source, a destination
+/// and an outcome, so it raises a discrete message rather than pulsing the
+/// ambient rail, which is what made a dispatch, a returned result and a worker
+/// merely printing look identical.
+fn read_board(commands: &mut BenchClient, shell: &mut ShellState) {
+    let Some(score) = shell.score.as_mut() else {
+        return;
+    };
+    let Ok(tasks) = commands.task_board(score.session_id.clone()) else {
+        return;
+    };
+    score.tasks = tasks;
+    if let Some(stage) = shell.stage.as_mut() {
+        stage.confirmed_panes = confirmed_panes(&score.tasks);
+        stage.note_task_events(&score.tasks);
     }
 }
 
@@ -2410,30 +2653,15 @@ fn run_shell_loop(
                     };
                     stage.apply_snapshot(panes);
                 }
-                if let Some(score) = shell.score.as_mut()
-                    && let Ok(tasks) = commands.task_board(score.session_id.clone())
-                {
-                    score.tasks = tasks;
-                    if let Some(stage) = shell.stage.as_mut() {
-                        stage.confirmed_panes = score
-                            .tasks
-                            .iter()
-                            .filter_map(|task| {
-                                task.history
-                                    .last()
-                                    .filter(|history| history.action == "delivery_confirmed")
-                                    .and(task.assignee_run.clone())
-                            })
-                            .collect();
-                        // A task event is not a stdout tick. It has a
-                        // source, a destination and an outcome, so it raises a
-                        // discrete message rather than pulsing the ambient
-                        // rail — which is what made a dispatch, a returned
-                        // result and a worker merely printing look identical.
-                        stage.note_task_events(&score.tasks);
-                    }
-                }
+                read_board(commands, shell);
                 let _ = shell.runs.refresh();
+                redraw = true;
+            }
+            Some(UiEvent::BoardChanged) => {
+                // The board changed on disk. That is the event STAGE exists to
+                // show, and until now the only way it reached this loop was by
+                // riding on a pane's output.
+                read_board(commands, shell);
                 redraw = true;
             }
             Some(UiEvent::Raw(bytes)) => {
@@ -2618,12 +2846,56 @@ fn spawn_reports_watch(sender: SyncSender<UiEvent>) {
     spawn_runs_watch_path(orc_core::registry::home().join("reports"), sender);
 }
 
+/// Watch the durable task boards, so a delegation between two silent panes is
+/// seen when it happens rather than when a pane next speaks.
+///
+/// The board is written by other processes — `pio orch delegate` in the
+/// conductor's pane, and the detached dispatch supervisor minutes later — and
+/// none of that touches a PTY. Before this the client learned about it only
+/// through `UiEvent::Snapshot`, which the daemon emits when a pane's output
+/// sequence changes; between quiet panes the wait was up to 30 s. This is the
+/// cheap half of what a dedicated renderer thread would buy: "the board
+/// changed" now has its own way in.
+fn spawn_board_watch(sender: SyncSender<UiEvent>) {
+    spawn_change_watch(
+        board_watch_root(),
+        "task board",
+        || UiEvent::BoardChanged,
+        sender,
+    );
+}
+
+/// The directory every session's task board lives under.
+///
+/// Named rather than inlined so a test can hold it against
+/// `orc_core::tasks::task_path` — watching the wrong tree would leave the
+/// watcher working perfectly and the shell asleep.
+fn board_watch_root() -> PathBuf {
+    orc_core::registry::home().join("tasks")
+}
+
 fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
+    spawn_change_watch(path, "runs", || UiEvent::RunsChanged, sender);
+}
+
+/// Wake the shell whenever anything under `path` changes.
+///
+/// The raised event carries no payload — the arm that receives it re-reads
+/// whatever it needs — so `raise` is a plain constructor. Bursts are
+/// coalesced: one board mutation creates a lock file, writes the task and
+/// removes the lock, and three repaints for one event is the wasted spin the
+/// repaint tiers exist to avoid.
+fn spawn_change_watch(
+    path: PathBuf,
+    what: &'static str,
+    raise: fn() -> UiEvent,
+    sender: SyncSender<UiEvent>,
+) {
     thread::spawn(move || {
         if std::fs::create_dir_all(&path).is_err() {
-            let _ = sender.send(UiEvent::WatchFailed(
-                "runs watcher could not create the runs directory".to_owned(),
-            ));
+            let _ = sender.send(UiEvent::WatchFailed(format!(
+                "{what} watcher could not create its directory"
+            )));
             return;
         }
         let (events, changes) = mpsc::sync_channel(16);
@@ -2634,19 +2906,21 @@ fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
                 }
             })
         else {
-            let _ = sender.send(UiEvent::WatchFailed(
-                "runs watcher could not start".to_owned(),
-            ));
+            let _ = sender.send(UiEvent::WatchFailed(format!(
+                "{what} watcher could not start"
+            )));
             return;
         };
         if watcher.watch(&path, RecursiveMode::Recursive).is_err() {
-            let _ = sender.send(UiEvent::WatchFailed(
-                "runs watcher could not watch the runs directory".to_owned(),
-            ));
+            let _ = sender.send(UiEvent::WatchFailed(format!(
+                "{what} watcher could not watch {}",
+                path.display()
+            )));
             return;
         }
         while changes.recv().is_ok() {
-            if sender.send(UiEvent::RunsChanged).is_err() {
+            while changes.try_recv().is_ok() {}
+            if sender.send(raise()).is_err() {
                 break;
             }
         }
@@ -3488,8 +3762,29 @@ fn render_stage(
         } else {
             ""
         };
+        // Same rule for traffic with no wire: a delegation whose worker is not
+        // one of these panes is real, and STAGE saying nothing about it is how
+        // #45's reporter came to believe their seated Hermes had run the task.
+        //
+        // The run is named only when there is room for it. A fallback link is
+        // a `D-{cwd}-{epoch}-{slug}-{nonce}` dispatch id and routinely runs to
+        // forty characters, which at 80 columns — where the inlaid prefix has
+        // already claimed half the line — would push every control key off the
+        // end and then clip the id it promised to name. The unnamed form still
+        // states the thing that matters; SCORE has the id.
+        let offstage = match state.offstage.len() {
+            0 => String::new(),
+            count => {
+                let named = (count == 1)
+                    .then(|| format!(" — {} is not a pane here", state.offstage[0].0))
+                    .filter(|named| fallback.len() + named.len() + 32 <= usize::from(area.width))
+                    .unwrap_or_default();
+                let plural = if count == 1 { "message" } else { "messages" };
+                format!("{count} {plural} crossed no wire{named} · ")
+            }
+        };
         let legend = format!(
-            "{fallback}typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach — mouse: drag a title to move, an edge to resize",
+            "{fallback}{offstage}typing goes to the pane — {leader} then: n/p focus · z zoom · s swap · b SCORE · h HOME · ? help · q detach — mouse: drag a title to move, an edge to resize",
             leader = state.leader_label
         );
         render_legend(frame, area, &legend, state.theme);
@@ -3725,19 +4020,37 @@ fn render_flights(
                         frame,
                         *cell,
                         circuit::packet(flight.direction, glyphs),
-                        theme.state(flight.outcome.slot()),
+                        // `paint_cell` merges modifiers into whatever the cell
+                        // already carries, and the rail underneath the packet
+                        // is `Slot::Faint`, i.e. DIM. The shipped packet was
+                        // therefore drawn `bold+dim` — it is right there in
+                        // `stage-message-dispatch.txt`'s legend — which on most
+                        // terminals is neither. The packet has to out-contrast
+                        // the wire it is crossing, so it clears the dim it
+                        // inherited. This is the whole of the "intensity"
+                        // half of #49's Decision 2: one bright cell on a dim
+                        // rail, and no trail (see `findings.md`).
+                        theme
+                            .state(flight.outcome.slot())
+                            .remove_modifier(Modifier::DIM),
                     );
                 }
             }
             circuit::Flight::Landed { .. } if reduced_motion => {
                 // No travel: the whole connector holds solid in the message's
-                // colour for the same span the packet would have taken.
+                // colour for the same span the packet would have taken. It
+                // clears the inherited DIM for the same reason the packet does
+                // — more so, in fact: here the connector *is* the message, so
+                // leaving it `bold+dim` would smudge the whole of what reduced
+                // motion has to say.
                 for cell in route {
                     paint_cell(
                         frame,
                         *cell,
                         baton::Cell::Solid.symbol(glyphs),
-                        theme.state(flight.outcome.slot()),
+                        theme
+                            .state(flight.outcome.slot())
+                            .remove_modifier(Modifier::DIM),
                     );
                 }
             }
@@ -3886,10 +4199,11 @@ fn pane_state(pane: &PaneSnapshot) -> (Glyph, Slot) {
 /// slid to.
 #[derive(Clone, Copy)]
 struct PaneChrome {
-    /// A landed message, and whether it is still in its reverse-video flash
-    /// frame. Transient: it precedes the steady `confirmed` badge rather than
-    /// replacing it, which is why they share one run of title.
-    emote: Option<(circuit::Outcome, bool)>,
+    /// A message leaving or landing here, and whether it is still in its
+    /// reverse-video flash frame. Transient: it precedes the steady
+    /// `confirmed` badge rather than replacing it, which is why they share one
+    /// run of title.
+    emote: Option<circuit::Emote>,
     focus: bool,
     confirmed: bool,
     phase: usize,
@@ -3928,11 +4242,11 @@ fn render_pane(
             glyphs.get(state_glyph),
             pane.title.to_uppercase(),
             pane.state.as_deref().unwrap_or("LIVE"),
-            // While a message is landing it owns this run of title; the steady
-            // badge underneath returns when the emote's lifetime runs out, so
-            // the two never stack.
-            if let Some((outcome, _)) = emote {
-                format!(" · {} {}", glyphs.get(outcome.glyph()), outcome.label())
+            // While a message is leaving or landing it owns this run of title;
+            // the steady badge underneath returns when the emote's lifetime
+            // runs out, so the two never stack.
+            if let Some(emote) = emote {
+                format!(" · {} {}", emote.symbol(glyphs), emote.label())
             } else if confirmed {
                 format!(" · {} TASK CONFIRMED", glyphs.get(Glyph::Confirmed))
             } else {
@@ -3943,12 +4257,12 @@ fn render_pane(
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(border_color))
-        .title_style(if let Some((outcome, flashing)) = emote {
+        .title_style(if let Some(emote) = emote {
             // The sheet's three beats, as far as a terminal has them: one
             // reverse-video frame, then the glyph settled into a steady badge
             // in the outcome's own slot.
-            let settled = theme.state(outcome.slot());
-            if flashing {
+            let settled = theme.state(emote.slot());
+            if emote.flashing {
                 settled.add_modifier(Modifier::REVERSED)
             } else {
                 settled
@@ -4081,9 +4395,9 @@ mod tests {
         AVATAR_FRAMES, Drag, HarnessDiscovery, HashMap, HomeData, HomeState, InFlight,
         LeaderAction, LeaderKey, MIN_PANE, NewSessionFlow, RawRouter, RepaintReasons,
         SINGLE_HARNESS_MESSAGE, ScoreState, ShellState, ShellView, SingleHarnessPlan, StageState,
-        Theme, ThemeName, baton, circuit, cycle_theme, grab, render_help, render_home,
-        render_score, render_shell, render_stage, repaint_reasons, route_leader, route_raw_mouse,
-        route_runs_key, score_mouse, stage_areas, sync_stage_geometry,
+        Theme, ThemeName, baton, circuit, confirmed_panes, cycle_theme, grab, render_help,
+        render_home, render_score, render_shell, render_stage, repaint_reasons, route_leader,
+        route_raw_mouse, route_runs_key, score_mouse, stage_areas, sync_stage_geometry,
     };
     use crate::glyph::{Glyph, GlyphTier, Glyphs};
     use crate::theme::{ColorTier, Slot};
@@ -6379,7 +6693,12 @@ mod tests {
     /// invented four action words that nothing writes.
     const CREATED: (&str, Option<&str>) = ("created", Some("backlog"));
     const ASSIGNED: (&str, Option<&str>) = ("assigned", None);
+    /// The brief reaching the worker. Written at `command.spawn()`, so it is
+    /// the outbound journey landing — not the answer coming back, which is
+    /// what it was read as until issue #49.
     const CONFIRMED: (&str, Option<&str>) = ("delivery_confirmed", None);
+    /// The worker exited and its answer is durable: the real return.
+    const ANSWERED: (&str, Option<&str>) = ("execution_succeeded", None);
     const DONE: (&str, Option<&str>) = ("moved", Some("done"));
 
     fn task_with(id: &str, pane: &str, actions: &[(&str, Option<&str>)]) -> TaskSummary {
@@ -6486,9 +6805,24 @@ mod tests {
         assert!(dispatched.contains('▶'), "outbound packet: {dispatched:?}");
         assert!(!dispatched.contains('◀'), "and not the inbound one");
 
-        // 3. A confirmed return: inbound, the other direction.
+        // 2b. Delivery confirmed is the *same* journey landing, not a return:
+        //     it is written at `command.spawn()`. #49.
         state.flights.clear();
         state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        let received = stage_text(&mut state, false);
+        assert!(
+            received.contains('▶') && !received.contains('◀'),
+            "a delivery receipt still travels towards the worker: {received:?}"
+        );
+
+        // 3. The answer coming back: inbound, the other direction, and only
+        //    once the worker has actually finished.
+        state.flights.clear();
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &[CREATED, ASSIGNED, CONFIRMED, ANSWERED],
+        )]);
         let returned = stage_text(&mut state, false);
         assert!(returned.contains('◀'), "inbound packet: {returned:?}");
         assert!(!returned.contains('▶'), "and not the outbound one");
@@ -6497,6 +6831,492 @@ mod tests {
         assert_ne!(output, dispatched);
         assert_ne!(dispatched, returned);
         assert_ne!(output, returned);
+    }
+
+    #[test]
+    fn the_brain_shows_the_hand_off_leaving_and_the_worker_shows_the_answer_leaving() {
+        // Issue #49, spec step 1: the departure beat, mirroring the arrival
+        // emote that already existed. A dispatch leaves the conductor and an
+        // answer leaves the worker, and each says so on the pane it is
+        // leaving — so a delegation reads as a hand-off rather than as
+        // something that simply appears somewhere else.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        let leaving = |state: &mut StageState, direction, outcome| {
+            state.flights = vec![InFlight {
+                worker_id: "pane-1".to_owned(),
+                direction,
+                outcome,
+                raised: Instant::now(),
+            }];
+            let _ = stage_text(state, false);
+            state.emotes(false)
+        };
+
+        let out = leaving(
+            &mut state,
+            circuit::Direction::Outbound,
+            circuit::Outcome::Dispatched,
+        );
+        assert_eq!(
+            out.get("pane-0").map(|emote| emote.label()),
+            Some("HANDING OFF"),
+            "the conductor says the brief is leaving it: {out:?}"
+        );
+        assert!(
+            !out.contains_key("pane-1"),
+            "and the worker says nothing until it arrives: {out:?}"
+        );
+
+        let back = leaving(
+            &mut state,
+            circuit::Direction::Inbound,
+            circuit::Outcome::Confirmed,
+        );
+        assert_eq!(
+            back.get("pane-1").map(|emote| emote.label()),
+            Some("ANSWERING"),
+            "and the answer leaves the worker that produced it: {back:?}"
+        );
+
+        // It is bounded by the packet's own travel, never by a hold of its
+        // own: once the packet has crossed the sheet's twelve-cell rail's
+        // worth of route the beat is over, and by the time it lands the
+        // origin is quiet again.
+        state.flights = vec![InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now()
+                - Duration::from_millis(circuit::DEPART_CELLS as u64 * circuit::FLIGHT_MS_PER_CELL),
+        }];
+        let _ = stage_text(&mut state, false);
+        let settled = state.emotes(false);
+        assert_ne!(
+            settled.get("pane-0").map(|emote| emote.label()),
+            Some("HANDING OFF"),
+            "the beat does not outlive the crossing it announces: {settled:?}"
+        );
+    }
+
+    #[test]
+    fn an_answer_never_overtakes_the_brief_it_is_answering() {
+        // Travel time is a function of the wire, so on a long connector a
+        // genuinely fast worker answers while its own brief is still drawn
+        // mid-flight — and then a ▶ and a ◀ cross in opposite directions on
+        // one wire, which is the picture issue #49 opens with. The times are
+        // real; the brief in transit is not, because an answer coming back is
+        // proof that it arrived.
+        let mut state = StageState::new(bench(3), ThemeName::Nocturne.into(), GLYPHS);
+        state.seed_task_events(&[]);
+        let _ = stage_text(&mut state, false);
+        let len = state.route_len("pane-1");
+        assert!(
+            len > 12,
+            "the fixture needs a wire long enough for the overtake: {len}"
+        );
+
+        // The brief goes out...
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert!(
+            state
+                .flights
+                .iter()
+                .any(|flight| flight.direction == circuit::Direction::Outbound),
+            "the hand-off is on the wire"
+        );
+
+        // ...and the worker answers long before the packet could have crossed.
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &[CREATED, ASSIGNED, CONFIRMED, ANSWERED],
+        )]);
+        let text = stage_text(&mut state, false);
+        assert!(
+            text.contains('◀'),
+            "the answer is on its way back: {text:?}"
+        );
+        assert!(
+            !text.contains('▶'),
+            "and the brief is no longer shown still crossing towards a worker              that has already answered: {text:?}"
+        );
+        // It *landed* rather than vanishing: the outbound flight is still
+        // there, holding its arrival, so nothing is silently deleted. (The
+        // worker's card reads "ANSWERING" rather than the brief's arrival,
+        // because the newest news on a pane wins — that rule is unchanged.)
+        let outbound = state
+            .flights
+            .iter()
+            .find(|flight| flight.direction == circuit::Direction::Outbound)
+            .expect("the brief is still on the board");
+        assert!(
+            matches!(
+                circuit::flight(false, outbound.raised.elapsed(), len),
+                circuit::Flight::Landed { .. }
+            ),
+            "the brief arrives rather than disappearing"
+        );
+    }
+
+    #[test]
+    fn the_packet_is_one_cell_and_draws_no_trail() {
+        // Issue #49's Decision 2, made enforceable. `visual-identity.md`
+        // defines the packet as "a single directional cell, not the pulse's
+        // three-cell ramp", and makes shape one of three legs — with colour,
+        // with behaviour — any one of which must be removable while leaving
+        // the packet and the ambient ramp tellable apart. With colour gone
+        // (monochrome, NO_COLOR) and behaviour needing time to read, shape is
+        // the only instantaneous discriminator left, so a trail spends the one
+        // leg that has to survive. The decision was to get smoothness from
+        // cadence instead; this is what stops a trail arriving later without
+        // that argument being made again.
+        //
+        // The shipped `the_message_vocabulary_survives_no_color_and_the_ascii_column`
+        // could not catch this: it asserts on `circuit::packet`'s return value
+        // and never counts painted cells.
+        //
+        // Counted as *cells the flight changed*, not as occurrences of the
+        // packet's own glyph. Counting the glyph would have been the same
+        // mistake one level down: the trail the issue actually names is drawn
+        // from the ramp (`▓▒░·─━`), so a glyph count would sit at one with a
+        // comet on the wire. The whole route is rendered twice — once with the
+        // flight and once without — and exactly one cell may differ, whatever
+        // is painted in it.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        let wire = |state: &mut StageState| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("stage terminal");
+            let traffic = state.traffic(false);
+            terminal
+                .draw(|frame| render_stage(frame, state, Some(0), &traffic))
+                .expect("render stage");
+            let buffer = terminal.backend().buffer();
+            circuit::plan(&state.pane_areas).expect("wired").routes[0]
+                .iter()
+                .map(|cell| {
+                    buffer
+                        .cell(*cell)
+                        .map(|painted| painted.symbol().to_owned())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        state.flights.clear();
+        let quiet = wire(&mut state);
+        for elapsed in [0_u64, 30, 90, 150, 210, 300] {
+            for direction in [circuit::Direction::Outbound, circuit::Direction::Inbound] {
+                state.flights = vec![InFlight {
+                    worker_id: "pane-1".to_owned(),
+                    direction,
+                    outcome: circuit::Outcome::Dispatched,
+                    raised: Instant::now() - Duration::from_millis(elapsed),
+                }];
+                let carrying = wire(&mut state);
+                let changed = quiet
+                    .iter()
+                    .zip(&carrying)
+                    .filter(|(before, after)| before != after)
+                    .count();
+                assert_eq!(
+                    changed, 1,
+                    "{direction:?} at {elapsed} ms must change exactly one cell of \
+                     the connector — a trail of any glyph spends the shape leg \
+                     the design sheet requires. quiet={quiet:?} carrying={carrying:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn traffic_aimed_at_a_run_that_is_not_a_pane_is_stated_rather_than_dropped() {
+        // Issue #49's acceptance check 7. Dispatch falls back to a run or a
+        // dispatch id whenever no seated pane matches the harness, so a
+        // delegation can be entirely real and entirely elsewhere. The flight
+        // raised for one was aimed at nothing and `retire_flights` dropped it
+        // on the first frame: no animation, no error, and a user who reasonably
+        // concluded the worker on their screen had done the work.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        state.note_task_events(&[task_with("T1", "D-0007", &[CREATED, ASSIGNED])]);
+        assert!(
+            state.flights.is_empty(),
+            "no packet is raised for a wire that does not exist"
+        );
+        assert_eq!(
+            state.offstage.len(),
+            1,
+            "one note per message it could not show"
+        );
+        let text = stage_text(&mut state, false);
+        assert!(
+            text.contains("crossed no wire") && text.contains("D-0007"),
+            "STAGE says so, and names what it could not aim at: {text:?}"
+        );
+
+        // A whole lifecycle arriving in one board read is three messages, and
+        // the legend has to say three: a single note per batch would
+        // undercount exactly the traffic this exists to admit to.
+        state.offstage.clear();
+        state.seen_history.clear();
+        state.note_task_events(&[task_with(
+            "T2",
+            "D-0008",
+            &[CREATED, ASSIGNED, CONFIRMED, ANSWERED],
+        )]);
+        assert_eq!(state.offstage.len(), 3, "aimed, taken and answered");
+        assert!(
+            stage_text(&mut state, false).contains("3 messages crossed no wire"),
+            "and the legend counts messages, not tasks"
+        );
+
+        // And it is as transient as the packet it replaced, so the legend does
+        // not carry a stale claim.
+        state.offstage.clear();
+        state.note_task_events(&[task_with("T3", "D-0009", &[CREATED, ASSIGNED])]);
+        state.offstage = vec![("D-0007".to_owned(), Instant::now() - circuit::EMOTE_HOLD)];
+        state.retire_flights(false);
+        assert!(
+            !stage_text(&mut state, false).contains("crossed no wire"),
+            "the note leaves with the traffic it stood in for"
+        );
+    }
+
+    #[test]
+    fn a_delivery_receipt_does_not_take_the_confirmed_badge_off_when_the_worker_finishes() {
+        // `confirmed_panes` read `history.last()`, which only ever worked
+        // because `delivery_confirmed` happened to be the last durable word a
+        // dispatch wrote. #49 appends `execution_succeeded` after it, so the
+        // shipped lookup would have taken the `✓ TASK CONFIRMED` badge off
+        // every pane on the stage — silently, with no test failing.
+        let entry = |action: &str| TaskHistorySummary {
+            at: "2026-07-31T09:00:00Z".to_owned(),
+            actor: "brain".to_owned(),
+            action: action.to_owned(),
+            to: None,
+        };
+        let mut task = task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED]);
+        assert!(confirmed_panes(std::slice::from_ref(&task)).contains("pane-1"));
+
+        task.history.push(entry("execution_succeeded"));
+        assert!(
+            confirmed_panes(std::slice::from_ref(&task)).contains("pane-1"),
+            "the worker finishing does not un-deliver its brief"
+        );
+
+        // But a worker that took the brief and then *failed* must not keep a
+        // ✓ TASK CONFIRMED badge. Its `delivery_confirmed` is still in history
+        // and always will be, so a rule that looked only at deliveries would
+        // leave the badge sitting on a pane whose work died.
+        let mut failed = task_with("T2", "pane-1", &[CREATED, ASSIGNED, CONFIRMED]);
+        failed.history.push(entry("execution_failed"));
+        assert!(
+            !confirmed_panes(std::slice::from_ref(&failed)).contains("pane-1"),
+            "a delivered worker that then failed does not read as confirmed"
+        );
+
+        // A failed delivery does too, which is the case the lookup exists for.
+        task.history.push(entry("delivery_failed"));
+        assert!(
+            !confirmed_panes(std::slice::from_ref(&task)).contains("pane-1"),
+            "a failed delivery takes the badge back"
+        );
+    }
+
+    #[test]
+    fn a_message_with_no_wire_asks_for_the_frame_that_takes_its_note_away() {
+        // The off-stage note stands in for a packet, so it has to leave when
+        // that packet would have. Nothing else on a quiet stage asks for a
+        // frame — that is the whole scenario — so without a repaint reason of
+        // its own the note is painted once and then stranded until the next
+        // unrelated event, which on the 30 s tier means half a minute of STAGE
+        // claiming a message is in the air that left long ago.
+        let mut shell = stage_shell(panes(), ThemeName::Nocturne, false);
+        // Let the panes fall silent first: a freshly-built pulse is live, and
+        // "every pane quiet" is the whole scenario.
+        settle(&mut shell, 120);
+        let quiet = repaint_reasons(&shell, false);
+        assert!(!quiet.draw(), "nothing is happening: {quiet:?}");
+        assert_eq!(quiet.wait(), Duration::from_secs(30));
+
+        shell
+            .stage
+            .as_mut()
+            .expect("stage")
+            .offstage
+            .push(("D-0007".to_owned(), Instant::now()));
+        let noting = repaint_reasons(&shell, false);
+        assert!(noting.offstage, "the note is a reason: {noting:?}");
+        assert!(noting.draw());
+        assert!(
+            noting.wait() <= circuit::EMOTE_HOLD,
+            "and the loop must look again inside the note's own lifetime, not \
+             after it: {:?}",
+            noting.wait()
+        );
+    }
+
+    #[test]
+    fn a_landed_emote_does_not_hold_the_shell_at_the_travel_cadence() {
+        // `in_flight` is true for the whole of EMOTE_HOLD — 1.2 s in which the
+        // only boundary is the 90 ms flash — and under reduced motion
+        // `circuit::flight` is `Landed` from frame 0 with the flash suppressed,
+        // so nothing on screen can change at all. Running the whole shell,
+        // hosted panes included, at the packet's 15 ms cadence through that is
+        // the wasted spin `any_live`'s doc calls out.
+        let flight = |ago: Duration| InFlight {
+            worker_id: "pane-1".to_owned(),
+            direction: circuit::Direction::Outbound,
+            outcome: circuit::Outcome::Dispatched,
+            raised: Instant::now() - ago,
+        };
+
+        let mut shell = stage_shell(panes(), ThemeName::Nocturne, false);
+        settle(&mut shell, 120);
+        shell.stage.as_mut().expect("stage").flights = vec![flight(Duration::ZERO)];
+        let _ = paint_rail(&mut shell, 120);
+        let moving = repaint_reasons(&shell, false);
+        assert!(moving.travelling, "a packet is crossing: {moving:?}");
+        assert_eq!(
+            moving.wait(),
+            Duration::from_millis(circuit::FLIGHT_MS_PER_CELL / 2)
+        );
+
+        // Landed and holding: still a reason to draw, no longer a reason to
+        // draw at the travel cadence. The route here is 16 cells, so travel
+        // ends at 480 ms and the emote holds until 1.68 s.
+        let landed = circuit::travel_time(shell.stage.as_ref().expect("stage").route_len("pane-1"))
+            + Duration::from_millis(100);
+        shell.stage.as_mut().expect("stage").flights = vec![flight(landed)];
+        let _ = paint_rail(&mut shell, 120);
+        let holding = repaint_reasons(&shell, false);
+        assert!(holding.in_flight && !holding.travelling, "{holding:?}");
+        assert_eq!(holding.wait(), Duration::from_millis(30));
+
+        // Reduced motion never travels at all.
+        let mut still = stage_shell(panes(), ThemeName::Nocturne, true);
+        settle(&mut still, 120);
+        still.stage.as_mut().expect("stage").flights = vec![flight(Duration::ZERO)];
+        let _ = paint_rail(&mut still, 120);
+        let reasons = repaint_reasons(&still, true);
+        assert!(
+            !reasons.travelling,
+            "reduced motion has no packet to keep up with: {reasons:?}"
+        );
+    }
+
+    /// Draw once and let every pane's pulse decay, so "the stage is quiet" is
+    /// true rather than merely intended. A freshly-built `PanePulse` is live.
+    fn settle(shell: &mut ShellState, width: u16) {
+        let _ = paint_rail(shell, width);
+        if let Some(stage) = shell.stage.as_mut() {
+            for index in 0..stage.panes.len() {
+                decay(stage, index);
+            }
+        }
+        let _ = paint_rail(shell, width);
+    }
+
+    #[test]
+    fn the_hand_off_survives_a_board_read_taken_before_the_pane_link_lands() {
+        // `pio orch delegate` writes `assigned` with no run — it is the
+        // detached supervisor's `record_delivery`, in another process, that
+        // links the task to a pane. The watermark used to advance before that
+        // link was checked, so a board read landing in between consumed
+        // `assigned` and the outbound packet was never raised at all.
+        //
+        // #45 never saw this because the board was only read when a pane
+        // spoke, which is rarely that narrow window. #49's wake path reads it
+        // the moment the file changes, which is exactly that window.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.seed_task_events(&[]);
+
+        let mut unlinked = task_with("T1", "pane-1", &[CREATED, ASSIGNED]);
+        unlinked.assignee_run = None;
+        state.note_task_events(&[unlinked]);
+        assert!(
+            state.flights.is_empty(),
+            "there is no wire to aim at yet, so nothing is raised"
+        );
+
+        // The supervisor's delivery write lands, carrying the link with it.
+        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        assert_eq!(
+            state
+                .flights
+                .iter()
+                .filter(|flight| flight.direction == circuit::Direction::Outbound
+                    && flight.outcome == circuit::Outcome::Dispatched)
+                .count(),
+            1,
+            "the hand-off is raised once, when it can be aimed — not discarded \
+             for having been read a moment too early"
+        );
+    }
+
+    #[test]
+    fn the_board_watcher_watches_where_the_board_is_written() {
+        // The other half of the wake path, and the half a watcher test cannot
+        // see by itself: watching the wrong directory would leave every
+        // assertion below passing and the shell asleep.
+        let watched = super::board_watch_root();
+        let written = orc_core::tasks::task_path("some-session", "T0001");
+        assert!(
+            written.starts_with(&watched),
+            "the watcher must cover the directory `orc_core::tasks` writes \
+             into: watching {watched:?}, board writes {written:?}"
+        );
+    }
+
+    #[test]
+    fn the_board_watcher_wakes_the_shell_with_every_pane_silent() {
+        // Issue #49's acceptance check 4. Task events were noticed only inside
+        // the `UiEvent::Snapshot` arm, and the daemon emits `Snapshot` only
+        // when a pane's PTY output sequence changes — so a delegation between
+        // two quiet panes waited for a pane to speak, or for the loop's 30 s
+        // timeout. The board is a set of files, and this client now watches
+        // them itself. No PTY is involved anywhere in this test.
+        let root = std::env::temp_dir().join(format!("orc-app-board-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        super::spawn_change_watch(
+            root.join("tasks"),
+            "task board",
+            || super::UiEvent::BoardChanged,
+            sender,
+        );
+        let board = root.join("tasks").join("session-key");
+        // Watcher registration is asynchronous, so a single early write can
+        // land before the watch exists; rewriting until it arrives removes the
+        // timing assumption without weakening the claim.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let woke = loop {
+            std::fs::create_dir_all(&board).expect("create watched board");
+            std::fs::write(board.join("T0001.json"), b"{}\n").expect("write watched task");
+            match receiver.recv_timeout(Duration::from_millis(200)) {
+                Ok(super::UiEvent::BoardChanged) => break true,
+                Ok(other) => panic!(
+                    "unexpected watcher event: {:?}",
+                    std::mem::discriminant(&other)
+                ),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if Instant::now() >= deadline {
+                        break false;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("watcher thread stopped")
+                }
+            }
+        };
+        assert!(
+            woke,
+            "a task-board write never woke the shell within 10s — far inside \
+             the 30s the loop would otherwise have slept"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -6571,23 +7391,40 @@ mod tests {
         // Attach: the board is empty, so the seeding pass learns nothing.
         state.seed_task_events(&[]);
 
-        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &[CREATED, ASSIGNED, CONFIRMED, ANSWERED],
+        )]);
         assert_eq!(
-            state.flights.len(),
-            2,
-            "the outbound dispatch and the inbound confirm both animate"
+            state
+                .flights
+                .iter()
+                .map(|flight| (flight.direction, flight.outcome))
+                .collect::<Vec<_>>(),
+            vec![
+                (circuit::Direction::Outbound, circuit::Outcome::Dispatched),
+                (circuit::Direction::Outbound, circuit::Outcome::Confirmed),
+                (circuit::Direction::Inbound, circuit::Outcome::Confirmed),
+            ],
+            "the brief is aimed, the worker takes it, and the answer comes back \
+             — three beats, and only the last of them is inbound (#49)"
         );
         assert!(
             state
                 .flights
                 .iter()
                 .all(|flight| flight.worker_id == "pane-1"),
-            "and both are aimed at the seated worker pane"
+            "and all of them are on the seated worker's wire"
         );
 
         // Still idempotent: re-reading the same board raises nothing more.
         let raised = state.flights.len();
-        state.note_task_events(&[task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED])]);
+        state.note_task_events(&[task_with(
+            "T1",
+            "pane-1",
+            &[CREATED, ASSIGNED, CONFIRMED, ANSWERED],
+        )]);
         assert_eq!(
             state.flights.len(),
             raised,
@@ -6639,6 +7476,46 @@ mod tests {
             outcome: circuit::Outcome::Dispatched,
             raised: Instant::now(),
         }];
+
+        // And it holds *legibly*. `paint_cell` merges modifiers into whatever
+        // the cell already carries, and the rail underneath was just painted
+        // `Slot::Faint` — which is DIM. Here the connector IS the message, so
+        // a `bold+dim` smudge would be the whole of what reduced motion has to
+        // say. (Issue #49: the travelling packet had exactly this defect, and
+        // fixing only that arm left this one — the more important one —
+        // untouched.)
+        {
+            // The rail underneath has to be the *idle* one for this to bite:
+            // `Slot::Faint` is the DIM slot, while a live reduced-motion rail
+            // is `Slot::Glow` and already bold. A silent worker receiving a
+            // dispatch is both the common case and the one that smudges.
+            decay(&mut state, 1);
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("stage terminal");
+            let traffic = state.traffic(true);
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, None, &traffic))
+                .expect("render stage");
+            let buffer = terminal.backend().buffer();
+            let route = circuit::plan(&state.pane_areas).expect("wired").routes[0].clone();
+            let solid = baton::Cell::Solid.symbol(GLYPHS);
+            let mut checked = 0;
+            for cell in &route {
+                let Some(painted) = buffer.cell(*cell) else {
+                    continue;
+                };
+                if painted.symbol() != solid {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    !painted.modifier.contains(Modifier::DIM),
+                    "the reduced-motion connector must not inherit the rail's \
+                     DIM at {cell:?}: {:?}",
+                    painted.modifier
+                );
+            }
+            assert!(checked > 0, "the connector was actually painted solid");
+        }
 
         let still = stage_text(&mut state, true);
         assert!(

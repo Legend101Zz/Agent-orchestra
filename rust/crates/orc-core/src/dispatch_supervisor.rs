@@ -30,7 +30,9 @@ use crate::ratelimit::{self, BackoffPolicy};
 use crate::registry::{atomic_write_json, now_iso};
 use crate::runner::{Usage, extract_adapter_event};
 use crate::spawn_guard::{self, SlotLease};
-use crate::tasks::{TaskActor, record_delivery, record_review_delivery};
+use crate::tasks::{
+    TaskActor, record_delivery, record_execution, record_review_delivery, record_review_execution,
+};
 
 /// Serialized backoff policy passed from the caller to the detached process.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -526,14 +528,21 @@ fn persist_terminal(
     record.worker_pid = None;
     record.ended_at = Some(now_iso());
     record.updated_at = now_iso();
-    let code = match result {
+    // Whether a worker actually ran, and how it ended. `None` means it never
+    // got as far as running, so the `delivery_failed` written below is the
+    // whole story and there is no execution to report.
+    let (code, executed) = match result {
         Ok(invoked) => {
             record.execution_status = Some(ExecutionStatus::Succeeded.as_str().to_owned());
             record.exit_code = invoked.exit_code;
             record.stdout = invoked.stdout;
             record.stderr = invoked.stderr;
             record.usage = invoked.usage;
-            invoked.exit_code.unwrap_or(0)
+            // `invoke_with_backoff` routes every non-success exit into
+            // `AttemptError`, so reaching here means `status.success()` was
+            // true — and `invoke_harness` only returns it after `Drain::finish`
+            // has joined both reader threads, so the answer is EOF-complete.
+            (invoked.exit_code.unwrap_or(0), Some(true))
         }
         Err(failure) => {
             let (kind, invoked) = *failure;
@@ -566,11 +575,62 @@ fn persist_terminal(
                 record.stderr = invoked.stderr;
                 record.usage = invoked.usage;
             }
-            record.exit_code.unwrap_or(1)
+            (record.exit_code.unwrap_or(1), delivered.then_some(false))
         }
     };
+    if let Some(succeeded) = executed {
+        append_execution(spec, &mut record, succeeded);
+    }
     write_dispatch(&record)?;
     Ok(code)
+}
+
+/// Append the completion event to the task board, before the dispatch record
+/// is written.
+///
+/// This is issue #49's defect 1: the success path used to write the whole
+/// terminal record — status, exit code, answer, usage — and append **nothing**
+/// to the board, so the last durable word about any dispatch was
+/// `delivery_confirmed`, which means "the process started". Nothing ever said
+/// the answer had arrived.
+///
+/// Ordered before `write_dispatch` deliberately. It makes "the dispatch is
+/// terminal" imply "the board has been told", which is what lets a test wait
+/// on one and assert the other instead of racing two writers; and it means the
+/// board can never be left permanently silent about a dispatch that has
+/// visibly finished.
+///
+/// Best-effort, and the miss is durable rather than swallowed. Propagating
+/// here would abort `execute` before it removes the supervisor spec and calls
+/// `drain_queued`, so one contended board would leak a spec file and stall
+/// every queued dispatch in the session — a worse failure than a missing
+/// animation. A refusal is recorded on the dispatch's own warnings, where
+/// `pio dispatch status` shows it.
+fn append_execution(
+    spec: &SupervisorSpec,
+    record: &mut crate::dispatch::DispatchRecord,
+    succeeded: bool,
+) {
+    let detail = format!(
+        "dispatch {} {} on {} (exit {})",
+        record.id,
+        if succeeded { "answered" } else { "failed" },
+        record.harness,
+        record
+            .exit_code
+            .map_or_else(|| "unknown".to_owned(), |code| code.to_string()),
+    );
+    let appended = if record.is_review() {
+        record_review_execution(&record.session, &record.task, spec.actor, succeeded, detail)
+    } else {
+        record_execution(&record.session, &record.task, spec.actor, succeeded, detail)
+    };
+    if let Err(error) = appended {
+        record.warnings.push(format!(
+            "ORC WARNING: dispatch {} finished but the task board refused its completion event: {error}",
+            record.id
+        ));
+    }
 }
 
 /// Run one hidden supervisor spec. Called only by `pio _dispatch_exec`.
