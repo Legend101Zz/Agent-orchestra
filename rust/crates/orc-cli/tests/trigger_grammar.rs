@@ -101,3 +101,45 @@ fn the_trigger_token_gate_rejects_a_description_that_only_says_the_bare_verb() {
         "nor may the skill's own directory name satisfy it"
     );
 }
+
+/// The hook's own `--selftest` must run inside `cargo test --workspace`.
+///
+/// It carries 78 checks — the grammar port, the quota relay, and both halves
+/// of issue #45's seat detection — and until now **nothing executed it**. It
+/// was a suite you had to remember to run, which means a suite that rots. It
+/// did rot, in the course of this very issue: rewording the `delegate:` block
+/// broke a check that asserted the old wording, and every Rust gate stayed
+/// green while it failed.
+///
+/// Running the real script rather than re-implementing it keeps one authority
+/// for the grammar — `orc_pty::trigger` — with the Python a checked port of
+/// it, which is what the hook's own module doc promises.
+#[test]
+fn the_claude_hook_selftest_passes() {
+    let hook = repository_root().join("shell/claude-userpromptsubmit-hook.py");
+    assert!(hook.is_file(), "missing hook: {}", hook.display());
+    let output = std::process::Command::new("python3")
+        .arg(&hook)
+        .arg("--selftest")
+        // Hermetic by construction: `--selftest` never calls `find_pio`, and
+        // every subprocess check builds its own stub `pio` in a temp dir and
+        // invokes it by absolute path. Nothing here touches the network or the
+        // developer's install. The seat vars are cleared so a run from inside
+        // a pi-orchestra pane tests the same thing as a run outside one.
+        .env_remove("ORC_SESSION")
+        .env_remove("ORC_PANE_ID")
+        .env_remove("ORC_WORKERS")
+        .output()
+        .expect("run the hook selftest");
+    assert!(
+        output.status.success(),
+        "hook --selftest failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("checks passed"),
+        "selftest did not report a pass line: {stdout}"
+    );
+}

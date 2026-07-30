@@ -825,18 +825,30 @@ def _selftest() -> int:
     expect("shout quiet", detect("ORCHESTRATE: loud") == [])
     expect("blank quiet", detect("") == [] and detect("   ") == [])
     expect("prompt+redelegate quiet", detect("\u276f redelegate: nope") == [])
-    delegate_help = "\n".join(guidance(["delegate"]))
-    expect(
-        "delegate guidance teaches background status/await",
-        "returns immediately" in delegate_help
-        and "orch_status" in delegate_help
-        and "orch_await" in delegate_help,
-    )
-    expect(
-        "delegate guidance distinguishes timeout flags",
-        "--dispatch-timeout" in delegate_help
-        and "contract `--timeout` is metadata" in delegate_help,
-    )
+    # Both seats, not just the standalone one: the two `delegate:` blocks are
+    # written separately, so a promise kept in one can silently lapse in the
+    # other. Issue #45's "also, and it is what made the failure invisible" is
+    # exactly this promise — nothing told the brain how to collect a result,
+    # so a six-second success was reported as silence.
+    seated = Seat("s", "s-brain", "s-worker-1=hermes")
+    for label, blocks in (
+        ("standalone", guidance(["delegate"])),
+        ("seated", guidance(["delegate"], seated)),
+    ):
+        delegate_help = "\n".join(blocks)
+        expect(
+            f"{label} delegate guidance says delivery is not completion",
+            "keeps running" in delegate_help and "NOT the answer" in delegate_help,
+        )
+        expect(
+            f"{label} delegate guidance teaches background status/await",
+            "orch_status" in delegate_help and "orch_await" in delegate_help,
+        )
+        expect(
+            f"{label} delegate guidance distinguishes timeout flags",
+            "--dispatch-timeout" in delegate_help
+            and "contract `--timeout` is metadata" in delegate_help,
+        )
 
     _quota_checks(expect)
     _seat_checks(expect)
