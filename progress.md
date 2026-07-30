@@ -2028,3 +2028,53 @@ Pushed for review. Evidence:
   "never edits protected config" promise and its pane-env paragraph), Pi/OpenCode
   wiring, and `ORC_DELEGATE_HINT` in `orc-daemon`, still pre-rename `orc`.
 - **Next: review**, then #14 (README + screenshots) last.
+
+## 2026-07-31 — Claude (reviewer): #45 reviewed FIX, merged as PR #48
+
+Adversarial review of `issue-45-seated-conductor` at `da0d4e7`, per
+`docs/WORKFLOW.md`. Mrigesh merged it as `490487e` while the verdict stood at
+FIX, so both findings are now open on `main`.
+
+- **Five gates re-run from `rust/`, unpiped with exit codes captured:** `fmt`
+  rc=0 · `clippy --workspace --all-targets -D warnings` rc=0 · `test
+  --workspace` **319 passed, 0 failed** · `doc -D warnings` rc=0 · `build
+  --release --locked` rc=0. The branch's claim held.
+- **Check 1 reproduced independently**, not read off the paste: seated three
+  panes (`claude` brain, `pi-m3` worker-1, a stub worker-2) in a sandboxed
+  `ORC_HOME` and delegated with **no `--pane`**. Sessions 1→1; `pane_id` =
+  worker-2 — the only harness match and *not* the first worker pane, so the
+  selection genuinely discriminates; `assignee_run` on the durable board is that
+  pane; its real history (`created`/`assigned`/`moved→running`/
+  `delivery_confirmed`) yields `message_for` exactly the `Outbound/Dispatched` +
+  `Inbound/Confirmed` pair the corrected `note_task_events` animates on a first
+  sighting. The "second bug" is real — fixing the hook alone would have routed
+  correctly and animated nothing.
+- **Checks 2–7 and 9 each re-run**, including mutation-testing the ones that
+  could be decorative: broke a skill description and confirmed the check-6 drift
+  gate actually fails; ran `install.sh` three times in a sandbox `HOME` and
+  confirmed `--wire-claude-hook` merges beside a pre-existing `UserPromptSubmit`
+  hook, leaves other keys alone, writes a `.bak`, and is byte-identical on
+  re-run; broke a skill symlink and confirmed doctor reports "dangling" distinctly
+  from "missing".
+- **Scope clean:** all paths inside the contract, **no new dependencies**,
+  `Cargo.lock` untouched, no TODOs, no dead code, no added `#[allow]`.
+- **Two findings merged unfixed — the debt this session leaves behind:**
+  1. `skills/orchestrate/SKILL.md` carries the contracted `--objective/--check`
+     recipe with **no** git-worktree precondition, so check 8's "everywhere the
+     recipe appears" is unmet and the `orchestrate:` path reproduces #45's own
+     defect 4 outside a repo.
+  2. `StageState::trigger_wired` is a single global `~/.claude` probe, but
+     `conductor_triggers` gates only on `role == "brain"` — so a Pi/OpenCode
+     brain pane renders the live `· ◆ DELEGATE` badge, with shimmer, for a
+     grammar `install.sh` prints as NOT wired in the same run. Check 11 inverted.
+  Non-blocking alongside them: `trigger_grammar_at` ignores project-scope
+  `.claude/settings.json` (false FAIL → doctor exits 1, badge reads INERT for a
+  working grammar), and `pio doctor --json` silently changed shape from a bare
+  array to `{harnesses, trigger_grammar}`.
+- **Reviewer gotcha worth keeping:** piping `git checkout` into `tail` masks its
+  exit status, so a chained `&& git reset --hard <branch>` runs on whatever is
+  still checked out and silently rewrites local `main`. It fires because review
+  branches are often already checked out in a sibling worktree — check
+  `git worktree list` first and review inside the existing one.
+- **Next: a follow-up issue for the two findings**, then #14 (README +
+  screenshots) closes V1.

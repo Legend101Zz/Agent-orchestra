@@ -33,7 +33,7 @@ ship-log entries are part of finishing an issue.*
 | [#37](https://github.com/Legend101Zz/Agent-orchestra/issues/37) | Make a theme choice stick, and stop `pio config set theme` writing the file nothing reads | ✅ | merged (PR #41) · reviewed 🔨→🧪, both fixes verified |
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
-| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | 🔨 | `issue-45-seated-conductor` *(merges #43 + #44)* |
+| [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -117,6 +117,26 @@ tests. Evidence: `docs/notes/2026-07-30-issue-45-seated-conductor.md`.
 > `~/.claude` probe applied to every brain pane regardless of harness, so a
 > Pi/OpenCode brain shows a **live** `DELEGATE` badge for a grammar `install.sh`
 > reports as not wired three lines earlier — check 11 inverted.
+>
+> **Merged 2026-07-31 (PR #48 as `490487e`) — 🔨→✅, with both findings still
+> open.** Mrigesh merged on the strength of the headline rather than waiting on
+> the fixes, which is a reasonable call: check 1 is the one that mattered and it
+> is verified, the two findings are documentation-and-badge honesty rather than
+> anything that misroutes a dispatch, and nothing in them can lose work. But
+> they are now debt on `main`, not review notes, and neither will be caught by a
+> gate:
+>
+> 1. `skills/orchestrate/SKILL.md` still shows the contracted
+>    `--objective/--check` recipe with no git-worktree precondition — so the
+>    `orchestrate:` path reproduces #45's own defect 4 for anyone outside a repo.
+> 2. `StageState::trigger_wired` is still one global `~/.claude` probe applied to
+>    every brain pane, so seating `pi-m3` or `opencode` as brain shows a live
+>    `DELEGATE` badge for a grammar `install.sh` prints as NOT wired in the same
+>    run. The TUI and the installer contradict each other on one machine.
+>
+> Both want a follow-up issue before #14 closes out V1 — they are small, and the
+> second is exactly the "never claim a capability that wasn't probed" rule this
+> issue was written to enforce.
 
 **#38 pushed (2026-07-30, `issue-38-stage-circuit`) — the line between the
 brain and the workers is now real wiring, and dragging a pane stopped
