@@ -130,13 +130,22 @@ none and the loop settles to its 30 s idle wait.
 
 `Theme::pane_color` still returns a hosted pane's own SGR colour verbatim at
 every tier, monochrome included, so a harness that prints colour inside its pane
-will put colour on a `NO_COLOR` screen. That is **not** this finding: it is
-documented behaviour with a stated reason ("this replays what the harness
-printed; it is not theming"), the app is not claiming otherwise, and in practice
-the hosted process inherits `NO_COLOR` itself. Noted here rather than fixed —
-out of scope, and worth a decision of its own if the owner wants one. The
-consequence for the test above is stated honestly: its all-`reset` assertion
-covers what pi-orchestra paints, and its fixture's pane emits no SGR of its own.
+will put colour on a `NO_COLOR` screen. The *behaviour* is out of scope here and
+stays: quantising or discarding another program's output is a decision of its
+own, and in practice the hosted process inherits `NO_COLOR` itself.
+
+**But the review was right that the docs had drifted, and it was this branch's
+doing.** The first version of this note said "the app is not claiming
+otherwise" — false, because two of the doc lines this branch *added* claimed
+exactly that: `Theme::resolve`'s "every colour the crate emits comes through
+here" and the module doc's "without exception". Both are now scoped to what the
+theme map emits, and `pane_color` carries the caveat explicitly. That is the
+same claim-vs-behaviour standard AC1 sets, applied to the sentences this branch
+wrote rather than only to the ones it inherited. See the fix round below.
+
+The consequence for the mono STAGE test is stated honestly: its all-`reset`
+assertion covers what pi-orchestra paints, and its fixture's pane emits no SGR
+of its own.
 
 ---
 
@@ -184,20 +193,23 @@ reads source text, not the directory tree, so it is an independent statement of
 what must be scanned — and a colour literal can only reach a build through a
 declared module, so it is also the exactly-right set.
 
-Two assertions, and each catches a non-recursing walk on its own. With the walk
-crippled back to flat and the demo file present:
+With the walk crippled back to flat and the demo file present, the coverage loop
+fires and names the file:
 
 ```
-# per-file coverage
 panicked at theme.rs:1074: the gate never looked at widgets/mod.rs,
                            which the crate declares as a module
-
-# count, with the coverage check also removed
-panicked at theme.rs:1076: the gate scanned 6 files but the crate declares 8
-                           — it is not looking where the widgets are
 ```
 
-Both mutations reverted; both assertions are in the shipped test.
+**Correction (review finding 3).** An earlier version of this note, and the PR
+body, claimed the two floor assertions "each catch this independently". They do
+not. The second one compared `scanned + 1` against `declared.len()`, and if the
+coverage loop passes then `declared ⊆ walked`, so that count can never fire —
+it was dead weight, and the mutation only appeared to exercise it because it had
+also deleted the coverage loop. The reviewer is right; the claim was wrong.
+
+That redundant count is gone. What replaced it is an assertion that is *not*
+implied by coverage — see the fix round below.
 
 ---
 
@@ -235,3 +247,111 @@ full-workspace runs at 304 passed / 0 failed, plus eight isolated runs of the
 suspected flake's own target. Stated as observed rather than attributed: the only
 failure positively identified in this session was the filed `orc-cli` flake
 above, and this branch touches no `orc-cli` code.
+
+---
+
+## Fix round — 2026-07-30, after the 🔨 FIX review (2 blocking + 2 non-blocking)
+
+All four accepted; nothing pushed back on. Two were defects this branch
+introduced, and both were introduced by the *fix* rather than inherited.
+
+### 1 (blocking) — doc claims contradicted `pane_color`
+
+The review: `Theme::resolve`'s new "every colour the crate emits comes through
+here" and the module doc's new "drops colour entirely… without exception" are
+both false while `pane_color` replays a pane's SGR at the monochrome tier — the
+exact claim-vs-behaviour gap AC1 exists to close. Correct, and sharper than my
+own note, which had waved at `pane_color` while two sentences I had just written
+asserted the opposite.
+
+Scoped rather than softened — the claims now say what is true of the map, and
+name the one thing outside it:
+
+- module doc → "on the monochrome tier every colour **this map** answers with —
+  the slots and the trigger gradient alike — resolves to `Color::Reset`", plus a
+  paragraph naming `pane_color` as the one colour the crate emits that does not
+  come from the map, and stating that "monochrome emits no colour" is a claim
+  about what pi-orchestra paints, not about what a harness prints inside a pane.
+- `Theme::resolve` → "every colour **the map** answers with comes through here",
+  naming `pane_color` as the one method that does not.
+- `Theme::pane_color` → carries the caveat itself: **deliberately not
+  tier-gated**, this is the one place "monochrome emits no colour" stops being
+  true of the screen, because quantising another program's output would be
+  editing it; only the `Slot` fallback (the pane's *default* fg/bg) is resolved
+  through the tier.
+
+Behaviour unchanged, deliberately: what `pane_color` should do under `NO_COLOR`
+is a decision of its own, and the ask was to make the claims honest.
+
+### 2 (blocking) — the exemption was unsound once the walk recursed
+
+The review: the gate matched `relative.file_name() == "theme.rs"`, so any
+`src/<anydir>/theme.rs` was fully exempt from the colour scan, and the count
+assertion only caught it arithmetically — with a misleading message, and not at
+all once one undeclared `.rs` balanced the books. Correct, and it is a defect the
+recursion created: the name match was sound while there was only one `theme.rs`
+to find.
+
+Fixed by comparing the whole relative path (`THEME_MAP`, a named constant), and
+the scan was split out as `colour_offences(root)` so the rule can be asserted on
+a **synthetic tree** — the only way to test what the gate does with a file the
+real crate must not contain. `the_exemption_is_the_theme_map_itself_and_nothing_
+else_named_like_it` builds a tree with `theme.rs`, `widgets/theme.rs`,
+`widgets/deep/panel.rs` and `honest.rs`, and asserts the two literals below the
+root are reported and only the root map is skipped.
+
+Mutation-checked — restoring the file-name match:
+
+```
+test theme::tests::the_exemption_is_the_theme_map_itself_and_nothing_else_named_like_it ... FAILED
+assertion `left == right` failed: expected the two literals below the root to be
+reported: ["widgets/deep/panel.rs:1: let hex = \"#ff00aa\";"]
+```
+
+`widgets/theme.rs`'s `Color::Indexed(199)` goes unreported under the old rule —
+exactly the reviewer's scenario, reproduced.
+
+The gate also gained the assertion the reviewer's "future `src/theme/` split"
+warning implies: if the map ever moves, `THEME_MAP` matches nothing, and rather
+than silently firing on the map's own table the gate says *"there is no theme.rs
+to exempt — if the map moved, point THEME_MAP at it"*. It is ordered **before**
+the exemption count, because otherwise the count would fire first blaming the
+opposite problem.
+
+### 3 (non-blocking) — "each independently" was false
+
+Accepted; corrected above and in the PR. The old `scanned + 1 >= declared.len()`
+was implied by the coverage loop and could never fire on its own. It is replaced
+by `scanned.len() + 1 == walked.len()`, which is **not** implied: it fires the
+moment the exemption swallows a second file — the very defect in finding 2 —
+whereas the coverage loop catches a walk that stopped descending. Two assertions,
+two distinct failures, and now that is true as written.
+
+### 4 (non-blocking) — the probe only understood two visibility forms
+
+The review: `pub(super) mod x;`, `pub(in crate::y) mod x;` and `#[path]` modules
+were invisible to the floor. Correct. `strip_visibility` now removes any
+qualifier — `pub`, `pub(crate)`, `pub(super)`, `pub(in …)` — while leaving an
+identifier like `pubs` alone, and a `#[path = "..."]` attribute is carried to the
+declaration that follows it.
+
+Pinned by `the_module_graph_probe_reads_every_way_a_module_can_be_declared`,
+which builds a synthetic crate using all six spellings plus `#[cfg(test)]`, an
+inline `mod tests { .. }` (no file, must stay invisible), and an undeclared
+`orphan.rs` (on disk, declared by nobody, must not appear). Mutation-checked —
+restoring the old two-prefix strip:
+
+```
+test theme::tests::the_module_graph_probe_reads_every_way_a_module_can_be_declared ... FAILED
+supered.rs is declared but the probe missed it:
+  ["bare/mod.rs", "crated.rs", "gated.rs", "lib.rs", "plain/nested.rs", "plain.rs"]
+```
+
+Six of nine found: `pub(super)`, `pub(in …)` and `#[path]` all lost.
+
+### Fix-round gates
+
+All five re-run from `rust/`. `orc-app` lib tests 99 → 101 (the two new gate
+tests). No behaviour changed in this round — the only non-doc, non-test change is
+the exemption predicate — and no golden moved.
+
