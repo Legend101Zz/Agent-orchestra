@@ -295,9 +295,19 @@ this because the board was only read when a pane spoke; #49's board watcher
 reads it the moment the file changes, which is exactly that window. The
 watermark now moves only once there is a wire to aim at.
 
-**Still open, and it needs `orc-daemon`.** `task_board` truncates
-`TaskSummary.history` to the last eight entries and the watermark is a length
-into that window, so a task with more than eight durable entries stops
-animating altogether. Adding the completion event brings a full contracted
-lifecycle to nine. The fix is a total-length field the daemon populates;
-`orc-daemon` was outside #49's allowed paths.
+**Still open — and the fix does *not* need `orc-daemon`, contrary to what this
+entry first said.** `task_board` truncates `TaskSummary.history` to the last
+eight entries and the watermark is a length into that window, so once a task's
+real history passes eight, `history.len()` pins at 8, `seen` pins at 8, and
+`skip(seen)` on an 8-element window is empty forever: every later event is
+silently unanimated, including `execution_succeeded` itself. Adding the
+completion event brings a full contracted lifecycle to nine.
+
+The watermark is `StageState::seen_history` — `orc-app`, inside #49's allowed
+paths — and it is a *length* by choice, not by necessity. Anchoring it on the
+last-seen entry's identity (`at`/`actor`/`action`/`to`) and locating that in
+the current window, or keeping the window's entry identities and raising the
+set difference, both fix it without touching the daemon and both survive a
+sliding window. A daemon-side total-length field would be cleaner still, but
+it is not what makes the fix possible. Deferred to its own issue on scope,
+not on impossibility.

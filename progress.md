@@ -2157,7 +2157,9 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 - **Left open, reported on the issue:** `orc-daemon` truncates a task's history
   to the last eight entries and `note_task_events`' watermark is a length into
   that window, so a task past eight entries stops animating; adding the
-  completion event brings a full contracted lifecycle to nine. The fix needs a
-  field the daemon populates, and `orc-daemon` is outside #49's allowed paths.
+  completion event brings a full contracted lifecycle to nine. Corrected in
+  review: the fix does **not** need `orc-daemon` — the watermark is `orc-app`'s
+  own `seen_history` and a content-anchored one fixes it inside the allowed
+  paths. Deferred on scope, not impossibility.
 - **Next:** review, then phase 2 (incremental progress persistence) once
   Decision 1 has an answer.
