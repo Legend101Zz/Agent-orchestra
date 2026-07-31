@@ -46,7 +46,10 @@ Long projects fail when humans and agents lose track of what exists and why.
 Hard rules:
 
 - **One issue = one branch = one merge.** No drive-by changes outside the
-  contract's allowed paths.
+  contract's allowed paths — with one standing exception: the four process
+  files below (`progress.md`, `task_plan.md`, `findings.md`, and `LOG.md`) are
+  always in scope, because this document requires updating them. An allowed-path
+  list fences code, not the record.
 - **`progress.md`** is the running session log: date, actor, issue, what
   was done, what's next. Append, never rewrite history.
 - **`task_plan.md`** maps the V1 program to issues and tracks phase status.
