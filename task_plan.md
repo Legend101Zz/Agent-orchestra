@@ -39,7 +39,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ merged 2026-07-31, PR #50 · **phases 2–3 still open**) |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (🔨 **next** — defect 1 is live on `main`) |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (👀 pushed 2026-07-31, `issue-51-board-honesty` — all three fixed, awaiting review) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
@@ -50,7 +50,38 @@ record. (Issue numbers are filled in as issues are created.)
 (README) is the last original V1 item and all that stands between here and
 launch.**
 
-**Next is #51, and it is not optional sequencing.** #49 phase 1 merged with its
+**#51 is pushed (2026-07-31, `issue-51-board-honesty`) — all three defects, one
+branch, awaiting review.** Defect 1's cliff is closed at the seam rather than at
+the client: `TaskSummary` gains `history_total`, the watermark becomes an
+absolute index, and `orc_proto::TASK_HISTORY_WINDOW` is the named constant whose
+doc says what depends on it — which is now *less* than before, because the client
+is window-size-agnostic by construction. The daemon field was chosen over the
+client-side anchor #49's review correctly identified, on merit and not on
+impossibility: it is exact, survives any window size, and does not depend on
+entry identity being unique within a second (`now_iso` is second-granularity, so
+a retry inside one second can collide). Defect 2's fork was decided by
+measurement — the issue's "any process that merely lists dispatches" is three
+enumerable processes, all of which already write the board, and a TUI refresh is
+not among them; option (ii) fails because `orc-mcp` has no daemon at all and
+option (iii) is defeated by `seed_task_events`. The append lives in
+`reconcile_record` behind its existing guards, best-effort, deduplicated inside
+the board lock on the dispatch id. Defect 3's linkage was never unavailable —
+`spec.confirmed_link` was in scope five lines from where the review branch threw
+it away; `Task.reviewer_run` plus `circuit::Lane` now aim each message at its own
+worker. Five gates green, 348 passed / 0 failed against `origin/main`'s 337, with
+an interleaved three-round A/B showing 0 `orc-cli` quota failures on either tree.
+Fifteen mutations, fifteen caught — two of which produced new tests because the
+guarantee turned out to be held by nothing. **Carried out and reported rather
+than fixed:** `tasks::lock_board` has no stale reclaim, so a process SIGKILLed
+while holding `.board.lock` wedges that session's board for ever — the
+self-referential case being a supervisor killed inside `append_execution`, whose
+own orphan event then cannot land. `spawn_guard::lock_slots` already solved this;
+porting it is ~30 lines but it is the core locking primitive for every board
+writer and needs its own change. Also out of allowed paths: a
+`pio dispatch reconcile` operator verb, and `orch::status`'s read-then-list
+ordering. Evidence: `docs/notes/2026-07-31-issue-51-board-honesty.md`.
+
+**Originally, before it was picked up: #51 is not optional sequencing.** #49 phase 1 merged with its
 own review fully discharged, but it carried out three defects it was not
 allowed to fix — and one of them is now *live on `main`*: the daemon truncates
 `TaskSummary.history` to the last eight entries while `note_task_events`'

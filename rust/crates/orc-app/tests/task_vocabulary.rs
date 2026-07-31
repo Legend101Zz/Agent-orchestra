@@ -18,7 +18,7 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use orc_app::circuit::{Direction, Outcome, message_for};
+use orc_app::circuit::{Direction, Lane, Outcome, lane_for, message_for};
 use orc_core::bench::{BenchSession, write_session};
 use orc_core::tasks::{
     NewTask, TaskActor, add_task, assign_task, done_task, drop_task, record_delivery,
@@ -216,10 +216,16 @@ fn a_delivery_receipt_travels_out_and_only_a_finished_worker_comes_back() {
 /// an action, and missing `dropped` because it records its own word rather
 /// than a transition. A new action in `orc-core` should land here as a
 /// deliberate row.
+/// `(action, to, classification, lane)`. The lane says which of a reviewed
+/// task's two workers the entry is about, which is what `note_task_events`
+/// reads to choose between `assignee_run` and `reviewer_run` (issue #51
+/// defect 3). Silent rows carry a lane too: `lane_for` is total, and a word
+/// STAGE does not animate still belongs to somebody.
 type Row = (
     &'static str,
     Option<&'static str>,
     Option<(Direction, Outcome)>,
+    Lane,
 );
 
 const VOCABULARY: &[Row] = &[
@@ -228,11 +234,13 @@ const VOCABULARY: &[Row] = &[
         "assigned",
         None,
         Some((Direction::Outbound, Outcome::Dispatched)),
+        Lane::Executor,
     ),
     (
         "reassigned",
         None,
         Some((Direction::Outbound, Outcome::Dispatched)),
+        Lane::Executor,
     ),
     // Outbound, landing: the worker took the brief and started. Written at
     // `command.spawn()`, which is why issue #49 reclassified it — it used to
@@ -242,83 +250,143 @@ const VOCABULARY: &[Row] = &[
         "delivery_confirmed",
         None,
         Some((Direction::Outbound, Outcome::Confirmed)),
+        Lane::Executor,
     ),
     (
         "review_delivery_confirmed",
         None,
         Some((Direction::Outbound, Outcome::Confirmed)),
+        Lane::Reviewer,
     ),
     // Inbound, confirmed: the worker finished and its answer is durable.
     (
         "execution_succeeded",
         None,
         Some((Direction::Inbound, Outcome::Confirmed)),
+        Lane::Executor,
     ),
     (
         "review_execution_succeeded",
         None,
         Some((Direction::Inbound, Outcome::Confirmed)),
+        Lane::Reviewer,
     ),
     (
         "moved",
         Some("done"),
         Some((Direction::Inbound, Outcome::Confirmed)),
+        Lane::Executor,
     ),
     // Inbound, failed.
     (
         "execution_failed",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
     ),
     (
         "review_execution_failed",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Reviewer,
     ),
     (
         "delivery_failed",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
     ),
     (
         "review_delivery_failed",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Reviewer,
     ),
     (
         "dropped",
         Some("dropped"),
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
     ),
     (
         "merge_conflict",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
     ),
     (
         "isolation_unavailable",
         None,
         Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
+    ),
+    // Issue #51 defect 2. `Failed` on the wire, and deliberately not
+    // `execution_failed` on the board: a supervisor that died mid-flight took
+    // the answer with it, so nobody knows whether the work succeeded. STAGE
+    // has three outcome slots and this is the honest one of the three — what
+    // came back is that nothing is coming back.
+    (
+        "execution_orphaned",
+        None,
+        Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Executor,
+    ),
+    (
+        "review_execution_orphaned",
+        None,
+        Some((Direction::Inbound, Outcome::Failed)),
+        Lane::Reviewer,
     ),
     // Silent, each for a stated reason.
-    ("created", Some("backlog"), None),
-    ("isolated", None, None),
-    ("report_persisted", None, None),
-    ("delivery_queued", None, None),
-    ("merged", None, None),
-    ("moved", Some("running"), None),
-    ("moved", Some("review"), None),
-    ("moved", None, None),
+    ("created", Some("backlog"), None, Lane::Executor),
+    ("isolated", None, None, Lane::Executor),
+    ("report_persisted", None, None, Lane::Executor),
+    ("delivery_queued", None, None, Lane::Executor),
+    ("merged", None, None, Lane::Executor),
+    ("moved", Some("running"), None, Lane::Executor),
+    ("moved", Some("review"), None, Lane::Executor),
+    ("moved", None, None, Lane::Executor),
 ];
 
 #[test]
 fn every_action_the_board_writes_has_a_decided_classification() {
-    for (action, to, want) in VOCABULARY {
+    for (action, to, want, lane) in VOCABULARY {
         assert_eq!(
             message_for(action, *to),
             *want,
             "action {action:?} to {to:?}"
         );
+        assert_eq!(lane_for(action), *lane, "action {action:?} lane");
+    }
+}
+
+#[test]
+fn every_word_the_reviewer_branch_writes_is_in_the_reviewer_lane() {
+    // Issue #51 defect 3. `dispatch_supervisor` picks its reviewer branch with
+    // `record.is_review()` and writes exactly these five words; every one of
+    // them must aim at `reviewer_run` rather than at the executor's pane. A
+    // sixth added in `orc-core` and forgotten here would silently fly down the
+    // executor's wire again, which is the defect.
+    for action in [
+        "review_delivery_confirmed",
+        "review_delivery_failed",
+        "review_execution_succeeded",
+        "review_execution_failed",
+        "review_execution_orphaned",
+    ] {
+        assert_eq!(lane_for(action), Lane::Reviewer, "{action:?}");
+        assert!(
+            VOCABULARY.iter().any(|(word, ..)| *word == action),
+            "{action:?} is missing from the vocabulary table"
+        );
+    }
+    // And the executor's own words are not swept in by a prefix rule.
+    for action in [
+        "execution_orphaned",
+        "execution_failed",
+        "delivery_confirmed",
+    ] {
+        assert_eq!(lane_for(action), Lane::Executor, "{action:?}");
     }
 }
 
@@ -757,6 +825,240 @@ fn a_worker_that_dies_after_taking_the_brief_comes_back_failed() {
             .expect("something animates"),
         (Direction::Inbound, Outcome::Failed),
         "and it comes home as a failure: {words:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- Issue #51 defect 3: the reviewer's wire ---------------------------------
+
+/// A registry with two capable workers of *different* adapter families, which
+/// is what `report::choose_reviewer` requires before it will call a review
+/// independent.
+fn reviewed_registry(root: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let mut registry = orc_core::bench::HarnessRegistry::default();
+    for config in registry.harnesses.values_mut() {
+        config.roles.retain(|role| role == "brain");
+    }
+    for (key, family) in [
+        ("exec-worker", "exec-family"),
+        ("review-worker", "review-family"),
+    ] {
+        let script = bin.join(format!("{key}.sh"));
+        // The reviewer's brief asks for JSON verdicts; the executor's does not.
+        // Both exit 0, which is what makes the dispatch `succeeded`.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncase \"$*\" in\n  *\"Acceptance checks:\"*)\n    echo '{\"verdicts\":[{\"check\":\"it exists\",\"verdict\":\"pass\",\"evidence\":\"fixture\"}]}'\n    ;;\n  *)\n    echo 'worker done'\n    ;;\nesac\nexit 0\n",
+        )
+        .expect("write worker");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        registry.harnesses.insert(
+            key.to_owned(),
+            orc_core::bench::HarnessConfig {
+                command: "/bin/sh".to_owned(),
+                args: vec![script.to_string_lossy().into_owned()],
+                resume_args: Vec::new(),
+                roles: vec!["worker".to_owned()],
+                adapter: family.to_owned(),
+                dispatch_args: vec!["--oneshot".to_owned()],
+                dispatch_uses_stdin: false,
+                dispatch_timeout_sec: 30,
+                extra: Default::default(),
+            },
+        );
+    }
+    registry.default_workers = vec!["exec-worker".to_owned()];
+    orc_core::bench::write_harness_registry(&registry).expect("write registry");
+}
+
+#[test]
+fn a_real_review_links_the_reviewers_pane_and_leaves_the_executors_alone() {
+    // Issue #51 defect 3, acceptance check 7, driven through the real
+    // `orch::review` the CLI and the MCP server both call — not a hand-built
+    // board.
+    //
+    // `record_review_delivery` used to take a bare `confirmed: bool` and throw
+    // the reviewer's link away, on the reasoning that writing it would clobber
+    // the executor's. It would have: there was only one linkage field. So the
+    // task's single run link stayed the executor's pane, `note_task_events`
+    // aimed every classified entry at it, and a reviewer seated in a different
+    // pane had its brief and its verdict drawn crossing the executor's
+    // connector.
+    //
+    // The board now records both, and this is what proves the two are really
+    // different panes on a real dispatch rather than by construction in a test
+    // fixture.
+    let _guard = lock();
+    let root = temp_session("reviewed-delegation");
+
+    // A git repo for the session cwd: a contracted task isolates itself, and
+    // `render_review_brief` refuses to build a brief without a worktree.
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "review@example.invalid"]);
+    git(&["config", "user.name", "Review Test"]);
+    std::fs::write(repo.join("README.md"), "fixture\n").expect("seed repo");
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "fixture"]);
+
+    reviewed_registry(&root);
+    let mut session = orc_core::bench::create_session(
+        "claude",
+        &["exec-worker".to_owned(), "review-worker".to_owned()],
+        &repo,
+    )
+    .expect("create session");
+    let session_id = session.id.clone();
+    let executor_pane = format!("{session_id}-worker-1");
+    let reviewer_pane = format!("{session_id}-worker-2");
+    for (id, harness) in [
+        (executor_pane.clone(), "exec-worker"),
+        (reviewer_pane.clone(), "review-worker"),
+    ] {
+        session.panes.push(orc_core::bench::SessionPaneRecord {
+            id,
+            harness: harness.to_owned(),
+            role: "worker".to_owned(),
+            state: "running".to_owned(),
+            pid: None,
+            down_at: None,
+            extra: Default::default(),
+        });
+    }
+    write_session(&session).expect("seat both panes");
+
+    let delegated = orc_core::orch::delegate(orc_core::orch::DelegateRequest {
+        session: session_id.clone(),
+        harness: "exec-worker".to_owned(),
+        task: None,
+        title: Some("do the work".to_owned()),
+        description: None,
+        depends_on: Vec::new(),
+        isolate: true,
+        contract: Some(orc_core::contract::TaskContract {
+            objective: "The thing exists.".to_owned(),
+            allowed_paths: vec!["README.md".to_owned()],
+            forbidden: vec!["no new dependencies".to_owned()],
+            acceptance_checks: vec!["it exists".to_owned()],
+            // Pin the reviewer so "it picked a different pane" is a claim
+            // about linkage, not about `choose_reviewer`'s preference order.
+            reviewer: Some("review-worker".to_owned()),
+            ..Default::default()
+        }),
+        prompt: Some("do the work".to_owned()),
+        pane: None,
+        run: None,
+        timeout_sec: None,
+        actor: orc_core::orch::OrchActor::Brain,
+    })
+    .expect("delegate a contracted task");
+    let task_id = delegated.tasks[0].id.clone();
+
+    // Wait on the executor's **dispatch record**, not on the board.
+    //
+    // `orch::review` gates on the record being terminal and `succeeded`, and
+    // `append_execution` deliberately writes the board *before* `write_dispatch`
+    // (#50, so that "the dispatch is terminal" implies "the board has been
+    // told"). That ordering means the converse does not hold: there is a real
+    // window where the board already says `execution_succeeded` and the record
+    // is not terminal yet. Polling the board for it and then calling `review`
+    // raced that window and failed 1 run in 10 with "executor has not completed
+    // successfully" — a defect in this test, not in the code under it, and a
+    // neat demonstration of the ordering guarantee's exact shape.
+    //
+    // `orch::await_delegation` is what a real conductor calls here, and it
+    // waits on the thing `review` actually reads.
+    let awaited = orc_core::orch::await_delegation(orc_core::orch::AwaitRequest {
+        session: session_id.clone(),
+        task: task_id.clone(),
+        timeout_sec: Some(30),
+        poll_interval_ms: Some(20),
+    })
+    .expect("await the executor");
+    assert_eq!(
+        awaited.dispatches[0].execution_status.as_deref(),
+        Some("succeeded"),
+        "the executor must really have finished before a review is dispatched: {:?}",
+        awaited.dispatches[0]
+    );
+
+    let reviewed = orc_core::orch::review(orc_core::orch::TaskRef {
+        session: session_id.clone(),
+        task: task_id.clone(),
+        actor: orc_core::orch::OrchActor::Brain,
+    })
+    .expect("review through the real verb");
+    assert_eq!(
+        reviewed.dispatches[0].pane_id.as_deref(),
+        Some(reviewer_pane.as_str()),
+        "the review dispatch selected the seated reviewer pane, unasked"
+    );
+
+    let task = poll_task(&session_id, &task_id, |task| {
+        task.history
+            .iter()
+            .any(|entry| entry.action == "review_delivery_confirmed")
+    });
+
+    // 1. Two links, two panes.
+    assert_eq!(
+        task.assignee_run.as_deref(),
+        Some(executor_pane.as_str()),
+        "the executor's link is untouched by the review: {:?}",
+        trace(&task)
+    );
+    assert_eq!(
+        task.reviewer_run.as_deref(),
+        Some(reviewer_pane.as_str()),
+        "and the reviewer has one of its own: {:?}",
+        trace(&task)
+    );
+    assert_ne!(
+        task.assignee_run, task.reviewer_run,
+        "a review that lands on the executor's pane is the whole defect"
+    );
+
+    // 2. Every review word is in the reviewer's lane, and nothing else is —
+    //    which is what `note_task_events` reads to pick between the two links.
+    for entry in &task.history {
+        let expected = if entry.action.starts_with("review_") {
+            Lane::Reviewer
+        } else {
+            Lane::Executor
+        };
+        assert_eq!(
+            lane_for(&entry.action),
+            expected,
+            "action {:?} belongs to the {:?} lane",
+            entry.action,
+            expected
+        );
+    }
+    assert!(
+        task.history
+            .iter()
+            .any(|entry| lane_for(&entry.action) == Lane::Reviewer
+                && message_for(&entry.action, entry.to.as_deref()).is_some()),
+        "a real review really does produce animated reviewer traffic: {:?}",
+        trace(&task)
     );
 
     let _ = std::fs::remove_dir_all(&root);
