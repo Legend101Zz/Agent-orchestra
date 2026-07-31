@@ -4,6 +4,7 @@ pub mod contract;
 pub mod control;
 pub mod discovery;
 pub mod dispatch;
+pub mod dispatch_progress;
 pub mod dispatch_supervisor;
 pub mod harness_models;
 pub mod inbox;

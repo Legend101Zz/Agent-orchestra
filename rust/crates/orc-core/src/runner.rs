@@ -194,6 +194,20 @@ pub fn extract_adapter_event<'a>(
     }
 }
 
+/// Whether [`extract_adapter_event`] extracts anything for this adapter.
+///
+/// Sited immediately beside it so the pair cannot drift, and pinned to it by a
+/// test rather than by a reviewer's memory: issue #49 phase 2 declares this on
+/// the durable dispatch record *before any byte exists*, so that a reader is
+/// told up front whether the progress log can be turned into prose or is only
+/// ever bytes. AGENTS.md's rule is that an unavailable capability is stated,
+/// not hidden — an empty answer must be distinguishable from an absent
+/// extractor.
+#[must_use]
+pub fn has_extractor(adapter: &str) -> bool {
+    adapter == "pi"
+}
+
 fn write_rpc_prompt(stdin: &mut ChildStdin, message: &str) -> Result<()> {
     serde_json::to_writer(
         &mut *stdin,

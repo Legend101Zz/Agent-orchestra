@@ -13,6 +13,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,9 +23,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::dispatch::{
-    DeliveryStatus, DispatchFailureKind, ExecutionStatus, MAX_CAPTURED_BYTES, TRUNCATION_MARKER,
-    kind_label, read_dispatch_unreconciled, supervisor_spec_path, write_dispatch,
+    DeliveryStatus, DispatchFailureKind, DispatchProgress, ExecutionStatus, MAX_CAPTURED_BYTES,
+    PROGRESS_LOG_MAX_BYTES, ProgressPaths, TRUNCATION_MARKER, kind_label, progress_paths,
+    read_dispatch_unreconciled, supervisor_spec_path, write_dispatch,
 };
+use crate::dispatch_progress::{CloseReason, ProgressJournal, ProgressLog, StreamCounters};
 use crate::invocation::Invocation;
 use crate::ratelimit::{self, BackoffPolicy};
 use crate::registry::{atomic_write_json, now_iso};
@@ -202,10 +205,18 @@ struct Captured {
     dropped: usize,
     answer: String,
     usage: Option<Usage>,
+    /// Every byte read from the pipe, including what the window later drops.
+    /// Exact and monotone, unlike anything derivable from `head`/`tail`, which
+    /// is why issue #49 phase 2's journal reports these rather than a length.
+    bytes: u64,
+    /// Complete newline-terminated lines read.
+    lines: u64,
 }
 
 impl Captured {
     fn push(&mut self, chunk: &[u8]) {
+        self.bytes += chunk.len() as u64;
+        self.lines += 1;
         let mut chunk = chunk;
         if self.head.len() < HEAD_BYTES {
             let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
@@ -260,17 +271,51 @@ impl Captured {
 struct Drain {
     captured: Arc<Mutex<Captured>>,
     handle: thread::JoinHandle<()>,
+    /// Bytes this stream's progress log holds, published by the drain thread.
+    ///
+    /// The log lives inside the drain thread — it is written there and never
+    /// shared — so its length has to come back out somehow, and an atomic is
+    /// the cheapest way that does not put the log behind the capture's mutex.
+    kept: Arc<AtomicU64>,
 }
 
 impl Drain {
     fn finish(self) -> StreamResult {
-        let Self { captured, handle } = self;
+        let Self {
+            captured, handle, ..
+        } = self;
         let _ = handle.join();
         capture_result(&captured)
     }
 
     fn snapshot(&self) -> StreamResult {
         capture_result(&self.captured)
+    }
+
+    /// A non-consuming, non-joining read of five integers (issue #49 phase 2).
+    ///
+    /// Deliberately **not** [`Drain::snapshot`], which goes through
+    /// `Captured::result` → `raw()` and so allocates a 16 KiB `String` and runs
+    /// two `from_utf8_lossy` passes while holding the mutex the drain thread
+    /// takes once per line. This is what the supervisor's wait loop calls
+    /// several times a second; `snapshot` stays exactly as it is, for the
+    /// timeout branch that needs the text.
+    ///
+    /// `kept` comes from the log itself rather than from the capture, because
+    /// they diverge: the in-memory window slides while the log freezes at its
+    /// cap.
+    fn counters(&self) -> StreamCounters {
+        let read = |slot: &Captured| (slot.bytes, slot.lines, slot.dropped as u64);
+        let (bytes, lines, dropped) = self
+            .captured
+            .lock()
+            .map_or_else(|poisoned| read(&poisoned.into_inner()), |slot| read(&slot));
+        StreamCounters {
+            bytes,
+            lines,
+            dropped,
+            kept: self.kept.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 }
 
@@ -291,9 +336,15 @@ struct StreamResult {
 /// Drain one stream to EOF on its own thread while retaining a bounded raw
 /// head+tail window and, for adapters with a proven extractor, only the
 /// assistant answer plus exact usage.
-fn drain_to_eof<R: std::io::Read + Send + 'static>(reader: R, adapter: Option<String>) -> Drain {
+fn drain_to_eof<R: std::io::Read + Send + 'static>(
+    reader: R,
+    adapter: Option<String>,
+    mut log: ProgressLog,
+) -> Drain {
     let captured = Arc::new(Mutex::new(Captured::default()));
     let sink = Arc::clone(&captured);
+    let kept = Arc::new(AtomicU64::new(0));
+    let published = Arc::clone(&kept);
     let handle = thread::spawn(move || {
         let mut reader = BufReader::new(reader);
         loop {
@@ -301,6 +352,13 @@ fn drain_to_eof<R: std::io::Read + Send + 'static>(reader: R, adapter: Option<St
             match reader.read_until(b'\n', &mut line) {
                 Ok(0) => break,
                 Ok(_) => {
+                    // Mirror before taking the capture's lock. Issue #49 phase
+                    // 2: this is the whole of "durable before it exits", and it
+                    // is the only work added to the thread whose job is to keep
+                    // the pipe empty — measured free, 20k lines through a real
+                    // pipe took the same time mirrored or not.
+                    log.append(&line);
+                    published.store(log.kept(), std::sync::atomic::Ordering::Relaxed);
                     let Ok(mut slot) = sink.lock() else { break };
                     slot.push(&line);
                     slot.inspect_event(adapter.as_deref(), &line);
@@ -310,7 +368,11 @@ fn drain_to_eof<R: std::io::Read + Send + 'static>(reader: R, adapter: Option<St
             }
         }
     });
-    Drain { captured, handle }
+    Drain {
+        captured,
+        handle,
+        kept,
+    }
 }
 
 struct Invoked {
@@ -324,12 +386,57 @@ struct Invoked {
 
 type InvokeFailure = Box<(DispatchFailureKind, Option<Invoked>)>;
 
+/// Open this attempt's three progress artifacts (issue #49 phase 2).
+///
+/// Called immediately after `spawn` and **before** `on_started`, so that a
+/// failed delivery handshake still leaves whatever the worker managed to say.
+/// The logs are created empty here rather than on first write, which is what
+/// makes "present and zero-length" mean *we looked and there was nothing yet*
+/// and "absent" mean *this supervisor is not streaming*.
+fn open_progress(
+    spec: &SupervisorSpec,
+    attempt: u32,
+) -> (
+    ProgressPaths,
+    ProgressLog,
+    ProgressLog,
+    ProgressJournal,
+    Vec<String>,
+) {
+    let paths = progress_paths(&spec.session, &spec.dispatch, attempt);
+    let mut warnings = Vec::new();
+    if let Some(parent) = paths.journal.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let (stdout_log, stdout_warning) = ProgressLog::create(&paths.stdout_log);
+    let (stderr_log, stderr_warning) = ProgressLog::create(&paths.stderr_log);
+    let extractable = crate::runner::has_extractor(&spec.adapter);
+    let (journal, journal_warning) =
+        ProgressJournal::open(&paths.journal, attempt, &spec.adapter, extractable);
+    warnings.extend(
+        [stdout_warning, stderr_warning, journal_warning]
+            .into_iter()
+            .flatten(),
+    );
+    (paths, stdout_log, stderr_log, journal, warnings)
+}
+
+/// The counters for both streams right now, for a journal frame.
+fn counters_of(stdout: Option<&Drain>, stderr: Option<&Drain>) -> (StreamCounters, StreamCounters) {
+    (
+        stdout.map(Drain::counters).unwrap_or_default(),
+        stderr.map(Drain::counters).unwrap_or_default(),
+    )
+}
+
 fn invoke_harness<F>(
     spec: &SupervisorSpec,
+    attempt: u32,
+    attempts: u32,
     mut on_started: F,
 ) -> std::result::Result<Invoked, InvokeFailure>
 where
-    F: FnMut(u32) -> Result<()>,
+    F: FnMut(u32, DispatchProgress) -> Result<()>,
 {
     let mut command = Command::new(&spec.program);
     command.args(&spec.invocation.args);
@@ -350,11 +457,27 @@ where
     let mut child = command
         .spawn()
         .map_err(|_| Box::new((DispatchFailureKind::MissingExecutable, None)))?;
+    let (paths, stdout_log, stderr_log, mut journal, progress_warnings) =
+        open_progress(spec, attempt);
+    let progress = DispatchProgress {
+        attempt,
+        attempts,
+        stdout_log: file_name_of(&paths.stdout_log),
+        stderr_log: file_name_of(&paths.stderr_log),
+        journal: file_name_of(&paths.journal),
+        adapter: spec.adapter.clone(),
+        extractable: crate::runner::has_extractor(&spec.adapter),
+        log_max_bytes: PROGRESS_LOG_MAX_BYTES as u64,
+        extra: Default::default(),
+    };
     let stdout_drain = child
         .stdout
         .take()
-        .map(|stdout| drain_to_eof(stdout, Some(spec.adapter.clone())));
-    let stderr_drain = child.stderr.take().map(|stderr| drain_to_eof(stderr, None));
+        .map(|stdout| drain_to_eof(stdout, Some(spec.adapter.clone()), stdout_log));
+    let stderr_drain = child
+        .stderr
+        .take()
+        .map(|stderr| drain_to_eof(stderr, None, stderr_log));
     if spec.invocation.uses_stdin()
         && let Some(mut stdin) = child.stdin.take()
     {
@@ -362,17 +485,25 @@ where
         let _ = stdin.flush();
         drop(stdin);
     }
-    if on_started(child.id()).is_err() {
+    if on_started(child.id(), progress).is_err() {
         let _ = child.kill();
         let _ = child.wait();
+        // The handshake failed, but the worker may already have spoken. Close
+        // the journal from this thread so the artifacts are complete on an
+        // exit path that never reaches the wait loop.
+        let (out, err) = counters_of(stdout_drain.as_ref(), stderr_drain.as_ref());
+        journal.close(CloseReason::HandshakeFailed, out, err);
         return Err(Box::new((DispatchFailureKind::HarnessError, None)));
     }
+    let _ = progress_warnings;
 
     let timeout = Duration::from_secs(spec.timeout_sec);
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let (out, err) = counters_of(stdout_drain.as_ref(), stderr_drain.as_ref());
+                journal.close(CloseReason::Eof, out, err);
                 let stdout = stdout_drain.map(Drain::finish).unwrap_or_default();
                 let stderr = stderr_drain.map(Drain::finish).unwrap_or_default();
                 return Ok(Invoked {
@@ -388,6 +519,8 @@ where
                 if started.elapsed() >= timeout {
                     crate::runner::terminate_pid(child.id());
                     let _ = child.wait();
+                    let (out, err) = counters_of(stdout_drain.as_ref(), stderr_drain.as_ref());
+                    journal.close(CloseReason::Timeout, out, err);
                     let stdout = stdout_drain
                         .as_ref()
                         .map(Drain::snapshot)
@@ -408,11 +541,19 @@ where
                         }),
                     )));
                 }
+                // Gate A and gate B live inside `note`: it writes only if a
+                // counter moved and only if the floor has elapsed. Calling it
+                // on every 25 ms tick is therefore not a 40 Hz cadence — a
+                // silent worker produces no write at all.
+                let (out, err) = counters_of(stdout_drain.as_ref(), stderr_drain.as_ref());
+                journal.note(out, err);
                 thread::sleep(
                     Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())),
                 );
             }
             Err(_) => {
+                let (out, err) = counters_of(stdout_drain.as_ref(), stderr_drain.as_ref());
+                journal.close(CloseReason::WaitError, out, err);
                 return Err(Box::new((DispatchFailureKind::HarnessError, None)));
             }
         }
@@ -435,11 +576,19 @@ fn invoke_with_backoff<F>(
     mut on_started: F,
 ) -> BackedOff
 where
-    F: FnMut(u32) -> Result<()>,
+    F: FnMut(u32, DispatchProgress) -> Result<()>,
 {
     let warnings = RefCell::new(Vec::new());
+    // `ratelimit::run_with_backoff` exposes no attempt ordinal, and issue #49
+    // phase 2 needs one: every attempt gets its own progress files, so that a
+    // rate-limited attempt's bytes are neither deleted nor silently spliced
+    // onto the next attempt's. Which attempt produced which bytes becomes a
+    // fact of the filesystem rather than a marker a reader has to notice.
+    let attempts = std::cell::Cell::new(0_u32);
     let attempt = || -> std::result::Result<Invoked, AttemptError> {
-        match invoke_harness(spec, &mut on_started) {
+        let ordinal = attempts.get() + 1;
+        attempts.set(ordinal);
+        match invoke_harness(spec, ordinal, ordinal, &mut on_started) {
             Ok(invoked) if invoked.success => Ok(invoked),
             Ok(invoked) => {
                 let combined = format!("{}\n{}", invoked.raw_stdout, invoked.stderr);
@@ -488,13 +637,25 @@ where
     }
 }
 
-fn mark_started(spec: &SupervisorSpec, worker_pid: u32) -> Result<()> {
+/// The file's own name, for the durable record's relative pointer.
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn mark_started(spec: &SupervisorSpec, worker_pid: u32, progress: DispatchProgress) -> Result<()> {
     let mut record = read_dispatch_unreconciled(&spec.session, &spec.dispatch)?;
     let first_delivery = !record.is_confirmed();
     record.status = DeliveryStatus::Confirmed.as_str().to_owned();
     record.execution_status = Some(ExecutionStatus::Running.as_str().to_owned());
     record.supervisor_pid = Some(std::process::id());
     record.worker_pid = Some(worker_pid);
+    // Rides the write that already happens here, so the pointer costs no extra
+    // fsync. It is discoverability only — `dispatch::progress_paths` derives
+    // the same paths without reading anything, which is what a reader should
+    // rely on, because `write_dispatch` takes no lock.
+    record.progress = Some(progress);
     record.started_at.get_or_insert_with(now_iso);
     record.updated_at = now_iso();
     write_dispatch(&record)?;
@@ -658,8 +819,9 @@ pub fn execute(path: &Path) -> Result<i32> {
     write_dispatch(&record)?;
 
     let policy: BackoffPolicy = spec.policy.clone().into();
-    let backed_off =
-        invoke_with_backoff(&spec, &policy, |worker_pid| mark_started(&spec, worker_pid));
+    let backed_off = invoke_with_backoff(&spec, &policy, |worker_pid, progress| {
+        mark_started(&spec, worker_pid, progress)
+    });
     let code = persist_terminal(&spec, backed_off.result, backed_off.warnings)?;
 
     drop(leases);

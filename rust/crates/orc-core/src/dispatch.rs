@@ -48,6 +48,19 @@ pub const MAX_CAPTURED_BYTES: usize = 16 * 1024;
 /// never reads as a complete one.
 pub const TRUNCATION_MARKER: &str = "\n… [truncated by pi-orchestra]";
 
+/// Bytes of one worker stream mirrored verbatim per attempt before the live
+/// progress log stops growing (issue #49 phase 2).
+///
+/// Sixteen times [`MAX_CAPTURED_BYTES`], and the multiplier is the argument
+/// rather than a taste. `MAX_CAPTURED_BYTES` bounds a JSON *record* that
+/// `orch await` re-reads and re-parses up to 600 times per await; a `.log` no
+/// listing opens has no such reader, so the only thing needing a bound here is
+/// disk. Sixteen buys recency — a whole realistic run fits — while keeping the
+/// pathological case structural rather than a matter of policy: a worker
+/// emitting flat out fills this in tens of milliseconds and then costs nothing
+/// for the rest of its life.
+pub const PROGRESS_LOG_MAX_BYTES: usize = 16 * MAX_CAPTURED_BYTES;
+
 /// Outcome of one recorded dispatch invocation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -230,6 +243,46 @@ pub enum DispatchFailureKind {
     HarnessError,
 }
 
+/// Where one attempt's live progress artifacts are, and what they can be
+/// turned into (issue #49 phase 2).
+///
+/// **Absent means this supervisor is not streaming** — a record written before
+/// phase 2, a dispatch that never reached spawn, or a progress open that
+/// failed. A reader must render that as "progress unavailable", never as "the
+/// worker is silent". **Present, with zero-length logs, means the opposite**
+/// and is the point of creating the files at spawn: the supervisor looked and
+/// there was nothing yet. Those are different facts and the durable record
+/// keeps them apart.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DispatchProgress {
+    /// 1-based ordinal of the attempt these paths belong to.
+    pub attempt: u32,
+    /// How many attempts have been started so far. Every earlier attempt's
+    /// files are still on disk under its own ordinal; nothing is replaced.
+    pub attempts: u32,
+    /// Verbatim worker stdout for this attempt, relative to the dispatch
+    /// directory.
+    pub stdout_log: String,
+    /// Verbatim worker stderr for this attempt.
+    pub stderr_log: String,
+    /// Orchestrator-owned counters for this attempt.
+    pub journal: String,
+    /// Adapter the mirrored bytes came from.
+    pub adapter: String,
+    /// Whether [`crate::runner::extract_adapter_event`] actually extracts prose
+    /// for `adapter`. `false` is a durable "we can only offer you bytes", not a
+    /// capability hidden because it was never probed.
+    pub extractable: bool,
+    /// Bytes of one stream this attempt will mirror before its log stops
+    /// growing. Carried so that a reader seeing a log of exactly this length
+    /// knows it is **capped**, not **quiet** — two facts a bare file length
+    /// cannot tell apart.
+    pub log_max_bytes: u64,
+    /// Unknown future fields.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// Plain additive durable dispatch record.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DispatchRecord {
@@ -296,6 +349,14 @@ pub struct DispatchRecord {
     /// Exact structured usage extracted from a supported adapter transport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Live progress artifacts for the newest attempt (issue #49 phase 2).
+    ///
+    /// Discoverability only — [`progress_paths`] derives the same paths from
+    /// (session, id, attempt) without reading anything, which is what a reader
+    /// should rely on. Written by the record writes that already happen, so
+    /// this field costs no extra `fsync`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<DispatchProgress>,
     /// Timestamp when the first worker received the brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
@@ -419,6 +480,43 @@ pub fn dispatch_path(session: &str, id: &str) -> PathBuf {
 /// Private detached-supervisor input beside the durable dispatch record.
 pub(crate) fn supervisor_spec_path(session: &str, id: &str) -> PathBuf {
     dispatch_dir(session).join(format!("{id}.supervisor.json"))
+}
+
+/// The three live progress artifacts one dispatch attempt writes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgressPaths {
+    /// Verbatim worker stdout for this attempt.
+    pub stdout_log: PathBuf,
+    /// Verbatim worker stderr for this attempt.
+    pub stderr_log: PathBuf,
+    /// Orchestrator-owned counters, one JSON object per line.
+    pub journal: PathBuf,
+}
+
+/// Derive one attempt's progress sidecar paths (issue #49 phase 2).
+///
+/// Public and total, so a reader never depends on [`DispatchProgress`] having
+/// survived: the paths are a pure function of (session, id, attempt) and can
+/// always be recomputed and `stat`-ed. `write_dispatch` takes no lock and
+/// `reconcile_record` rewrites the whole record from any listing process, so a
+/// discoverability field is a convenience and must never be the only way to
+/// find bytes that exist.
+///
+/// **The extensions are load-bearing.** [`list_dispatches`] filters on
+/// `extension() == "json"` and then fully reads and parses every match — which
+/// is why `{id}.supervisor.json` is already read on every listing — and
+/// `orch::await_delegation` drives that up to 600 times per await. `log` and
+/// `jsonl` are skipped before the read. A sidecar that happened to carry
+/// `DispatchRecord`'s required fields would additionally be listed as a second
+/// dispatch for the same task.
+#[must_use]
+pub fn progress_paths(session: &str, id: &str, attempt: u32) -> ProgressPaths {
+    let dir = dispatch_dir(session);
+    ProgressPaths {
+        stdout_log: dir.join(format!("{id}.a{attempt}.out.log")),
+        stderr_log: dir.join(format!("{id}.a{attempt}.err.log")),
+        journal: dir.join(format!("{id}.a{attempt}.progress.jsonl")),
+    }
 }
 
 fn dispatch_id_is_valid(id: &str) -> bool {
@@ -940,6 +1038,7 @@ fn new_record(
         error: None,
         warnings: Vec::new(),
         usage: None,
+        progress: None,
         started_at: None,
         ended_at: None,
         created_at,
