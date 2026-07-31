@@ -503,6 +503,74 @@ process group. This design does not make that mistake likelier — the guards ar
 untouched — but it upgrades the consequence from "a wrong dispatch record" to
 "a wrong durable board event and a wrong STAGE animation".
 
+## 2026-07-31 — When one fix changes two lines, mutate them separately (#51 review)
+
+#51's defect 1 changes two lines in `note_task_events`: the watermark assignment
+(`history.len()` → an absolute total) and the `skip` offset (`skip(seen)` →
+`skip(seen - first_visible)`). The mutation round reverted them **together**, the
+test died, and that was recorded as the guarantee being held.
+
+It was not. Review isolated the assignment — leaving the offset correct — and the
+test still passed. The reason is worth keeping: below the window a length
+watermark and an absolute one are *the same number*, and on the first crossing
+they still agree on what to raise. They diverge only from the **second** crossing
+on, where a saturated length lags the sliding window and re-raises entries it has
+already shown. The original fixture read 1…8 and then once at 9, so it never got
+there — and a real reviewed lifecycle is eleven entries, so the regression was
+live for every reviewed task: the mirror of the original defect, a silent
+double-animation instead of a silent stall.
+
+**A combined revert only proves the pair is load-bearing, not that each line is.**
+Where a fix touches more than one line, each one needs its own mutation.
+
+Two smaller things fell out of fixing it, both worth having:
+
+- **The behavioural assertion was still not enough.** With only the assignment
+  reverted, the entries the watermark re-raises on this lifecycle happen to be
+  `moved → review` and `report_persisted` — both silent — so the packet count
+  stayed right while the watermark was wrong. The test now asserts
+  `seen_history` directly, which is what the acceptance check names anyway. A
+  behavioural-only assertion can be blind to a real defect purely because of
+  what happens to sit in the affected range.
+- **The fixture is now pinned to the real API rather than hand-written.** The
+  daemon test drives a genuinely isolated, genuinely reviewed task and asserts
+  the eleven action words in order, plus `len() >= TASK_HISTORY_WINDOW + 2` with
+  the reason stated. If the real lifecycle ever shortens, that fails and the
+  client fixture is told to follow instead of silently going soft.
+
+## 2026-07-31 — "the board has been told" does not mean "the record is terminal", and a test of mine raced exactly that (#51)
+
+#50 orders `append_execution` **before** `write_dispatch` so that *"the dispatch
+is terminal" implies "the board has been told"*. That is a one-way implication
+and the converse is false: between the two writes there is a real window where
+the board already says `execution_succeeded` and the dispatch record is not yet
+terminal.
+
+`orch::review` gates on the **record** — terminal, `execution_status ==
+"succeeded"`, exit code 0. #51's AC7 test polled the **board** for
+`execution_succeeded` and then called `review`, which raced that window and
+failed **1 run in 10** with *"task T0001 executor has not completed
+successfully; await it before review"*. A defect in the test, not in the code
+under it — and a fairly exact demonstration of the ordering guarantee's shape.
+
+It was found by A/B rather than by inspection, and only after it had been
+mistaken for something else: the same branch had failed a *different*,
+unmodified wall-clock test in the same binary, and the tempting reading was "a
+known load-sensitive flake". Running the binary alone twelve times per tree is
+what separated them — branch 1/10 with **my** test named, `origin/main` 0/10.
+
+**The rule, for anything that waits between delegate and review: poll the
+dispatch record, not the board.** `orch::await_delegation` is the verb for it,
+it is what a real conductor calls there, and it waits on the thing `review`
+actually reads. The test now uses it and asserts `execution_status == succeeded`
+before proceeding; branch and `main` are both 0 failures in 12 on the isolated
+binary afterwards.
+
+Worth stating because it generalises past this test: the board is the *earlier*
+of the two writes, so it is the wrong thing to wait on for any precondition
+expressed in terms of the dispatch record. It is the right thing to wait on for
+anything about animation, which is what it exists for.
+
 ## 2026-07-31 — Two traps found while testing #51, neither of them ours
 
 **`.board.lock` has no stale reclaim, and a supervisor killed while holding it

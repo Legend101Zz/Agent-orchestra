@@ -2270,4 +2270,40 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
   whole task board and deserves its own change. Also out of allowed paths and
   reported rather than smuggled in: a `pio dispatch reconcile` operator verb, and
   `orch::status`'s read-then-list ordering.
-- **Next:** review, then **#49 phase 2** — the watermark it builds on now moves.
+- **Reviewed FIX (2), both fixed on the branch (2026-07-31).**
+  - **FIX 1 was real and mine.** AC1's test drove *past* the window but only
+    once, and the two changed lines in `note_task_events` are independent:
+    reverting only the watermark assignment left it green. Below the window a
+    length watermark and an absolute one are the same number and still agree on
+    the first crossing; they diverge from the second, where a saturated length
+    lags the sliding window and replays entries already shown — live for every
+    reviewed task, since a real reviewed lifecycle is **eleven** entries. My
+    mutation reverted both lines together, which is caught; isolating them is
+    what exposed it. Fixed three ways: the fixture is the real eleven-entry
+    lifecycle (pinned action-by-action against the live API by the daemon test,
+    now driving a genuinely isolated and reviewed task), both panes are seated so
+    the `review_*` entries raise packets instead of going off-stage, and the
+    **watermark itself is asserted** — which is necessary, because with only the
+    assignment reverted the replayed entries happen to be silent ones and the
+    packet count stays right while the watermark is wrong. All three isolated
+    reverts now die.
+  - **FIX 2:** the new daemon test was inserted between an existing doc block and
+    its function, so the history-window test carried the theme test's doc. Moved
+    back. No gate catches this — rustdoc skips `#[cfg(test)]`.
+  - **The durable lesson, now in `findings.md`: when one fix changes two lines,
+    mutate them separately.** A combined revert only proves the pair is
+    load-bearing, not that each line is.
+  - **A third defect, found by A/B during the fix round and also mine.** A
+    full-workspace run failed a #50 wall-clock test this branch does not modify,
+    which read as the documented load-sensitive flake family. It was not.
+    Running the `task_vocabulary` binary alone twelve times per tree gave
+    `origin/main` 0/10 and this branch 1/10, and named **my own AC7 test**: it
+    polled the *board* for `execution_succeeded` and then called `orch::review`,
+    which gates on the dispatch *record*. `append_execution` writes the board
+    **before** `write_dispatch`, so "the dispatch is terminal" implies "the board
+    has been told" but not the converse — there is a real window where the board
+    is ahead, and the test raced it. Now waits with `orch::await_delegation`.
+    Both trees are 0/12 on the isolated binary and 0/4 interleaved on the full
+    workspace afterwards. **A load-sensitive failure in a test you did not touch
+    is not evidence that the cause is not yours**; recorded in `findings.md`.
+- **Next:** re-review, then **#49 phase 2** — the watermark it builds on now moves.

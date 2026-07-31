@@ -2069,9 +2069,6 @@ exit 0
         let _ = fs::remove_dir_all(root);
     }
 
-    /// The client cannot write `~/.orchestra`, so the theme it cycled is
-    /// persisted here — and the next `Home` (what a relaunch reads) has to
-    /// report it.
     /// A real reviewed task outruns the history window, and the summary says
     /// by how much.
     ///
@@ -2087,9 +2084,9 @@ exit 0
     #[allow(unsafe_code)]
     fn a_task_board_card_carries_the_whole_historys_length_not_the_windows() {
         use orc_core::tasks::{
-            NewTask, TaskActor, add_task, assign_task, done_task, record_delivery,
-            record_execution, record_review_delivery, record_review_execution, review_task,
-            start_task,
+            NewTask, TaskActor, TaskCheckVerdict, TaskReportLink, add_task, assign_task,
+            attach_report, done_task, record_delivery, record_execution, record_review_delivery,
+            record_review_execution, review_task, start_task,
         };
 
         let _guard = daemon_test_lock();
@@ -2100,8 +2097,30 @@ exit 0
         unsafe { std::env::set_var("ORC_HOME", &root) };
         write_harness_registry(&HarnessRegistry::default()).expect("persist default registry");
 
+        // A git repo, so a contracted task really takes a worktree and really
+        // writes `isolated`. Faking that entry would be inventing the very
+        // number this test exists to measure.
         let cwd = root.join("cwd");
         fs::create_dir_all(&cwd).expect("create session cwd");
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&cwd)
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "window@example.invalid"]);
+        git(&["config", "user.name", "Window Test"]);
+        fs::write(cwd.join("README.md"), "fixture\n").expect("seed repo");
+        git(&["add", "README.md"]);
+        git(&["commit", "-m", "fixture"]);
         let bench = create_session("codex", &[], &cwd).expect("create window session");
         let session = bench.id.as_str();
         let executor = format!("{session}-worker-1");
@@ -2112,6 +2131,12 @@ exit 0
             actor,
             NewTask {
                 title: "a reviewed brief".to_owned(),
+                isolate: true,
+                contract: Some(orc_core::contract::TaskContract {
+                    objective: "The thing exists.".to_owned(),
+                    acceptance_checks: vec!["it exists".to_owned()],
+                    ..Default::default()
+                }),
                 ..NewTask::default()
             },
         )
@@ -2146,18 +2171,59 @@ exit 0
         record_review_execution(session, &id, actor, true, "reviewed".to_owned())
             .expect("review execution");
         review_task(session, &id, actor).expect("review");
+        attach_report(
+            session,
+            &id,
+            actor,
+            TaskReportLink {
+                path: "report.json".to_owned(),
+                executor: "hermes".to_owned(),
+                reviewer: "pi-m3".to_owned(),
+                review_mode: "independent".to_owned(),
+                verdicts: vec![TaskCheckVerdict {
+                    check: "it exists".to_owned(),
+                    verdict: "pass".to_owned(),
+                    evidence: "fixture".to_owned(),
+                }],
+                tokens_total: None,
+                cost_usd: None,
+                extra: Default::default(),
+            },
+        )
+        .expect("report");
         let finished = done_task(session, &id, actor).expect("done");
 
-        assert!(
-            finished.history.len() > TASK_HISTORY_WINDOW,
-            "a reviewed lifecycle must outrun the window or this test proves \
-             nothing: {} entries against a window of {TASK_HISTORY_WINDOW} — {:?}",
-            finished.history.len(),
+        // Pinned, not merely "more than the window": `orc-app`'s own fixture
+        // for this defect has to cross the window *twice* to catch a watermark
+        // that is a length, and whether it can is a fact about how long a real
+        // reviewed lifecycle is. If this number moves, that fixture must too.
+        assert_eq!(
             finished
                 .history
                 .iter()
-                .map(|entry| entry.action.clone())
-                .collect::<Vec<_>>()
+                .map(|entry| entry.action.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "created",
+                "isolated",
+                "assigned",
+                "moved",
+                "delivery_confirmed",
+                "execution_succeeded",
+                "review_delivery_confirmed",
+                "review_execution_succeeded",
+                "moved",
+                "report_persisted",
+                "moved",
+            ],
+            "the real contracted-and-reviewed lifecycle, in the order orc-core writes it"
+        );
+        assert!(
+            finished.history.len() >= TASK_HISTORY_WINDOW + 2,
+            "a reviewed lifecycle must cross the window *twice* or the client's \
+             fixture cannot catch a watermark that is a length: {} entries \
+             against a window of {TASK_HISTORY_WINDOW}",
+            finished.history.len()
         );
 
         let daemon = Daemon::production(root.clone(), update_signal());
@@ -2205,6 +2271,9 @@ exit 0
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The client cannot write `~/.orchestra`, so the theme it cycled is
+    /// persisted here — and the next `Home` (what a relaunch reads) has to
+    /// report it.
     #[test]
     #[allow(unsafe_code)]
     fn set_theme_persists_through_the_daemon_and_the_next_home_reports_it() {

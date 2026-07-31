@@ -7230,14 +7230,25 @@ mod tests {
     }
 
     /// The full contracted-and-reviewed lifecycle, in the order `orc-core`
-    /// writes it. Nine entries — one past the window the daemon serves.
-    const CONTRACTED_LIFECYCLE: [(&str, Option<&str>); 9] = [
+    /// really writes it — **eleven** entries, pinned against the real API by
+    /// `orc-daemon`'s `a_task_board_card_carries_the_whole_historys_length_not_the_windows`.
+    ///
+    /// Eleven matters, not merely "more than eight": it crosses the daemon's
+    /// window **twice**. Below the window a length watermark and an absolute
+    /// one are the same number, and on the *first* crossing they still agree on
+    /// what to raise — they diverge only on the second, where a length
+    /// watermark starts lagging the window and replays entries it has already
+    /// shown. A fixture that stops one past the window catches the stall and
+    /// misses the replay.
+    const CONTRACTED_LIFECYCLE: [(&str, Option<&str>); 11] = [
         CREATED,
         ISOLATED,
         ASSIGNED,
         RUNNING,
         CONFIRMED,
         ANSWERED,
+        REVIEW_CONFIRMED,
+        REVIEW_ANSWERED,
         MOVED_REVIEW,
         REPORTED,
         DONE,
@@ -7406,65 +7417,102 @@ mod tests {
     #[test]
     fn a_task_past_the_history_window_still_animates_its_next_event() {
         // Issue #51 defect 1. `orcd::task_board` truncates `TaskSummary.history`
-        // to the last few entries, and the watermark here was `history.len()`
-        // — a length *into that window*. Once a task had as many durable
-        // entries as the window is wide the summary stopped growing, the
-        // watermark saturated, `skip(seen)` on a full window yielded nothing,
-        // and no further event for that task ever animated again. Silently.
+        // to the last `TASK_HISTORY_WINDOW` entries, and the watermark here was
+        // `history.len()` — a length *into that window*. Once a task had as many
+        // durable entries as the window is wide the summary stopped growing, the
+        // watermark saturated, `skip(seen)` on a full window yielded nothing, and
+        // no further event for that task ever animated again. Silently.
         //
-        // #50 brought a contracted lifecycle to nine entries, so the
-        // `moved -> done` that should fly the final confirmation home is
-        // exactly the one that falls off the cliff.
+        // The test walks a real reviewed lifecycle one board read at a time and
+        // asserts, at *every* read, that exactly the entries appended since the
+        // last one animate. That is two properties in one, and the second is the
+        // one an easier version of this test misses:
         //
-        // The assertion that matters is the last one, and it is why this test
-        // drives *past* the window rather than up to it: a probe that stops at
-        // the window boundary passes against the broken code.
-        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        //   * nothing stalls — the original defect, which bites on the first
+        //     crossing of the window;
+        //   * nothing *replays* — the mirror defect, which bites on the second.
+        //     A length watermark and an absolute one agree below the window and
+        //     still agree on the first crossing; they diverge from the second
+        //     onward, where the length lags the sliding window and re-raises
+        //     entries already shown. A fixture that reads 1…8 and then once at 9
+        //     passes with the watermark reverted to a length, because it never
+        //     reaches the second crossing. `CONTRACTED_LIFECYCLE` is eleven
+        //     entries for exactly this reason.
+        // Two seated workers: a reviewed lifecycle has an executor *and* a
+        // reviewer, and with no reviewer pane the four `review_*` entries would
+        // correctly go to the off-stage legend instead of raising packets
+        // (defect 3) — which would make this test's per-read arithmetic about
+        // something other than the watermark.
+        let mut state = StageState::new(bench(2), ThemeName::Nocturne.into(), GLYPHS);
         state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        let seated = |actions: &[(&str, Option<&str>)]| {
+            let mut task = task_with("T1", "pane-1", actions);
+            task.reviewer_run = Some("pane-2".to_owned());
+            as_the_daemon_serves_it(task)
+        };
 
         assert!(
-            CONTRACTED_LIFECYCLE.len() > TASK_HISTORY_WINDOW,
-            "this test is only meaningful while a real lifecycle outruns the \
-             window: {} entries against a window of {TASK_HISTORY_WINDOW}",
+            CONTRACTED_LIFECYCLE.len() >= TASK_HISTORY_WINDOW + 2,
+            "this test is only meaningful while a real lifecycle crosses the \
+             window twice: {} entries against a window of {TASK_HISTORY_WINDOW}",
             CONTRACTED_LIFECYCLE.len()
         );
 
-        // Read the board after every append, exactly as the client does.
-        for upto in 1..CONTRACTED_LIFECYCLE.len() {
-            state.note_task_events(&[as_the_daemon_serves_it(task_with(
-                "T1",
-                "pane-1",
-                &CONTRACTED_LIFECYCLE[..upto],
-            ))]);
+        let mut crossings = 0;
+        for upto in 1..=CONTRACTED_LIFECYCLE.len() {
+            let appended = CONTRACTED_LIFECYCLE[upto - 1];
+            let expected = usize::from(circuit::message_for(appended.0, appended.1).is_some());
+
+            state.flights.clear();
+            state.offstage.clear();
+            state.note_task_events(&[seated(&CONTRACTED_LIFECYCLE[..upto])]);
+
+            if upto > TASK_HISTORY_WINDOW {
+                crossings += 1;
+            }
+            assert!(
+                state.offstage.is_empty(),
+                "board read {upto}: both panes are seated, so nothing should go \
+                 to the off-stage legend"
+            );
+
+            // The watermark itself, which is what the acceptance check names.
+            //
+            // The flight arithmetic below is the behavioural half and it is not
+            // sufficient on its own — measured, not assumed. Revert *only* the
+            // assignment and leave the `skip` arithmetic correct, and the
+            // watermark saturates at the window while the offset keeps sliding,
+            // so from the second crossing on it re-raises entries it has already
+            // shown. On this particular lifecycle those re-raised entries happen
+            // to be `moved -> review` and `report_persisted`, which animate
+            // nothing, so the packet count stays right while the watermark is
+            // wrong. The next durable event a real task appended would break
+            // that silence and double-animate. Asserting the watermark directly
+            // is what makes the revert fail here rather than in front of a user.
+            assert_eq!(
+                state.seen_history.get("T1").copied(),
+                Some(upto),
+                "board read {upto}: the watermark must be an absolute index into \
+                 the task's whole history. A length into the window saturates at \
+                 {TASK_HISTORY_WINDOW} and then lags the sliding window for ever"
+            );
+            assert_eq!(
+                state.flights.len(),
+                expected,
+                "board read {upto} of {}: the entry appended since the last read \
+                 was {appended:?}, so exactly {expected} packet(s) must be \
+                 raised. More means already-shown entries were replayed — a \
+                 watermark that is a length lags the sliding window from the \
+                 second crossing on. Fewer means the watermark pinned itself at \
+                 the window and nothing will ever animate for this task again.",
+                CONTRACTED_LIFECYCLE.len()
+            );
         }
+
         assert!(
-            !state.flights.is_empty(),
-            "the first eight entries animate on any implementation; if this \
-             fails the test is broken, not the watermark"
-        );
-
-        // Everything up to the window has been seen. The ninth entry is the
-        // one that used to vanish.
-        state.flights.clear();
-        state.note_task_events(&[as_the_daemon_serves_it(task_with(
-            "T1",
-            "pane-1",
-            &CONTRACTED_LIFECYCLE,
-        ))]);
-
-        assert_eq!(
-            state.flights.len(),
-            1,
-            "the reviewed task's `moved -> done` must still raise a packet at \
-             entry {} of a {TASK_HISTORY_WINDOW}-entry window; a watermark \
-             that is a length into the window pins itself at the window and \
-             raises nothing ever again",
-            CONTRACTED_LIFECYCLE.len()
-        );
-        assert_eq!(
-            state.flights[0].direction,
-            circuit::Direction::Inbound,
-            "and it is the answer coming home"
+            crossings >= 2,
+            "the window was crossed {crossings} time(s); a single crossing \
+             cannot tell an absolute watermark from a length"
         );
     }
 
