@@ -35,7 +35,7 @@ ship-log entries are part of finishing an issue.*
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 👀 | pushed `issue-51-board-honesty` · all three fixed · 5 gates green, 348 passed 0 failed · 15/15 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim) |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 🔨 | pushed `issue-51-board-honesty` (PR #53) · all three fixed · 5 gates green, 348 passed 0 failed · review **FIX (2)**: AC1's watermark test passes against a length watermark, and a doc comment landed on the wrong test |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -559,6 +559,16 @@ in this branch came from. And one trap worth knowing about: the detached minder
 runs as its own program, so breaking the library on purpose proves nothing unless
 you rebuild that program too — the first attempt looked like a passing test and
 was really a stale binary.
+
+**Review verdict (Claude, adversarial): FIX (2)** — all three fixes are correct
+and unbreakable under 13 independent mutations (12 caught), five gates green
+from a clean worktree, and 348 = main's 337 + 11 verified; but AC1's second
+clause fails — `a_task_past_the_history_window_still_animates_its_next_event`
+still passes when the watermark alone is reverted to a length, because the test
+crosses the window once and the two spellings only diverge on the second
+crossing (an 11-entry reviewed task then replays two events) — plus a doc
+comment landed on the wrong test in `orc-daemon`.
+[Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/51#issuecomment-5141156553)
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
