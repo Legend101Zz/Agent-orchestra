@@ -36,7 +36,7 @@ ship-log entries are part of finishing an issue.*
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
-| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🔨 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)**: 5 gates green, 360 passed 0 failed ×3, but **6 of 11 review mutations survived** — the per-attempt retry guarantee is held by nothing, the progress-open warnings are discarded, and three durable record fields are unasserted · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🧪 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all six surviving mutations fixed** in `881fb37`: the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -666,6 +666,30 @@ progress-open warnings are built and then discarded (`let _ =
 progress_warnings;`), two of the log's own documented properties are false, and
 three durable record fields are unheld.
 [Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5146190816)
+
+**🔨 → 🧪 — all six fixed (`881fb37`).** The review was right on every count, and
+the one that stings is the right one to sting: the branch's headline promise —
+that a rate-limited attempt's output survives its own retry — was checked by a
+test that compared two filenames. Nothing drove a retry at all, so the ordinal
+could be hardcoded and the suite stayed green while the earlier attempt's bytes
+were destroyed. It is now driven end to end through a real 429-then-succeed
+worker.
+
+The progress-open warnings now reach the record instead of the floor. Two of the
+log's documented properties turned out to be false rather than merely untested —
+a partial line *was* written at the cap, and `lines` counted reads instead of
+terminators — so both were fixed in the code, not softened in the doc; the
+second one matters because overstating a line is exactly the failure the
+"block-buffered worker" honesty argument exists to prevent. `attempts` is
+deleted rather than tested, because a field that cannot vary is not data.
+
+**22/22 mutations, 365 passed.** Third time this program has shipped a test that
+could not fail (#50, #51, here). The common shape is now explicit in the notes:
+each time, the test asserted against a helper standing in for the path under
+test. Also took the reviewer's process suggestion — `AGENTS.md` and
+`docs/WORKFLOW.md` now say outright that an allowed-path list fences code and
+never the four process files, so the next session is not made to choose between
+two rules.
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
