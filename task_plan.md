@@ -38,16 +38,28 @@ record. (Issue numbers are filled in as issues are created.)
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (👀 phase 1 pushed 2026-07-31, `issue-49-watchable-delegation`) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ merged 2026-07-31, PR #50 · **phases 2–3 still open**) |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (🔨 **next** — defect 1 is live on `main`) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
-#37, #38, #39 and #45 are merged. Every V1 feature is in; #14 (README) is the
-last original V1 item and all that stands between here and launch. #49 phase 1
-is pushed and awaiting review.**
+#37, #38, #39, #45 and #49 phase 1 are merged. Every V1 feature is in; #14
+(README) is the last original V1 item and all that stands between here and
+launch.**
+
+**Next is #51, and it is not optional sequencing.** #49 phase 1 merged with its
+own review fully discharged, but it carried out three defects it was not
+allowed to fix — and one of them is now *live on `main`*: the daemon truncates
+`TaskSummary.history` to the last eight entries while `note_task_events`'
+watermark counts into that window, so a task past eight events stops animating
+for good. #50 added the ninth event to a full contracted lifecycle, which means
+the `moved→done` that should fly the final confirmation home is precisely the
+one that falls off. Plain delegations (seven events) still animate end to end;
+contracted-and-reviewed ones do not. **Run #51 before #49 phase 2** — phase 2
+builds more animation on top of a watermark that has already stopped moving.
 
 **#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
 now records that a worker *answered*, and the animation is driven from that.**
