@@ -34,9 +34,9 @@ ship-log entries are part of finishing an issue.*
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phase 2 merged too (PR #56); **phase 3 is the only one left on #49** |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
-| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🧪 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · one small follow-up named — the new `capped` latch is held by no test · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | ✅ | merged (PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56), `2dc35db`) · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · **merged without the one follow-up named in the re-review: the `capped` latch is still held by no test** — it guards the log's contiguous-prefix claim, the test is written and verified, and it should be picked up in phase 3 · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -407,12 +407,12 @@ disks.
 ## Prompts you run
 
 > **▶ Next up, copy-paste ready:**
-> [`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md)
-> — #51 is merged, so the next one is **#49 phase 2, then #49 phase 3**, one at
-> a time with a review between each. Includes a shared preamble
-> (worktree-on-the-SSD, mount check, mutation-check rule, flake A/B rule) that
-> both paste, so they cannot drift apart. The generic templates below stay as
-> the loop's reference.
+> [`docs/prompts/2026-08-01-issue-49-phase3-next-session.md`](docs/prompts/2026-08-01-issue-49-phase3-next-session.md)
+> — #49 phases 1 and 2 are merged, so the next and last one is **#49 phase 3,
+> the in-pane reveal**. Includes a shared preamble (worktree-on-the-SSD, mount
+> check, mutation-check rule, flake A/B rule). Phase 3 closes #49, which
+> unblocks #14 and V1. The generic templates below stay as the loop's
+> reference.
 
 ### 0. Foundations research (Claude Code session, once, no code)
 

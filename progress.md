@@ -2417,3 +2417,66 @@ Defect 3 only. Evidence: `docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
   the allowed paths — raised on the issue rather than smuggled in), no
   `orc-proto`/`orc-daemon` change, no task-history word, no signal handler, no
   GC, and no fix for the timeout path's byte log trailing the terminal record.
+
+## 2026-07-31 — Claude (reviewer): #49 phase 2 (PR #56) reviewed twice, merged
+
+Adversarial review of `issue-49-phase2-incremental-output` per
+`docs/WORKFLOW.md` prompt 2. Clean cold worktree, gates re-run rather than read.
+
+**Round 1 — FIX (5).** Five gates green, 360 passed 0 failed ×3, zero flakes.
+But of my eleven mutations **eight survived** (my summary line said six; the
+table said eight — my miscount, corrected on the branch and on the issue after
+it had propagated into the fix commit and the evidence note).
+
+1. **The headline retry guarantee was held by nothing.** "Each attempt gets its
+   own files, so a rate-limited attempt's bytes are neither deleted nor spliced
+   onto the next" — asserted in the commit body, the PR, `findings.md`, `LOG.md`
+   and `task_plan.md`, and one of the four design questions #49 *mandated*.
+   `each_attempt_has_its_own_paths_and_they_never_collide` compared
+   `progress_paths(.., 1)` with `progress_paths(.., 2)`: it tests the naming
+   function. I changed `let ordinal = attempts.get() + 1;` to `let ordinal = 1;`
+   and the whole `orc-core` suite stayed green while `ProgressLog::create`'s
+   `.truncate(true)` **destroyed** attempt 1's output. No test on the branch
+   drove a retry at all. I wrote one, drove a real 429-then-succeed worker, and
+   handed it over.
+2. **The progress-open warnings were built and discarded** (`let _ =
+   progress_warnings;`), while `ProgressLog::create`'s doc promised "one durable
+   warning on the record". A failed log open left `record.progress` naming files
+   that do not exist, with nothing explaining it.
+3. **Two documented log properties were false**, both proved by probe: a partial
+   line *was* written at the cap (262144-byte log ending on `.`), and `lines`
+   counted `read_until` chunks rather than terminators (`printf 'alpha\nbeta'`
+   reported 2).
+4. **Three durable record fields were unheld** — `attempts` (structurally
+   identical to `attempt`; no implementation could make them differ),
+   `log_max_bytes`, `extractable`.
+5. **Dead code** — `read_progress`'s guarded `Err` arm was identical to its
+   unguarded one; `progress_lengths` was public with zero callers.
+
+**Round 2 — ACCEPT (`b7f6954`).** All five fixed and each mutation re-run and
+caught by the test written for it; the frozen-ordinal mutation now fails two.
+3a and 3b were fixed **in the code, not softened in the doc**. 365 passed.
+
+**The flake was A/B'd, not excused.** `a_real_dispatch_writes_delivery_then_
+completion_and_the_gap_is_the_worker` (orc-app, untouched by the branch) fires
+on a fixed 1.5 s wall-clock bound. Four experiments, 65 runs: isolated quiet
+0/12 both trees; isolated under identical CPU load 0/10 both trees; **full
+workspace branch 2/7, `origin/main` 2/9**; and with phase 2's nine heavy
+dispatch tests skipped the rate went *up* (2/5), so the added test load is not
+the mechanism either. Not attributable. The assertion deserves its own issue —
+it should measure the delivery gap from the worker's own start, not a constant.
+
+**Merged as `2dc35db` with one follow-up outstanding:** the `capped` latch has
+no test. Removing it lets a declined over-long line be followed by a shorter one
+that fits, leaving the log with a hole — the one thing "byte N is byte N
+forever" forbids, and with variable-length lines it is the normal case at the
+cap. Test written and verified (passes on `b7f6954`, fails with the latch
+removed). Carried into phase 3, which is the first code that reads the log.
+
+**Third occurrence of one pattern:** #50 shipped a test that could not fail, #51
+one that under-drove the lifecycle it claimed to measure, #56 one that asserted
+against a helper standing in for the path. Testing the component instead of the
+wiring. The implementer named it in the evidence note, which is the right place
+for it.
+
+**Next:** #49 phase 3, the in-pane reveal — the last phase, and it closes #49.
