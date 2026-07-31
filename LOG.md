@@ -36,7 +36,7 @@ ship-log entries are part of finishing an issue.*
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
-| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🧪 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all six surviving mutations fixed** in `881fb37`: the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🧪 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · one small follow-up named — the new `capped` latch is held by no test · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -659,7 +659,9 @@ limit, with nothing saying it had been truncated (**#55**). Both filed with
 reproductions.
 
 **Review verdict: 🔨 FIX (5)** — 5 gates green, 360 passed 0 failed ×3, zero
-flakes; but 6 of my 11 mutations survived. The retry guarantee the branch
+flakes; but 8 of my 11 mutations survived *(this line first said "6" — my
+miscount; the table in the review itself listed eight, and the wrong number
+propagated into the fix commit and the evidence note)*. The retry guarantee the branch
 headlines is held by nothing: `let ordinal = 1;` destroys a rate-limited
 attempt's bytes and the whole `orc-core` suite still passes. Also: the
 progress-open warnings are built and then discarded (`let _ =
@@ -690,6 +692,18 @@ test. Also took the reviewer's process suggestion — `AGENTS.md` and
 `docs/WORKFLOW.md` now say outright that an allowed-path list fences code and
 never the four process files, so the next session is not made to choose between
 two rules.
+
+**Re-review verdict: 🧪 ACCEPT (`b7f6954`).** All five findings fixed and each
+mutation re-run and caught by the test written for it; N1 (the frozen retry
+ordinal) now fails two. Five gates green, 365 passed. The `orc-app` wall-clock
+flake was A/B'd rather than excused — **`origin/main` fails it at the same rate**
+(branch 2/7 full-workspace runs, main 2/9, both trees 0/12 isolated), and
+skipping phase 2's nine heavy tests raised the rate rather than lowering it, so
+the added load is not the mechanism either. One new gap, introduced by the fix
+and named rather than blocked on: the `capped` latch guards the log's
+contiguous-prefix claim and no test holds it — the test is written and verified,
+add it before merge.
+[Full re-review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5146929054)
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
