@@ -106,12 +106,36 @@ contracted-and-reviewed ones do not. **Run #51 before #49 phase 2** — phase 2
 builds more animation on top of a watermark that has already stopped moving.
 *(Done: #51 merged as PR #53, so phase 2 is unblocked and the watermark moves.)*
 
-**Next: #49 phase 2, then phase 3** — never in parallel, both touch `orc-app`'s
-event path, with an adversarial review between each. Copy-paste prompts live in
+**#49 phase 2 pushed (2026-07-31, `issue-49-phase2-incremental-output`) — a
+worker's partial output is durable while it is still working.** Defect 3. The
+supervisor's drain threads now mirror each stream verbatim to an append-only
+per-attempt log beside the dispatch record, with a separate orchestrator-owned
+counters journal; neither is ever fsynced, and neither touches the task board or
+the dispatch record. Evidence:
+`docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
+
+The measurement that decided it, and that the issue demanded: **one board write
+costs a STAGE client a blocking `task_board` round-trip on the render thread —
+221 us at 1 task, 4.27 ms at 64 — and the watcher's coalescing bounds nothing
+(1.25–1.59 wakes per write at every cadence).** The board tolerates roughly two
+durable writes per second; a dispatch lifetime is 9–11 in total. So progress
+went nowhere near it, and 2000 lines of live output cost zero extra record
+writes and zero extra board writes.
+
+Two pre-existing defects found and reported rather than fixed: **#54**
+(`tasks::lock_board` has no stale reclaim — filed *before* the work started, on
+the expectation that phase 2 would raise the board write rate; in the event it
+does not, so the window is not widened) and **#55** (`DispatchRecord.stdout` is
+unbounded for any adapter with an extractor — measured at 25x the documented cap
+with no truncation marker, and held by no test because the flood fixture's
+adapter has no extractor).
+
+**Next: #49 phase 3** — the in-pane reveal, gated on Decision 1 (option (a),
+answered by Mrigesh on 2026-07-31). Phase 3 is where the cost of *watching*
+this state lands: `~/.orchestra/dispatches` is not in `file_watches()`, so
+phase 2 raises no wakes at all, and phase 3 must decide deliberately what it
+adds. Copy-paste prompts live in
 [`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md).
-**One thing worth doing first:** open an issue for `tasks::lock_board`'s missing
-stale reclaim. Phase 2 writes the board far more often, which widens the window
-on a wedge that today needs a file deleted by hand to clear.
 
 **#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
 now records that a worker *answered*, and the animation is driven from that.**

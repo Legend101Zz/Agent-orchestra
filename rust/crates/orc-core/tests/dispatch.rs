@@ -935,3 +935,103 @@ fn pio_binary() -> PathBuf {
     );
     candidate
 }
+
+// --- Issue #49 phase 2: partial output survives a killed supervisor ---------
+
+/// A worker that says something, then outlives its supervisor.
+///
+/// `slow_worker` above is silent by design — #51 only needed a live worker to
+/// kill. Phase 2 needs one that has genuinely produced output before the kill,
+/// because the claim under test is about the bytes, not about the liveness.
+fn talking_slow_worker(home: &Path) {
+    let script = home.join("bin").join("fake-worker.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'PARTIAL WORK BEFORE THE KILL'\necho '{\"verdict\":\"ACCEPT\"}'\nsleep 30\n",
+    )
+    .expect("write talking slow worker");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+        .expect("chmod talking slow worker");
+}
+
+#[test]
+fn a_killed_supervisor_leaves_its_partial_output_on_disk() {
+    // Issue #49 phase 2. This is the durability win stated as a test: before
+    // this branch a SIGKILLed supervisor destroyed everything the worker had
+    // produced, because `Captured` was in-memory only and `reconcile_record`
+    // rewrites the record with `stdout` untouched — i.e. empty.
+    //
+    // It also pins the hard rule that came out of the design phase: partial
+    // text is *never* folded into `record.stdout`. `report::parse_review_verdicts`
+    // brace-scans that field, so an orphaned reviewer's half-finished thinking
+    // must not be parseable as a verdict. The worker below emits a complete,
+    // well-formed verdict object on purpose.
+    let _guard = lock();
+    let home = fresh_home("orphan-progress");
+    let (_cwd, _registry) = setup_session_with_harness(&home, "orphan-progress");
+    talking_slow_worker(&home);
+    let cwd = home.join("cwd-orphan-progress");
+    fs::create_dir_all(&cwd).expect("create session cwd");
+    let session_id = create_session("codex", &["fake-worker".to_owned()], &cwd)
+        .expect("create orphan session")
+        .id;
+    let task = running_task(&home, &session_id, "orphan my partial output");
+
+    let record = pio_dispatch(&home, &session_id, &task.id, "W-orphan-progress");
+    let supervisor = record.supervisor_pid.expect("a detached supervisor");
+    let paths = dispatch::progress_paths(&session_id, &record.id, 1);
+
+    // Wait until the worker's bytes are actually durable, then kill. Killing
+    // before they land would test something else entirely.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let text = fs::read_to_string(&paths.stdout_log).unwrap_or_default();
+        if text.contains("PARTIAL WORK BEFORE THE KILL") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the worker's output never became durable, so there is nothing to orphan"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    sigkill(supervisor);
+    wait_for_death(supervisor);
+
+    // An ordinary reader reconciles, exactly as `pio dispatch list` would.
+    let listed = dispatch::list_dispatches(&session_id).expect("list dispatches");
+    let reconciled = listed
+        .iter()
+        .find(|candidate| candidate.id == record.id)
+        .expect("the record survives the listing");
+    assert_eq!(reconciled.execution_status.as_deref(), Some("orphaned"));
+
+    // The bytes survived the death of the process that wrote them.
+    let survived = fs::read_to_string(&paths.stdout_log).expect("the log outlives its supervisor");
+    assert!(
+        survived.contains("PARTIAL WORK BEFORE THE KILL"),
+        "a killed supervisor must leave what its worker had already said; got {survived:?}"
+    );
+
+    // …and the record still points at it, having been rewritten by reconcile.
+    let progress = reconciled
+        .progress
+        .as_ref()
+        .expect("reconciliation must not drop the progress pointer");
+    assert_eq!(progress.attempt, 1);
+    assert!(progress.stdout_log.ends_with(".a1.out.log"));
+
+    // The hard rule: none of it reached `stdout`, so nothing can read a
+    // half-finished worker's output as an answer.
+    assert!(
+        reconciled.stdout.is_empty(),
+        "mid-flight output must never be folded into `stdout`: {:?}",
+        reconciled.stdout
+    );
+    assert!(
+        !reconciled.stdout.contains("ACCEPT"),
+        "an orphaned worker's verdict-shaped output must not be parseable as a verdict"
+    );
+    let _ = fs::remove_dir_all(&home);
+}

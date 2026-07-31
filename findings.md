@@ -605,3 +605,114 @@ passed and briefly looked like one of #50's tests-that-cannot-fail. It is not �
 The full `cargo test --workspace` gate builds everything, so the gate was never
 wrong; only a narrowed mutation run is. Anything mutating `orc-core` and
 asserting through a real dispatch must rebuild `pio` in the same step.
+
+## 2026-07-31 — issue #49 phase 2: where durable partial output goes, and why
+
+**The board tolerates about two durable writes per second, and that number
+decided the whole design.** Measured on this machine, not reasoned about: one
+`BoardChanged` costs the STAGE client a *blocking* `task_board` socket
+round-trip on the render thread — 221 us at 1 task in the session, 1.31 ms at
+16, **4.27 ms at 64** — against a 16 ms animating tier and a 1.83 ms debug
+frame. And `spawn_change_watch`'s coalescing bounds nothing: it drains only what
+is already queued, with no time debounce, so it delivers **1.25–1.59 wakes per
+write at every cadence tested**, up to 7213 wakes/sec when writes are
+unthrottled. At 64 tasks, 10 board writes/sec costs a client 5.9% of wall clock
+and 100/sec costs 47%. A whole dispatch lifetime is 9–11 board writes *in
+total* today. Any per-tick board write was therefore dead on arrival, and the
+shipped design writes the board **zero** extra times. This answers the question
+#50's review left open ("worth a measurement before phase 2"): it was fine, and
+it would not have been.
+
+**Durable writes are fsync-bound; the write shape is irrelevant beside it.**
+`atomic_write_json` costs 4.32 ms for a 489 B record and 5.86 ms for a 16.9 KB
+one — the same order — while a held-open unsynced append costs **4.2 us**, and
+the *same* append with an fsync costs 3.83 ms. So the interesting choice is
+never "rewrite vs append", it is "fsync vs not". Progress here is written often
+and fsynced never, which is the tier `runner.rs`'s `runs/<id>/output.log`
+already uses. "Durable" consequently means *flushed*: a SIGKILLed supervisor
+loses nothing already written, a power cut can lose the tail.
+
+**A per-line mirror on the drain thread is free, and this had to be measured
+rather than assumed** because #28 was a pipe-buffer deadlock and that thread
+exists to keep the pipe empty. 20k lines through a real pipe, four variants,
+four repetitions: every variant landed inside the run-to-run variance of doing
+nothing (185–209 ms), and "read only" lost two of four rounds. The drain is
+bounded by the child and the pipe, not by our write.
+
+**An append-only file is *more* honest than the in-memory window it mirrors,
+and that is the core of the design.** Both of the two lies available mid-flight
+are properties of the *rendering*, not of the bytes: `Captured::raw()`'s `tail`
+is a `VecDeque` that pops from the front, so a mid-flight render is not a prefix
+of the final one; and `Captured::result()`'s `persisted` is
+`if answer.is_empty() { raw } else { answer }` — a kind-flip that silently
+replaces raw transport with prose the first time an extractor fires. An
+append-only file has neither property by construction: it never removes and
+never re-renders. Its claim is only "the worker wrote these bytes, in this
+order, and byte N is byte N forever". Keeping *orchestrator* bytes out of it
+entirely — counters live in a separate journal — also leaves nothing in it for a
+worker to forge.
+
+**Create the log empty at spawn.** It is the cheapest way to distinguish "we
+looked and there was nothing yet" (present, zero length) from "this supervisor
+is not streaming" (absent) — two facts AGENTS.md's `unavailable != hidden` rule
+requires keeping apart — and it costs one `create` instead of a periodic
+heartbeat.
+
+**`read_until(b'\n')` is an honesty floor no design clears.** Whether anything
+is observable mid-flight is the *child's* decision: measured, a Python worker
+printing every 50 ms for 2 s delivered its first line at **2.187 s** (i.e.
+nothing until exit) because stdout block-buffers when it is a pipe, while the
+same worker with `-u` delivered at 0.018 s. The claim any phase-2 feature may
+make is "whatever the worker flushes, when it flushes it" — never "you will see
+partial output". Vocabulary must be scoped to what was probed: "no complete line
+observed since T", not "the worker is quiet".
+
+### Rejected: a throttled `progress` block on `DispatchRecord`
+
+A single additive `DispatchRecord.progress` object — monotone counters plus a
+2 KiB answer prefix and a capability word — refreshed from the existing 25 ms
+wait loop under a change gate and a 500 ms floor, deliberately not bumping
+`updated_at`. It had the best honesty *rule* of the three (never write
+mid-flight text into `stdout`, justified by `report.rs`'s brace scan) and it is
+the only option visible through every existing `--json` surface for free. It
+lost on the numbers and on one contradiction. Every publish is a whole-record
+`atomic_write_json`, i.e. an fsync: 2/sec/supervisor is 3.72 MB written over a
+10-minute run to express under 3.1 KB of state, and it multiplies
+SIGKILL-during-write windows by ~400x, each stranding a `.tmp-<pid>-<n>` that
+`registry.rs` removes only `if result.is_err()` — which never runs under
+SIGKILL — in the flat directory `await_delegation` `read_dir`s up to 600 times
+per await. The contradiction: it declares "no `progress` key means the worker
+produced zero bytes", which its own floor falsifies for the first ~525 ms of
+every dispatch, and it has no way to say "we looked and saw nothing". It also
+makes `updated_at`'s own doc comment ("Last mutation timestamp") false for the
+entire running phase — the right conclusion from the `latest_dispatch`
+sort-key hazard is to keep progress *off* the record, not to write the record
+and falsify a field. **Survives it:** the hard rule, adopted verbatim.
+
+### Rejected: a single structured `.jsonl` journal carrying excerpts
+
+Per-attempt frames — exact counters always, a prefix-true `answer_delta` for
+`pi`, an explicitly-unstable 1 KiB `tail` for everyone else — with
+`reconcile_record` folding the newest journal into `record.stdout` behind a
+`PARTIAL (…)` banner. Best-labelled format of the three, and it contributed more
+to the shipped design than the other loser. **It died on the fold.**
+`list_dispatches` is `.filter_map(|record| reconcile_record(record).ok())`, so
+making reconcile parse an up-to-1 MiB sidecar means one truncated file removes
+the dispatch from *every* listing and leaves `orch await` polling a record it
+can no longer see for its full 300 s — strictly worse than today's empty
+`stdout`, produced by the feature meant to improve the kill path. The banner
+does not protect the field either: `parse_review_verdicts` scans from the first
+`{` to the last `}`, so an orphaned reviewer that emitted a complete verdict
+object yields a cleanly parseable verdict on an *orphaned* record. And for
+non-`pi` adapters the fold puts a 1 KiB, explicitly-non-prefix, byte-boundary
+`from_utf8_lossy` window into the field every consumer reads as the answer —
+which is the `result()` kind-flip it spends a paragraph condemning, relocated
+one layer up. **Survives it, and it is a lot:** per-attempt file separation (a
+filesystem fact beats a forgeable in-band marker), explicit per-stream naming,
+the one-shot capability declaration, and the tolerant reader with its
+torn-trailing-line contract.
+
+**A tolerant sidecar reader is a safety property, not laxness.**
+`read_progress` never returns `Err` for a malformed journal, precisely because
+the losing proposal showed what a strict one costs the moment anything on the
+listing path uses it.
