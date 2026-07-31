@@ -405,6 +405,13 @@ disks.
 
 ## Prompts you run
 
+> **▶ Next up, copy-paste ready:**
+> [`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md)
+> — **#51 → #49 phase 2 → #49 phase 3**, in that order, one at a time, with a
+> review between each. Includes a shared preamble (worktree-on-the-SSD, mount
+> check, mutation-check rule, flake A/B rule) that all three paste, so the three
+> cannot drift apart. The generic templates below stay as the loop's reference.
+
 ### 0. Foundations research (Claude Code session, once, no code)
 
 ```
