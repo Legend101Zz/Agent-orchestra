@@ -222,12 +222,14 @@ mod tests {
             status: status.to_owned(),
             assignee: Some("pi-m3".to_owned()),
             assignee_run: None,
+            reviewer_run: None,
             isolated: true,
             isolation: Some("ready".to_owned()),
             blocked,
             tokens: Some("1.2k".to_owned()),
             diff: Some("+4 -1".to_owned()),
             history: Vec::new(),
+            history_total: 0,
         };
         ScoreState {
             session_id: "bench-alpha".to_owned(),

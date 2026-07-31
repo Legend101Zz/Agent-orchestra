@@ -291,6 +291,7 @@ mod tests {
             depends_on: vec!["T0003".to_owned()],
             assignee: None,
             assignee_run: None,
+            reviewer_run: None,
             worktree: None,
             contract: Some(TaskContract {
                 objective: "A working widget exists.".to_owned(),

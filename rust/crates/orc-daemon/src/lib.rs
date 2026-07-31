@@ -25,7 +25,7 @@ use orc_core::tasks::{TaskActor, TaskStatus, diff_task, list_tasks, move_task};
 use orc_proto::{
     BUILD_IDENTIFIER, ClientRequest, DaemonMetrics, DaemonPaneStatus, DispatchCommand,
     DispatchSummary, HarnessSummary, LayoutRect, PROTOCOL_VERSION, PaneSequence, PaneSnapshot,
-    ServerResponse, SessionSummary, TaskHistorySummary, TaskSummary,
+    ServerResponse, SessionSummary, TASK_HISTORY_WINDOW, TaskHistorySummary, TaskSummary,
 };
 use orc_pty::{HostedPane, UpdateSignal};
 use serde::{Deserialize, Serialize};
@@ -682,6 +682,7 @@ impl Daemon {
                     status: task.status.clone(),
                     assignee: task.assignee.clone(),
                     assignee_run: task.assignee_run.clone(),
+                    reviewer_run: task.reviewer_run.clone(),
                     isolated: task.worktree.is_some(),
                     isolation: task.worktree.as_ref().map(|worktree| {
                         worktree
@@ -696,7 +697,7 @@ impl Daemon {
                         .history
                         .iter()
                         .rev()
-                        .take(8)
+                        .take(TASK_HISTORY_WINDOW)
                         .rev()
                         .map(|entry| TaskHistorySummary {
                             at: entry.at.clone(),
@@ -705,6 +706,9 @@ impl Daemon {
                             to: entry.to.clone(),
                         })
                         .collect(),
+                    // The whole history's length, not the window's: the client
+                    // locates the window with it (issue #51 defect 1).
+                    history_total: task.history.len(),
                 }
             })
             .collect();
@@ -1221,7 +1225,10 @@ mod tests {
 
     use orc_core::bench::create_session;
     use orc_core::bench::{HarnessConfig, HarnessRegistry, read_session, write_harness_registry};
-    use orc_proto::{ClientRequest, DispatchCommand, LayoutRect, PROTOCOL_VERSION, ServerResponse};
+    use orc_proto::{
+        ClientRequest, DispatchCommand, LayoutRect, PROTOCOL_VERSION, ServerResponse,
+        TASK_HISTORY_WINDOW,
+    };
 
     fn daemon_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -2065,6 +2072,139 @@ exit 0
     /// The client cannot write `~/.orchestra`, so the theme it cycled is
     /// persisted here — and the next `Home` (what a relaunch reads) has to
     /// report it.
+    /// A real reviewed task outruns the history window, and the summary says
+    /// by how much.
+    ///
+    /// Issue #51 defect 1. `task_board` has always truncated `history` to the
+    /// newest [`TASK_HISTORY_WINDOW`] entries, and the client's watermark was a
+    /// length *into that window* — so a task with more entries than the window
+    /// is wide stopped animating for good. The window is not the defect and is
+    /// unchanged; what was missing is the total, which is what lets the client
+    /// hold an absolute index. This drives the full contracted-and-reviewed
+    /// lifecycle through the real `orc_core::tasks` API so that "nine entries"
+    /// is a fact about the product rather than a number this test made up.
+    #[test]
+    #[allow(unsafe_code)]
+    fn a_task_board_card_carries_the_whole_historys_length_not_the_windows() {
+        use orc_core::tasks::{
+            NewTask, TaskActor, add_task, assign_task, done_task, record_delivery,
+            record_execution, record_review_delivery, record_review_execution, review_task,
+            start_task,
+        };
+
+        let _guard = daemon_test_lock();
+        let root = std::env::temp_dir().join(format!("orcd-window-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create window root");
+        // SAFETY: daemon tests that mutate ORC_HOME run serially in this binary.
+        unsafe { std::env::set_var("ORC_HOME", &root) };
+        write_harness_registry(&HarnessRegistry::default()).expect("persist default registry");
+
+        let cwd = root.join("cwd");
+        fs::create_dir_all(&cwd).expect("create session cwd");
+        let bench = create_session("codex", &[], &cwd).expect("create window session");
+        let session = bench.id.as_str();
+        let executor = format!("{session}-worker-1");
+        let reviewer = format!("{session}-worker-2");
+        let actor = TaskActor::Brain;
+        let task = add_task(
+            session,
+            actor,
+            NewTask {
+                title: "a reviewed brief".to_owned(),
+                ..NewTask::default()
+            },
+        )
+        .expect("create");
+        let id = task.id.clone();
+        assign_task(
+            session,
+            &id,
+            "hermes".to_owned(),
+            Some(executor.clone()),
+            actor,
+        )
+        .expect("assign");
+        start_task(session, &id, actor).expect("start");
+        record_delivery(
+            session,
+            &id,
+            actor,
+            Some(executor.clone()),
+            "delivered".to_owned(),
+        )
+        .expect("delivery");
+        record_execution(session, &id, actor, true, "answered".to_owned()).expect("execution");
+        record_review_delivery(
+            session,
+            &id,
+            actor,
+            Some(reviewer.clone()),
+            "review delivered".to_owned(),
+        )
+        .expect("review delivery");
+        record_review_execution(session, &id, actor, true, "reviewed".to_owned())
+            .expect("review execution");
+        review_task(session, &id, actor).expect("review");
+        let finished = done_task(session, &id, actor).expect("done");
+
+        assert!(
+            finished.history.len() > TASK_HISTORY_WINDOW,
+            "a reviewed lifecycle must outrun the window or this test proves \
+             nothing: {} entries against a window of {TASK_HISTORY_WINDOW} — {:?}",
+            finished.history.len(),
+            finished
+                .history
+                .iter()
+                .map(|entry| entry.action.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let daemon = Daemon::production(root.clone(), update_signal());
+        let ServerResponse::TaskBoard { tasks, .. } = daemon
+            .respond(ClientRequest::TaskBoard {
+                session_id: session.to_owned(),
+            })
+            .expect("task board")
+        else {
+            panic!("expected a task board response");
+        };
+        let card = tasks.iter().find(|card| card.id == id).expect("the card");
+
+        assert_eq!(
+            card.history.len(),
+            TASK_HISTORY_WINDOW,
+            "the window still bounds what crosses the wire"
+        );
+        assert_eq!(
+            card.history_total,
+            finished.history.len(),
+            "and the card says how long the whole history really is, which is \
+             what locates the window"
+        );
+        assert_eq!(
+            card.history.first().map(|entry| entry.action.as_str()),
+            finished
+                .history
+                .get(finished.history.len() - TASK_HISTORY_WINDOW)
+                .map(|entry| entry.action.as_str()),
+            "the window is the newest entries, so its first entry sits at \
+             absolute index history_total - history.len()"
+        );
+        assert_eq!(
+            card.reviewer_run.as_deref(),
+            Some(reviewer.as_str()),
+            "and the reviewer's own pane rides along with it (defect 3)"
+        );
+        assert_eq!(
+            card.assignee_run.as_deref(),
+            Some(executor.as_str()),
+            "without disturbing the executor's"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     #[allow(unsafe_code)]
     fn set_theme_persists_through_the_daemon_and_the_next_home_reports_it() {

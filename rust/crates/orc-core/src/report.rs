@@ -486,6 +486,7 @@ mod tests {
             depends_on: Vec::new(),
             assignee: Some("hermes".to_owned()),
             assignee_run: Some("D-executor".to_owned()),
+            reviewer_run: None,
             worktree: Some(TaskWorktree {
                 state: "ready".to_owned(),
                 path: Some("/tmp/review-worktree".to_owned()),
