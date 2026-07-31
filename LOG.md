@@ -34,7 +34,7 @@ ship-log entries are part of finishing an issue.*
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 🔨 | `issue-49-watchable-delegation` · review FIX (3) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 🧪 | `issue-49-watchable-delegation` · review FIX (4) all fixed in `1989e2b` |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -568,6 +568,23 @@ Evidence, including the two claims I had to walk back:
 > watermark is `orc-app`'s own `seen_history` and a content-anchored one fixes
 > it inside the allowed paths. (3) `visual-identity.md:163` still carries the
 > bolded "no hold of its own" the branch walked back everywhere else.
+>
+> **A fourth, found while re-running the gates: `cargo test --workspace` failed
+> 3 runs in 6 on the branch as pushed** — the "335, 0 failed" claim (and my own
+> first 3 clean runs) were undersampled. Two *new* orc-app flakes, both racing
+> the time-animated ambient rail: `the_packet_is_one_cell_and_draws_no_trail`
+> diffed a control render against later ones while the baton ramp swept between
+> them, and the message goldens shared one 180 ms anchor across three renders —
+> where halving the packet quantum halved the slack, so it is a cost of the
+> smoothness fix, not pre-existing. `origin/main` A/B: 0/6 for orc-app.
+>
+> **All four fixed on the branch (`1989e2b`) — 🔨→🧪.** The wake path is now a
+> named `FileWatch` table plus a `reads_board` predicate, and both surviving
+> mutations die against it; the two doc claims are corrected; the rail is
+> decayed before the diff and the golden anchor taken per case. Eight
+> consecutive full-workspace runs: **337 passed, zero orc-app failures.** The
+> two `orc-cli` quota flakes that remain are pre-existing and reproduce on
+> `origin/main`. Five gates green on a forced re-lint. **Ready to merge.**
 
 ### 2026-07-30 — The rainbow now respects a colourless terminal, and the no-hex test looks everywhere, issue #39 (code-puppy)
 Two leftovers from the new look, both about the code meaning what it says. First:
