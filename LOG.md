@@ -37,6 +37,7 @@ ship-log entries are part of finishing an issue.*
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phase 2 merged too (PR #56); **phase 3 is the only one left on #49** |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
 | [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | ✅ | merged (PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56), `2dc35db`) · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · **merged without the one follow-up named in the re-review: the `capped` latch is still held by no test** — it guards the log's contiguous-prefix claim, the test is written and verified, and it should be picked up in phase 3 · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 3](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | The brief sidecar: press `<leader> i` on a worker and see the brief that worker was actually sent, plus what it has really produced so far | 👀 | `issue-49-phase3-brief-overlay` · **closes #49**, so #14 is unblocked · 5 gates green, **392 passed 0 failed** ×3 (baseline 365) · **the issue's premise was false and is corrected**: `DispatchRecord.prompt` was reachable from the client by no path — not on `TaskSummary`, not on `DispatchSummary`, and `~/.orchestra/dispatches` is watched by nothing · new `DispatchBrief`/`read_briefs` reader that **cannot** reconcile (the existing readers kill worker pids and write the board) and has **no `stdout` field**, so #55's 400 KB is structurally unreachable · acceptance **9** (zoom: brief survives, wire is stated) and **10** answered · tachyonfx evaluated and **declined** on its timing model · carried-over `capped`-latch test landed, plus the unheld `note`-frame `stderr` counters · one pre-existing defect found and reported not fixed: the `conductor_down` overlay is drawn before the cell blit and erased by it in the same frame, covered by no test |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -613,6 +614,65 @@ green while the watermark was wrong. The two self-found defects — the daemon
 test under-driving the lifecycle it claimed to measure, and the AC7 test racing
 #50's board-before-record ordering — were the better catch of the round.
 [Full re-review.](https://github.com/Legend101Zz/Agent-orchestra/issues/51#issuecomment-5142275011)
+
+### 2026-08-01 — You can now see the brief a worker was actually handed, issue #49 phase 3 (Claude)
+
+The short version: **when you delegate, the work does not happen in the CLI you
+are looking at.** A separate process runs it, headless, usually in a different
+directory. Somebody filed #45 because they watched their seated Hermes sit there
+doing nothing and concluded, reasonably, that the delegation had failed. It had
+not — it had gone somewhere they could not see.
+
+Press `⌃g i` on a worker pane now and a band opens at the top of its card
+showing the brief that worker was *really* sent, which dispatch it belongs to,
+which directory it ran in, and — the point — the words **"sidecar worker, not
+this pane's CLI"**. Press it again and it closes. Nothing is resized, nothing is
+lost: the CLI's own output is underneath and comes straight back.
+
+Underneath the brief it shows what the worker has genuinely produced so far: how
+many complete lines, how many bytes, the newest line verbatim, and when a line
+last actually arrived. It is careful about that last one in a way that took real
+work. The journal gets re-stamped whenever *any* counter moves, so a worker
+writing only to its error stream would have made "newest line at 12:09" tick
+forward while its output had been still for minutes. It now tracks when a
+**line** moved, not when anything moved.
+
+It also refuses to guess. There are four different ways for there to be nothing
+to show — the supervisor is not streaming; it is streaming but has not said so
+yet; it named files that are not there; it looked and there was nothing — and
+they get four different sentences instead of one shrug. Words like "thinking",
+"quiet" and "no output" are banned outright and a test enforces it, because we
+genuinely cannot know: a Python worker that buffers its output delivers
+*nothing* until it exits, and the same worker run with `-u` delivers in 18
+milliseconds. What we can honestly say is "no complete line observed since T".
+
+**Two things worth your attention.**
+
+First, the issue told this session that the overlay "needs no new plumbing" —
+that the watcher built in phase 1 already wakes the client when the brief
+becomes durable. The prompt file told the session to confirm that rather than
+assume it, and it was wrong. The client does wake, but what it receives has no
+brief in it, and there was no path from the TUI to the brief at all. That
+changed the shape of the work, so it went on the issue before any code was
+written rather than turning up in the diff.
+
+Second, a defect that is **not** from this branch and is deliberately left
+alone: the "CONDUCTOR DOWN" box that is supposed to appear on a dead brain's
+pane is drawn and then immediately painted over by the pane's own contents, in
+the same frame. It has never worked, and no test or screenshot covers it. It is
+a small ordering fix in a file this branch is already in, but it belongs to a
+different issue — say the word and it becomes its own commit.
+
+Also decided, with evidence rather than taste: **tachyonfx is not adopted.** It
+was already a dependency, so this cost nothing to decline. Its animation clock
+advances by "time since last frame", and ours deliberately changes speed — so
+anything looping would end up in a different place depending on how busy the
+machine was, which is precisely the "no fake timers" rule #49 exists to enforce.
+On a no-colour terminal it would also have interpolated toward black on the one
+tier whose whole answer is "no colour".
+
+Five gates green, 392 tests passing against a 365 baseline, three clean runs in
+a row. Every new test was broken on purpose first to check it could fail.
 
 ### 2026-07-31 — You can now see what a worker has said before it finishes, issue #49 phase 2 (Claude)
 

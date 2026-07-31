@@ -37,13 +37,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tachyonfx::{EffectTimer, Interpolation};
 use thiserror::Error;
 
 pub mod baton;
 pub mod circuit;
 pub mod glyph;
+pub mod reveal;
 #[cfg(test)]
 mod snapshot;
 pub mod theme;
@@ -689,6 +690,18 @@ struct StageState {
     /// Recoverable command failure shown on the legend line instead of
     /// exiting the client.
     message: String,
+    /// The composed brief sidecar for each worker pane that has one, by pane id
+    /// (issue #49 phase 3).
+    ///
+    /// Populated from `~/.orchestra/dispatches` on a board read, never per
+    /// frame. Keyed by pane because that is what `render_pane` has.
+    reveals: BTreeMap<String, reveal::Reveal>,
+    /// The pane whose sidecar is currently open, if any.
+    ///
+    /// At most one on the stage: two bands would cover two hosted CLIs at once
+    /// for a feature whose whole argument is that it covers nothing the user
+    /// needs.
+    revealed: Option<String>,
 }
 
 /// How long a task's whole durable history is, as far as this client can tell.
@@ -735,6 +748,8 @@ impl StageState {
             leader_label: "ctrl-g".to_owned(),
             trigger_wired: true,
             message: String::new(),
+            reveals: BTreeMap::new(),
+            revealed: None,
         }
     }
 
@@ -990,6 +1005,118 @@ impl StageState {
             .retain(|id, _| tasks.iter().any(|task| task.id == *id));
     }
 
+    /// Re-resolve the brief sidecar for every worker pane whose task moved,
+    /// and return how many times the dispatch directory was read.
+    ///
+    /// **The count is the point.** `read_board` is reached from `reads_board`,
+    /// which is true for `BoardChanged` *and* for `Snapshot` — and `Snapshot`
+    /// is emitted whenever a pane's output sequence changes, with no debounce.
+    /// So the call site fires at PTY rate, not at the board's ~2 writes/sec.
+    /// Without the `resolved_from` guard a chatty worker would buy a
+    /// `read_dir` plus a parse per record on every tick: measured at 64
+    /// dispatches that is 6.3 ms with `stdout` at its documented cap and
+    /// 83.6 ms under issue #55's unbounded case, against a 16 ms animating
+    /// tier. Returning the count is what lets a test assert `1` then `0`, so
+    /// the cost claim is a value rather than a paragraph.
+    ///
+    /// `history_total` is the invalidation key because it is exactly what moves
+    /// when a new dispatch is recorded, and it is already on the wire.
+    fn resolve_reveals(
+        &mut self,
+        tasks: &[TaskSummary],
+        read: impl Fn(&str) -> Vec<orc_core::dispatch::DispatchBrief>,
+    ) -> usize {
+        let Some(session) = self.session_id.clone() else {
+            return 0;
+        };
+        // Which panes want a brief, and at what watermark.
+        let mut wanted: Vec<(String, String, reveal::Lane, usize)> = Vec::new();
+        for task in tasks {
+            for (lane, link) in [
+                (reveal::Lane::Executor, task.assignee_run.as_ref()),
+                (reveal::Lane::Reviewer, task.reviewer_run.as_ref()),
+            ] {
+                let Some(link) = link else { continue };
+                if !self.panes.iter().skip(1).any(|pane| pane.id == *link) {
+                    continue;
+                }
+                wanted.push((link.clone(), task.id.clone(), lane, history_total(task)));
+            }
+        }
+        let stale = wanted.iter().any(|(pane, _, _, total)| {
+            self.reveals
+                .get(pane)
+                .is_none_or(|held| held.resolved_from != *total)
+        });
+        if !stale {
+            return 0;
+        }
+        // One read for the whole pass, however many panes moved.
+        let briefs = read(&session);
+        for (pane, task, lane, total) in wanted {
+            let Some(brief) = reveal::newest_for(&briefs, &task, lane, &pane) else {
+                self.reveals.remove(&pane);
+                continue;
+            };
+            self.reveals
+                .insert(pane, reveal::compose(brief, total, self.glyphs));
+        }
+        1
+    }
+
+    /// Drop sidecars for panes that have left the stage, and close the open one
+    /// with them.
+    ///
+    /// A reveal that outlived its pane would keep asking for repaints on a card
+    /// that is not there.
+    fn retain_reveals(&mut self) {
+        self.reveals
+            .retain(|pane, _| self.panes.iter().any(|live| live.id == *pane));
+        if let Some(open) = self.revealed.clone()
+            && !self.reveals.contains_key(&open)
+        {
+            self.revealed = None;
+        }
+    }
+
+    /// Toggle the sidecar on the focused pane, or say why it cannot open.
+    ///
+    /// Returns the refusal to put on the legend, when there is one. The
+    /// conductor is refused by role rather than by index: `LeaderAction::Swap`
+    /// swaps `panes`, so index 0 is a wiring convention and not a guarantee.
+    fn toggle_reveal(&mut self) -> Option<String> {
+        let pane = self.panes.get(self.focus)?;
+        let id = pane.id.clone();
+        if pane.role.as_deref() == Some("brain") {
+            return Some(
+                "no brief here — the conductor writes briefs, it does not take them".to_owned(),
+            );
+        }
+        if self.revealed.as_deref() == Some(id.as_str()) {
+            self.revealed = None;
+            return None;
+        }
+        if !self.reveals.contains_key(&id) {
+            return Some(format!("{} has taken no brief in this session", pane.title));
+        }
+        self.revealed = Some(id);
+        None
+    }
+
+    /// Rows the sidecar takes on this pane, or zero when it is closed or the
+    /// pane is too small to hold it honestly.
+    fn reveal_band_rows(&self, pane_id: &str, inner: Rect) -> u16 {
+        if self.revealed.as_deref() != Some(pane_id) || !self.reveals.contains_key(pane_id) {
+            return 0;
+        }
+        let band = reveal::REVEAL_ROWS.min(inner.height.saturating_sub(reveal::REVEAL_KEEP_ROWS));
+        if band < reveal::REVEAL_MIN_ROWS || inner.width < reveal::REVEAL_MIN_COLS {
+            0
+        } else {
+            band
+        }
+    }
+
     /// Drop messages whose emote has run out, and any whose wire has gone.
     ///
     /// "Never leaves residue on the buffer" is a property of the whole frame
@@ -1222,6 +1349,8 @@ enum LeaderAction {
     Views,
     Help,
     Theme,
+    /// Open or close the brief sidecar on the focused pane (issue #49 phase 3).
+    Reveal,
 }
 
 struct RawRouter {
@@ -1266,6 +1395,13 @@ impl RawRouter {
                     b'v' => Some(LeaderAction::Views),
                     b'?' => Some(LeaderAction::Help),
                     b't' => Some(LeaderAction::Theme),
+                    // Issue #49 phase 3. `i` was in the forward arm below, so
+                    // taking it costs a user only the literal two-byte
+                    // sequence `<leader>i` — which `<leader><leader>i` still
+                    // delivers via the escape arm above. A **bare** `i` is
+                    // untouched and still reaches the pane, so a vim user's
+                    // insert key is not eaten.
+                    b'i' => Some(LeaderAction::Reveal),
                     _ => {
                         forwarded.push(byte);
                         None
@@ -2655,9 +2791,21 @@ fn read_board(commands: &mut BenchClient, shell: &mut ShellState) {
     };
     score.tasks = tasks;
     if let Some(stage) = shell.stage.as_mut() {
-        stage.confirmed_panes = confirmed_panes(&score.tasks);
-        stage.note_task_events(&score.tasks);
+        absorb_board(stage, &score.tasks);
     }
+}
+
+/// Everything a board read owes STAGE, in one named place.
+///
+/// Extracted for the reason `reads_board` and `file_watches` were: wiring rots
+/// without anyone noticing, and a test needs something to hold. Deleting any
+/// one of these three lines leaves the client compiling and the suite green
+/// unless something pins the composition itself.
+fn absorb_board(stage: &mut StageState, tasks: &[TaskSummary]) {
+    stage.confirmed_panes = confirmed_panes(tasks);
+    stage.note_task_events(tasks);
+    stage.resolve_reveals(tasks, orc_core::dispatch::read_briefs);
+    stage.retain_reveals();
 }
 
 fn run_shell_loop(
@@ -3266,6 +3414,14 @@ fn handle_raw_event(
                         }
                     }
                     LeaderAction::Zoom => stage.zoomed = !stage.zoomed,
+                    LeaderAction::Reveal => {
+                        // A refusal is stated on the legend rather than
+                        // opening an empty box: "there is no brief here" is
+                        // information, and a blank band is not.
+                        if let Some(refusal) = stage.toggle_reveal() {
+                            stage.message = refusal;
+                        }
+                    }
                     LeaderAction::Swap => {
                         if stage.panes.len() > 1 {
                             let next = (stage.focus + 1) % stage.panes.len();
@@ -3816,6 +3972,42 @@ fn render_stage(
     state.record_wiring(wiring.as_ref());
     let areas = state.pane_areas.clone();
     let emotes = state.emotes(motion.is_none());
+    // Resolved before the render loop because `render_pane` borrows a `Reveal`
+    // out of `state.reveals` while `state` itself is `&mut`. Keyed by pane id,
+    // so a swap or a drag cannot hand one pane's brief to another.
+    let leader_label = state.leader_label.clone();
+    // Computed against the rect the pane is actually drawn into, not against a
+    // positional zip of `panes` with `areas`: when zoomed, `panes[focus]` is
+    // rendered into `areas[0]`, so a positional map hands the focused worker
+    // the conductor's entry and the band silently never opens.
+    let bands: HashMap<String, u16> = state
+        .panes
+        .iter()
+        .map(|pane| {
+            let area = if state.zoomed {
+                areas.first().copied()
+            } else {
+                areas
+                    .iter()
+                    .zip(state.panes.iter())
+                    .find(|(_, candidate)| candidate.id == pane.id)
+                    .map(|(area, _)| *area)
+            };
+            let rows = area.map_or(0, |area| {
+                let inner = Block::default().borders(Borders::ALL).inner(area);
+                state.reveal_band_rows(&pane.id, inner)
+            });
+            (pane.id.clone(), rows)
+        })
+        .collect();
+    let reveals = &state.reveals;
+    let band_for = |pane: &PaneSnapshot| {
+        bands
+            .get(&pane.id)
+            .copied()
+            .filter(|rows| *rows > 0)
+            .and_then(|rows| reveals.get(&pane.id).map(|held| (held, rows)))
+    };
     if state.zoomed {
         if let (Some(pane), Some(pane_area)) =
             (state.panes.get(state.focus), areas.first().copied())
@@ -3831,6 +4023,8 @@ fn render_stage(
                     phase,
                     emote: emotes.get(&pane.id).copied(),
                     trigger_wired: state.trigger_wired,
+                    reveal: band_for(pane),
+                    leader: &leader_label,
                 },
                 state.theme,
                 state.glyphs,
@@ -3849,6 +4043,8 @@ fn render_stage(
                     phase,
                     emote: emotes.get(&pane.id).copied(),
                     trigger_wired: state.trigger_wired,
+                    reveal: band_for(pane),
+                    leader: &leader_label,
                 },
                 state.theme,
                 state.glyphs,
@@ -3864,11 +4060,21 @@ fn render_stage(
         // AC8 asks for a *stated* fallback, not merely a visible one. It leads
         // the legend rather than trailing it because the width at which the
         // router gives up is also the width at which the legend gets clipped.
-        let fallback = if state.routing() == Some(circuit::Routing::Inlaid) {
+        let fallback = if state.zoomed {
+            // Issue #49 acceptance check 9. `render_circuit` is not called in
+            // the zoomed branch, so the packet really is gone — and a packet
+            // that vanishes without a word is the same defect as traffic
+            // dropped in silence. The brief itself survives zoom (it lives in
+            // `render_pane`, which the zoomed branch does call), so what is
+            // stated here is only the wire.
+            "zoomed — connectors hidden, {leader} z returns · "
+        } else if state.routing() == Some(circuit::Routing::Inlaid) {
             "connectors inlaid — too narrow to route · "
         } else {
             ""
         };
+        let fallback = fallback.replace("{leader}", &state.leader_label);
+        let fallback = fallback.as_str();
         // Same rule for traffic with no wire: a delegation whose worker is not
         // one of these panes is real, and STAGE saying nothing about it is how
         // #45's reporter came to believe their seated Hermes had run the task.
@@ -4305,7 +4511,7 @@ fn pane_state(pane: &PaneSnapshot) -> (Glyph, Slot) {
 /// task's delivery is confirmed, and where the trigger rainbow's gradient has
 /// slid to.
 #[derive(Clone, Copy)]
-struct PaneChrome {
+struct PaneChrome<'a> {
     /// A message leaving or landing here, and whether it is still in its
     /// reverse-video flash frame. Transient: it precedes the steady
     /// `confirmed` badge rather than replacing it, which is why they share one
@@ -4318,13 +4524,19 @@ struct PaneChrome {
     /// still shown when it cannot — unavailable is never hidden — but it is
     /// labelled inert rather than dressed up as working.
     trigger_wired: bool,
+    /// The brief sidecar to draw over this pane's card, and how many rows of
+    /// `inner` it takes (issue #49 phase 3). `None` when it is closed, when
+    /// this pane has no brief, or when the pane is too small to hold it.
+    reveal: Option<(&'a reveal::Reveal, u16)>,
+    /// The leader chord's label, so the band can say how to close itself.
+    leader: &'a str,
 }
 
 fn render_pane(
     frame: &mut Frame<'_>,
     area: Rect,
     pane: &PaneSnapshot,
-    chrome: PaneChrome,
+    chrome: PaneChrome<'_>,
     theme: Theme,
     glyphs: Glyphs,
 ) {
@@ -4334,6 +4546,8 @@ fn render_pane(
         phase,
         emote,
         trigger_wired,
+        reveal: band,
+        leader,
     } = chrome;
     let (trigger_spans, triggers) = conductor_triggers(pane);
     let badge = trigger_badge(&triggers, trigger_wired, glyphs);
@@ -4479,6 +4693,137 @@ fn render_pane(
             target.set_style(style);
         }
     }
+    // AFTER the blit, deliberately, and this ordering is the whole mechanism.
+    //
+    // The `conductor_down` overlay above draws *before* it and is therefore
+    // erased by the pane's own grid in the same frame — a shipped defect that
+    // no test or golden covers, reported on #49 and deliberately left alone
+    // here. `the_hosted_grid_is_never_drawn_under_the_reveal` is what stops
+    // this one going the same way: move this call above the blit and it fails.
+    //
+    // The design of record also had the blit skip the band's rows. That was
+    // dropped: `render_reveal` opens with `Clear` over the whole band rect, so
+    // a skip changes no cell any test or any user can observe — and a
+    // mechanism nothing can distinguish is the shape of defect this program
+    // has already paid for three times. One mechanism, one test that holds it.
+    if let Some((held, rows)) = band {
+        render_reveal(frame, inner, held, rows, theme, glyphs, leader);
+    }
+}
+
+/// Draw the brief sidecar into the top `rows` of a pane's inner area.
+///
+/// Every row carries the `▌` rail in the conductor's own accent: the band is
+/// the *conductor's* statement inside the *worker's* card, and that contrast is
+/// one of the five marks that answer acceptance check 10.
+#[allow(clippy::too_many_arguments)]
+fn render_reveal(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    held: &reveal::Reveal,
+    rows: u16,
+    theme: Theme,
+    glyphs: Glyphs,
+    leader: &str,
+) {
+    let width = usize::from(inner.width);
+    let rail = glyphs.get(Glyph::RevealRail);
+    let body = width.saturating_sub(rail.chars().count());
+    let band_area = Rect::new(inner.x, inner.y, inner.width, rows);
+    // `Clear` resets the symbols; the styled `Block` puts the theme back.
+    // Both are needed and in this order: `Block::style` sets a cell's style and
+    // leaves its symbol, so a fill alone would let a worker glyph show through
+    // wherever a composed line is shorter than the pane is wide — and `Clear`
+    // alone resets to the *terminal's* default rather than to `overlay`, which
+    // would punch an unthemed hole in the card.
+    frame.render_widget(Clear, band_area);
+    frame.render_widget(
+        Block::new().style(Style::default().bg(theme.overlay()).fg(theme.fg())),
+        band_area,
+    );
+    let brief_rows = usize::from(rows.saturating_sub(4));
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Row 0 — the header, which always carries the negation.
+    lines.push(Line::from(vec![
+        Span::styled(rail.to_owned(), theme.state(Slot::Brain)),
+        Span::styled(
+            reveal::clip(&reveal::header(held, body, glyphs), body, glyphs),
+            Style::default()
+                .fg(theme.slot(Slot::Fg))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    // Rows 1..n — the brief itself, the last replaced by the marker when there
+    // is more. Replaced rather than appended so a count can never be mistaken
+    // for content.
+    let hidden = held.prompt_lines_total > brief_rows;
+    let shown = if hidden {
+        brief_rows.saturating_sub(1)
+    } else {
+        brief_rows
+    };
+    for index in 0..brief_rows {
+        let text = if hidden && index == brief_rows - 1 {
+            reveal::more_marker(held, shown, body.saturating_sub(1), glyphs)
+        } else {
+            held.prompt
+                .get(index)
+                .map(|line| reveal::clip(line, body.saturating_sub(1), glyphs))
+                .unwrap_or_default()
+        };
+        let style = if hidden && index == brief_rows - 1 {
+            theme.state(Slot::Muted)
+        } else {
+            Style::default().fg(theme.slot(Slot::Fg))
+        };
+        lines.push(Line::from(vec![
+            Span::styled(rail.to_owned(), theme.state(Slot::Brain)),
+            Span::styled(format!(" {text}"), style),
+        ]));
+    }
+    // Row band-3 — which "nothing here" fact this is.
+    lines.push(Line::from(vec![
+        Span::styled(rail.to_owned(), theme.state(Slot::Brain)),
+        Span::styled(
+            reveal::status_line(held, body, glyphs),
+            theme.state(Slot::Muted),
+        ),
+    ]));
+    // Row band-2 — one line of the worker's own bytes, verbatim.
+    let bytes_row = held.lines.first().map_or_else(
+        || {
+            (
+                format!(
+                    " no complete line in the last {} B",
+                    reveal::REVEAL_TAIL_BYTES
+                ),
+                theme.state(Slot::Faint),
+            )
+        },
+        |line| {
+            (
+                format!(" {}", reveal::clip(line, body.saturating_sub(1), glyphs)),
+                Style::default().fg(theme.slot(Slot::Fg)),
+            )
+        },
+    );
+    lines.push(Line::from(vec![
+        Span::styled(rail.to_owned(), theme.state(Slot::Brain)),
+        Span::styled(bytes_row.0, bytes_row.1),
+    ]));
+    // Row band-1 — the rule, stating the band's own cost and how to close it.
+    let label = reveal::rule_label(rows, inner.height, leader, width);
+    let dashes = width.saturating_sub(label.chars().count() + 2);
+    let left = dashes / 2;
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "{} {label} {}",
+            "─".repeat(left),
+            "─".repeat(dashes.saturating_sub(left))
+        ),
+        theme.state(Slot::Faint),
+    )]));
+    frame.render_widget(Paragraph::new(lines), band_area);
 }
 
 fn epoch_now() -> u64 {
@@ -5054,6 +5399,54 @@ mod tests {
         }
     }
 
+    /// A worker pane whose grid is FULL of `#`.
+    ///
+    /// The fixture discipline that makes the blit-skip test able to fail: the
+    /// daemon sizes a hosted grid to the whole of `inner` (`resize_to_cards`
+    /// asks for `height-2` x `width-2`), so a fixture with a small or empty
+    /// grid would let an overlay survive by accident and prove nothing.
+    fn packed_worker(id: &str, rows: u16, cols: u16) -> PaneSnapshot {
+        let stream = (0..rows)
+            .map(|_| format!("{}\r\n", "#".repeat(usize::from(cols))))
+            .collect::<String>();
+        PaneSnapshot {
+            id: id.to_owned(),
+            title: "pi-m3".to_owned(),
+            rows,
+            cols,
+            cursor: (0, 0),
+            sequence: 1,
+            cells: cells_from_stream(rows, cols, stream.as_bytes()).expect("parse worker stream"),
+            session_id: None,
+            harness: Some("pi-m3".to_owned()),
+            role: Some("worker".to_owned()),
+            state: Some("running".to_owned()),
+            down_at: None,
+        }
+    }
+
+    /// A composed sidecar with no I/O, for the render-path tests.
+    fn test_reveal(resolved_from: usize) -> crate::reveal::Reveal {
+        crate::reveal::Reveal {
+            dispatch: "D-pi-m3-1-x-3f2a".to_owned(),
+            task: "T0007".to_owned(),
+            harness: "pi-m3".to_owned(),
+            attempt: Some(1),
+            cwd: None,
+            prompt: vec![
+                "Rewrite parse_review_verdicts so a folded partial can no".to_owned(),
+                "longer parse as a verdict. Keep the brace scanner, but add".to_owned(),
+                "a fence-depth counter.".to_owned(),
+            ],
+            prompt_lines_total: 3,
+            prompt_bytes: 140,
+            controls_replaced: false,
+            progress: crate::reveal::Progress::NotStreaming,
+            lines: Vec::new(),
+            resolved_from,
+        }
+    }
+
     /// The gradient a truecolor terminal receives, which is the tier every test
     /// renders with unless it is specifically exercising a degradation.
     fn truecolor_gradient() -> [ratatui::style::Color; crate::theme::TRIGGER_STOPS] {
@@ -5114,6 +5507,265 @@ mod tests {
     // is Claude Code; `\u{279c}` is oh-my-zsh; the bare case keeps back-compat.
     // These are the shapes the earlier bare-only fixtures failed to represent.
     const REAL_PROMPTS: [&str; 6] = ["", "\u{276f} ", "> ", "$ ", "% ", "\u{279c} "];
+
+    /// **The hosted grid is never drawn under the sidecar.**
+    ///
+    /// The fixture packs the worker's whole grid with `#`, at exactly the size
+    /// the daemon really uses (`resize_to_cards` asks for `inner`), because a
+    /// smaller grid would let the band survive by accident.
+    ///
+    /// This is the test the shipped `conductor_down` overlay does not have:
+    /// that one is drawn at `lib.rs:4399`, *before* the blit, and is erased by
+    /// the pane's own grid in the same frame. The band is drawn after the blit
+    /// AND the blit's row range starts at `band`, so a worker cell physically
+    /// cannot be written into a band row.
+    ///
+    /// Call-site mutations that must fail it:
+    ///   - move `render_reveal` above the blit, where `conductor_down` sits
+    ///   - restore `for row in 0..rows` (drop the row-skip)
+    #[test]
+    fn the_hosted_grid_is_never_drawn_under_the_reveal() {
+        let mut state = StageState::new(
+            vec![
+                conductor_pane(b"conductor\r\n"),
+                packed_worker("w1", 38, 100),
+            ],
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        state.reveals.insert("w1".to_owned(), test_reveal(4));
+        state.revealed = Some("w1".to_owned());
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+        terminal
+            .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Idle]))
+            .expect("render stage");
+        let buffer = terminal.backend().buffer();
+
+        // Locate the worker pane and its band.
+        let area = state.pane_areas[1];
+        let inner = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .inner(area);
+        let band = state.reveal_band_rows("w1", inner);
+        assert!(
+            band >= crate::reveal::REVEAL_MIN_ROWS,
+            "the band must open in a 120x40 stage, got {band}"
+        );
+
+        for row in 0..band {
+            for col in 0..inner.width {
+                let cell = buffer
+                    .cell((inner.x + col, inner.y + row))
+                    .expect("cell in band");
+                assert_ne!(
+                    cell.symbol(),
+                    "#",
+                    "a worker cell reached band row {row}, col {col}: the grid \
+                     was drawn over the sidecar"
+                );
+            }
+        }
+        // And the grid is still there underneath, so nothing was lost.
+        let below = buffer
+            .cell((inner.x, inner.y + band))
+            .expect("first row under the band");
+        assert_eq!(
+            below.symbol(),
+            "#",
+            "the hosted grid resumes below the band"
+        );
+
+        // The band says what it is and what it costs.
+        let text = rendered_text(buffer);
+        assert!(text.contains("ORC BRIEF"), "the band names itself");
+        assert!(
+            text.contains("not this pane"),
+            "acceptance check 10: it must say the work did not happen here"
+        );
+        assert!(
+            text.contains("COVERING") || text.contains("closes"),
+            "the band states its own cost and its exit"
+        );
+    }
+
+    /// **A zoomed pane still shows the brief, and STAGE says the wire is gone.**
+    ///
+    /// Issue #49 acceptance check 9, which phases 1 and 2 left untouched.
+    /// `render_stage` never calls `render_circuit` when zoomed, so the packet
+    /// genuinely vanishes — but it *does* call `render_pane`, and the band
+    /// lives there. Zoom is what a user does when they want to *read* a pane,
+    /// so the statement of what was handed over is the one thing that must
+    /// survive it.
+    ///
+    /// Call-site mutations that must fail it:
+    ///   - move `render_reveal` out of `render_pane` into the non-zoom branch
+    ///   - delete the zoomed legend clause
+    #[test]
+    fn a_zoomed_pane_still_shows_the_brief_and_says_the_wire_is_hidden() {
+        let render = |zoomed: bool| {
+            let mut state = StageState::new(
+                vec![
+                    conductor_pane(b"conductor\r\n"),
+                    packed_worker("w1", 38, 100),
+                ],
+                ThemeName::Nocturne.into(),
+                GLYPHS,
+            );
+            state.reveals.insert("w1".to_owned(), test_reveal(4));
+            state.revealed = Some("w1".to_owned());
+            state.focus = 1;
+            state.zoomed = zoomed;
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+            terminal
+                .draw(|frame| render_stage(frame, &mut state, None, &[baton::State::Idle]))
+                .expect("render stage");
+            rendered_text(terminal.backend().buffer())
+        };
+
+        let zoomed = render(true);
+        let flat = render(false);
+
+        assert!(
+            zoomed.contains("ORC BRIEF"),
+            "the brief must survive zoom — zoom is how you read a pane"
+        );
+        assert!(
+            zoomed.contains("3f2a"),
+            "and it still names the dispatch it is about"
+        );
+        assert!(
+            zoomed.contains("not this pane"),
+            "the negation survives zoom too"
+        );
+        assert!(
+            zoomed.contains("connectors hidden"),
+            "the vanished wire is STATED rather than silently absent: {}",
+            &zoomed[zoomed.len().saturating_sub(400)..]
+        );
+        assert!(
+            flat.contains("ORC BRIEF"),
+            "and the band is there unzoomed as well"
+        );
+        assert!(
+            !flat.contains("connectors hidden"),
+            "the clause is only true when zoomed"
+        );
+    }
+
+    /// **The sidecar refuses a pane too small to hold it, and says so.**
+    #[test]
+    fn the_reveal_refuses_a_pane_too_small_and_does_not_show_a_stub() {
+        let mut state = StageState::new(
+            vec![conductor_pane(b"conductor\r\n"), packed_worker("w1", 4, 76)],
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        state.reveals.insert("w1".to_owned(), test_reveal(4));
+        state.revealed = Some("w1".to_owned());
+        // The shipped 80x24 topology: stacked panes, worker inner height 4.
+        let tiny = ratatui::layout::Rect::new(0, 0, 78, 4);
+        assert_eq!(
+            state.reveal_band_rows("w1", tiny),
+            0,
+            "min(7, 4-2) = 2 is below REVEAL_MIN_ROWS, so it must refuse \
+             rather than draw a two-row stub that says nothing"
+        );
+        // A pane with room opens.
+        let roomy = ratatui::layout::Rect::new(0, 0, 78, 20);
+        assert!(state.reveal_band_rows("w1", roomy) >= crate::reveal::REVEAL_MIN_ROWS);
+        // Too narrow refuses too.
+        let narrow = ratatui::layout::Rect::new(0, 0, 20, 20);
+        assert_eq!(state.reveal_band_rows("w1", narrow), 0);
+    }
+
+    /// **The chord is on STAGE, and a bare `i` still reaches the pane.**
+    ///
+    /// A vim user's insert key is not eaten. `<leader><leader>i` still delivers
+    /// the literal two-byte sequence.
+    ///
+    /// Mutations: add `LeaderAction::Reveal` without the `b'i'` arm; intercept
+    /// bare `i`.
+    #[test]
+    fn the_reveal_chord_is_reachable_and_a_bare_i_still_reaches_the_pane() {
+        let mut router = RawRouter::default();
+        assert_eq!(
+            router.route(b"\x07i"),
+            (Vec::new(), vec![LeaderAction::Reveal]),
+            "the chord raises the action and forwards nothing"
+        );
+
+        let mut router = RawRouter::default();
+        assert_eq!(
+            router.route(b"i"),
+            (b"i".to_vec(), Vec::new()),
+            "a BARE `i` must still reach the pane — this is the half that \
+             proves the key was not stolen"
+        );
+
+        let mut router = RawRouter::default();
+        assert_eq!(
+            router.route(b"\x07\x07i"),
+            (b"\x07i".to_vec(), Vec::new()),
+            "the leader escape still delivers the literal sequence"
+        );
+    }
+
+    /// **Refusals are stated, never an empty box.**
+    #[test]
+    fn asking_for_a_brief_that_does_not_exist_says_so() {
+        let mut state = StageState::new(
+            vec![
+                conductor_pane(b"conductor\r\n"),
+                packed_worker("w1", 10, 40),
+            ],
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        // The conductor is refused by ROLE, not by index: `LeaderAction::Swap`
+        // swaps `panes`, so index 0 is a convention and not a guarantee.
+        state.focus = 0;
+        let refusal = state.toggle_reveal().expect("the conductor is refused");
+        assert!(refusal.contains("conductor writes briefs"), "{refusal}");
+        assert!(state.revealed.is_none());
+
+        // A worker with no dispatch on this board.
+        state.focus = 1;
+        let refusal = state.toggle_reveal().expect("no brief here");
+        assert!(refusal.contains("taken no brief"), "{refusal}");
+        assert!(state.revealed.is_none(), "nothing opens");
+
+        // With a brief it opens, and toggles closed again.
+        state.reveals.insert("w1".to_owned(), test_reveal(4));
+        assert!(state.toggle_reveal().is_none());
+        assert_eq!(state.revealed.as_deref(), Some("w1"));
+        assert!(state.toggle_reveal().is_none());
+        assert!(state.revealed.is_none(), "the chord is its own exit");
+    }
+
+    /// **A sidecar whose pane leaves the stage is closed, not leaked.**
+    #[test]
+    fn the_reveal_closes_when_its_pane_leaves_the_stage() {
+        let mut state = StageState::new(
+            vec![
+                conductor_pane(b"conductor\r\n"),
+                packed_worker("w1", 10, 40),
+            ],
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        state.reveals.insert("w1".to_owned(), test_reveal(4));
+        state.revealed = Some("w1".to_owned());
+
+        state.apply_snapshot(vec![conductor_pane(b"conductor\r\n")]);
+        state.retain_reveals();
+
+        assert!(
+            state.reveals.is_empty(),
+            "a sidecar for a pane that is gone would keep asking for repaints"
+        );
+        assert!(state.revealed.is_none());
+    }
 
     #[test]
     fn an_unwired_grammar_is_badged_inert_instead_of_looking_live() {

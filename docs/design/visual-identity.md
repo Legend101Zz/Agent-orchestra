@@ -1,4 +1,4 @@
-# pi-orchestra visual identity — distilled spec (REV 2026.07)
+# pi-orchestra visual identity — distilled spec (REV 2026.07d)
 
 Source of truth: `docs/design/visual-identity/Pi-Orchestra Identity.dc.html`
 (interactive, three-theme live preview) plus `screenshots/`. This file is the
@@ -175,6 +175,51 @@ all, so it is written up for review before being promoted into this sheet.
 - **⏻ CONDUCTOR DOWN** — calm and recoverable, never alarming: muted coral,
   slow breath (not a blink), elapsed time, clear `R` to recover. Workers hold
   their last state.
+
+## The brief sidecar
+
+*(Added REV 2026.07d for #49 phase 3. A third vocabulary: the baton says a pane
+**is producing**, a message says a discrete thing **was sent**, and the sidecar
+says **what** was sent and to whom.)*
+
+- A **band** at the top of a worker card's inner area, opened by `<leader> i`,
+  at most one on the stage. It is not modal: it never takes focus, never
+  swallows a keystroke, and the chord is its own exit. Bare `i` still reaches
+  the pane.
+- **Drawn after the pane's cell blit.** This is the load-bearing rule and the
+  one the `⏻ CONDUCTOR DOWN` overlay currently gets wrong — that one is drawn
+  before the blit and is erased by the pane's own grid in the same frame.
+  Anything drawn inside a pane's inner area must come after it.
+- **Nothing is resized and nothing is lost.** The hosted CLI keeps its full
+  grid; the band covers rows and the next frame after closing restores them from
+  the daemon's own buffer. The band states its own cost on its rule row:
+  `COVERING 7 OF 20 ROWS · ⌃g i closes`.
+- **The `▌` rail runs down every band row in the `brain` slot** — the
+  conductor's accent inside the worker's card. With colour removed the rail is
+  still a shape, which is what keeps the band separable on the monochrome tier.
+- **The header always carries the negation**, at every width, degrading
+  `sidecar worker, not this pane's CLI` → `not this pane's CLI` → `not this
+  pane` → `not here`. It never says "delivered to this pane": `deliver`
+  auto-selects a seated pane so the record usually names one, but the work is
+  done by a separate child process. Saying otherwise would restate the belief
+  #45 was filed about.
+- **Truncation replaces, never appends.** The last brief row is *replaced* by
+  `… +{N} more lines · {size} brief`, so a count can never be mistaken for
+  content, and `{N}` is exact rather than "many".
+- **No new slot.** `brain`, `fg`, `muted`, `faint` and `overlay` already exist;
+  adding one would reorder three palettes and every golden's legend.
+- **No motion.** The band's appearance is anchored to a keypress, and a
+  fade-in would be a duration chosen for looks — which #49's acceptance check 6
+  forbids. Reduced motion therefore changes nothing about it.
+- **Glyph register additions:** `▌` rail (`|`), `▤` open (`[B]`), `⏷` more
+  (`v`), `⏶` clipped (`^`), `…` elide (`...`).
+
+**Its vocabulary is bounded by what was observed, not by what the worker did.**
+Whether anything is visible at all is the child's decision — `read_until(b'\n')`
+means a block-buffering worker delivers nothing until it exits — so the band may
+say *"no complete line observed since T"* and may never say "thinking", "quiet",
+"idle" or "no output". The four ways there can be nothing to show get four
+different sentences rather than one.
 
 ## Degradation tiers
 

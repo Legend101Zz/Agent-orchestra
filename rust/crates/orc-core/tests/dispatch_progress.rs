@@ -1452,3 +1452,637 @@ fn an_unterminated_final_chunk_is_not_counted_as_a_line() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+/// **A `note` frame reports both streams, not just stdout.**
+///
+/// `stderr` on a mid-flight frame was built and serialised and asserted by
+/// nothing: setting every note frame's `stderr` to `None` passed the whole
+/// suite. It is the counter that tells a reader a worker is producing
+/// *diagnostics* while its stdout stays empty — which for a harness that logs
+/// its thinking to stderr is the whole of what is observable before exit.
+///
+/// The worker writes to both streams for long enough to cross the note floor
+/// (`PROGRESS_NOTE_MIN_INTERVAL`, 500 ms) several times.
+///
+/// Mutation: `stderr: None` in `ProgressJournal::note`, or dropping the stderr
+/// half of the counters the drain threads hand it.
+#[test]
+fn a_note_frame_carries_the_stderr_counters_too() {
+    let _guard = lock();
+    let home = fresh_home("bothstreams");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // ~3 s of steady output on BOTH streams: comfortably more than the 500 ms
+    // note floor, so several `note` frames are written rather than just
+    // `open` and `close`.
+    let config = worker(
+        &home,
+        "bothstreams",
+        "fake",
+        "i=0\nwhile [ $i -lt 30 ]; do echo \"OUT-$i\"; echo \"ERR-$i\" 1>&2; \
+         sleep 0.1; i=$((i+1)); done",
+    );
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("bothstreams".to_owned(), config);
+    registry.default_workers = vec!["bothstreams".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["bothstreams".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "bothstreams".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "bothstreams".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "bothstreams".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "both streams".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let paths = progress_paths(&session, &record.id, 1);
+    let view = read_progress(&paths.journal)
+        .expect("journal readable")
+        .expect("journal exists");
+
+    let notes = view
+        .frames
+        .iter()
+        .filter(|frame| frame.kind == "note")
+        .collect::<Vec<_>>();
+    // Without this the loop below is vacuously true on an empty set — the
+    // failure mode that would make the whole test unable to fail.
+    assert!(
+        !notes.is_empty(),
+        "a ~3s worker must cross the 500ms note floor and produce note frames; \
+         frames were {:?}",
+        view.frames.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+    for frame in &notes {
+        assert!(
+            frame.stderr.is_some(),
+            "every note frame must carry stderr counters, not just stdout; \
+             seq {} did not",
+            frame.seq
+        );
+    }
+    // The counters must track a stream that really moved, or `Some(default)`
+    // would satisfy the loop above while saying nothing.
+    let stderr_seen = notes
+        .iter()
+        .filter_map(|frame| frame.stderr)
+        .map(|counters| counters.bytes)
+        .max()
+        .expect("stderr counters on a note frame");
+    assert!(
+        stderr_seen > 0,
+        "the worker wrote 30 lines to stderr, so a note frame must have \
+         observed some of them; saw {stderr_seen} bytes"
+    );
+    // And they must be the *worker's* stderr, not a copy of stdout's counters.
+    let bytes_on_disk = len_of(&paths.stderr_log);
+    assert!(
+        bytes_on_disk > 0,
+        "the stderr byte log must hold the worker's diagnostics"
+    );
+    let close = view
+        .frames
+        .iter()
+        .find(|frame| frame.kind == "close")
+        .expect("a close frame");
+    let closing = close.stderr.expect("close carries stderr counters");
+    assert_eq!(
+        closing.kept, bytes_on_disk,
+        "the close frame's stderr `kept` must equal the stderr log's length"
+    );
+    assert!(
+        closing.bytes >= stderr_seen,
+        "cumulative counters are monotone: close ({}) cannot be behind a note \
+         ({stderr_seen})",
+        closing.bytes
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The log is a contiguous prefix of the stream, including at the cap.**
+///
+/// `ProgressLog::append` declines a line that does not fit *and latches
+/// closed*. The latch is the whole of the guarantee: without it a long line is
+/// declined, a later **shorter** one still fits, and the log gains a **hole** —
+/// which is the one thing "byte N is byte N forever" forbids. With
+/// variable-length lines that is not an exotic case, it is the ordinary
+/// behaviour at the cap.
+///
+/// The worker alternates a 4000-byte line with a ~9-byte one, so the cap is
+/// reached mid-alternation by construction: the long line at that point does
+/// not fit, and the short one that follows it does.
+///
+/// Mutation: drop `self.capped` from `ProgressLog::append` — both the read in
+/// the guard and the assignment. The log then reads `…SHORT-64\nSHORT-65\n`
+/// where the worker wrote 4000 `L`s between them, and `starts_with` is false.
+///
+/// Found in review of #49 phase 2 (the latch was new code in `881fb37`, so no
+/// earlier mutation battery covered it) and landed here because phase 3 is the
+/// first code that *reads* this log and therefore the first a hole would lie to.
+#[test]
+fn the_log_is_a_contiguous_prefix_even_at_the_cap() {
+    /// Bytes of `L` in the long line, before its terminator.
+    const LONG: usize = 4000;
+    /// Enough alternations to overrun the cap several times over.
+    const ITERATIONS: usize = 100;
+
+    let _guard = lock();
+    let home = fresh_home("prefix");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // 40 -> 200 -> 1000 -> 4000 by concatenation, so the script needs neither
+    // `seq` nor a bash-only `printf` repeat and stays POSIX `sh`.
+    let body = format!(
+        "long={forty}\n\
+         long=$long$long$long$long$long\n\
+         long=$long$long$long$long$long\n\
+         long=$long$long$long$long\n\
+         i=0\n\
+         while [ $i -lt {ITERATIONS} ]; do echo \"$long\"; echo \"SHORT-$i\"; i=$((i+1)); done",
+        forty = "L".repeat(40),
+    );
+    let config = worker(&home, "prefix", "fake", &body);
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("prefix".to_owned(), config);
+    registry.default_workers = vec!["prefix".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["prefix".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "prefix".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "prefix".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "prefix".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "alternating line lengths".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let paths = progress_paths(&session, &record.id, 1);
+    let log = fs::read_to_string(&paths.stdout_log).expect("log");
+
+    // Rebuilt from the script's own definition, not from the log, so the
+    // comparison below has an independent witness.
+    let mut stream = String::new();
+    for i in 0..ITERATIONS {
+        stream.push_str(&"L".repeat(LONG));
+        stream.push('\n');
+        stream.push_str(&format!("SHORT-{i}\n"));
+    }
+
+    // Without these two the prefix assertion is vacuous: `starts_with` is true
+    // of an empty log, and true of any log that never reached the cap at all —
+    // and it is only *at* the cap that the latch does anything.
+    assert!(
+        log.len() <= PROGRESS_LOG_MAX_BYTES,
+        "still bounded: {} bytes",
+        log.len()
+    );
+    assert!(
+        log.len() > PROGRESS_LOG_MAX_BYTES - (LONG + 16),
+        "this worker overruns the cap {}x over, so the log must sit within one \
+         long line of it — otherwise the cap was never exercised and this test \
+         proves nothing about the latch; got {} of {PROGRESS_LOG_MAX_BYTES}",
+        (ITERATIONS * (LONG + 10)) / PROGRESS_LOG_MAX_BYTES,
+        log.len()
+    );
+
+    assert!(
+        stream.starts_with(&log),
+        "the log must be a contiguous prefix of what the worker wrote. Without \
+         the `capped` latch a declined long line is followed by a shorter one \
+         that fits, and the log gains a hole — the one thing \"byte N is byte N \
+         forever\" forbids. log ends: {:?}",
+        &log[log.len().saturating_sub(60)..]
+    );
+
+    // The same defect named directly, because `starts_with` reports only that
+    // something diverged and this says what.
+    let mut previous_was_short = false;
+    for line in log.lines() {
+        let short = line.starts_with("SHORT-");
+        assert!(
+            !(short && previous_was_short),
+            "two consecutive SHORT lines means the long line between them was \
+             declined and the log kept going: {line:?}"
+        );
+        previous_was_short = short;
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The bounded tail returns whole worker lines and never a fragment.**
+///
+/// Issue #49 phase 3. The reveal has a few rows and the log has up to 256 KiB,
+/// so it seeks rather than reads the file whole. The risk that buys is the one
+/// thing the byte log exists to prevent: a window starting mid-line would put
+/// bytes on screen in an order and a grouping the worker never wrote, and a
+/// window splitting a multi-byte code point would put a replacement character
+/// there that the worker never wrote at all.
+///
+/// Mutations, each at the call site of the line-boundary trim:
+///   - return `bytes` instead of `from_line_start`  → the fragment assertion fails
+///   - drop the `window == len` arm                 → the small-file assertion fails
+///   - `String::from_utf8_lossy(&bytes)` before the trim → the UTF-8 assertion fails
+#[test]
+fn the_bounded_tail_never_returns_a_partial_line() {
+    let _guard = lock();
+    let home = fresh_home("tail");
+    fs::create_dir_all(&home).expect("home");
+    let log = home.join("out.log");
+
+    // Whole file smaller than the window: everything, nothing discarded.
+    fs::write(&log, "alpha\nbeta\ngamma\n").expect("write");
+    assert_eq!(
+        orc_core::dispatch_progress::tail_lines(&log, 4096).expect("exists"),
+        vec!["alpha", "beta", "gamma"],
+        "a log smaller than the window is returned whole — the first line is \
+         not a fragment of anything"
+    );
+
+    // Window lands mid-line: that line is discarded, not shown in part.
+    let tail = orc_core::dispatch_progress::tail_lines(&log, 9).expect("exists");
+    assert_eq!(
+        tail,
+        vec!["gamma"],
+        "a window starting inside `beta` must drop it rather than show `ta`"
+    );
+    for line in &tail {
+        assert!(
+            ["alpha", "beta", "gamma"].contains(&line.as_str()),
+            "every line returned must be one the worker actually wrote: {line:?}"
+        );
+    }
+
+    // Multi-byte code points: a naive byte window splits one.
+    fs::write(&log, "ααααα\nβββββ\nγγγγγ\n").expect("write utf8");
+    let tail = orc_core::dispatch_progress::tail_lines(&log, 12).expect("exists");
+    for line in &tail {
+        assert!(
+            !line.contains('\u{FFFD}'),
+            "the tail must not put a replacement character on screen — the \
+             worker never wrote one: {line:?}"
+        );
+        assert!(
+            ["ααααα", "βββββ", "γγγγγ"].contains(&line.as_str()),
+            "verbatim worker lines only: {line:?}"
+        );
+    }
+
+    // Present and empty is a fact, and it is NOT the same as absent.
+    fs::write(&log, "").expect("write empty");
+    assert_eq!(
+        orc_core::dispatch_progress::tail_lines(&log, 4096),
+        Some(Vec::new()),
+        "an existing empty log is `Some(empty)`: we looked and there was \
+         nothing yet"
+    );
+    assert_eq!(
+        orc_core::dispatch_progress::tail_lines(&home.join("absent.log"), 4096),
+        None,
+        "an absent log is `None`: this supervisor is not streaming. Collapsing \
+         the two is the lie `DispatchProgress`'s doc exists to forbid"
+    );
+
+    // A worker mid-line with no terminator yet has produced no complete line.
+    fs::write(&log, "no terminator yet").expect("write partial");
+    assert_eq!(
+        orc_core::dispatch_progress::tail_lines(&log, 4).expect("exists"),
+        Vec::<String>::new(),
+        "a window inside an unterminated line yields nothing: no COMPLETE line \
+         has been observed, which is the only thing the vocabulary may claim"
+    );
+    // Same fact at the other end: whole lines followed by a fragment. The
+    // fragment is the worker's own bytes, but it is not a line yet.
+    fs::write(&log, "done\nalso done\nstill typin").expect("write trailing fragment");
+    assert_eq!(
+        orc_core::dispatch_progress::tail_lines(&log, 4096).expect("exists"),
+        vec!["done", "also done"],
+        "an unterminated trailing chunk must be dropped, not shown as a line: \
+         `StreamCounters::lines` counts terminators, and a reveal showing three \
+         lines beside a journal saying two has started lying"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The tail is bounded by its window, not by the file.**
+///
+/// The reason this function exists rather than `fs::read` + `.lines().rev()`.
+/// A worker that fills the cap leaves 256 KiB; a reveal repainting on that
+/// would read a quarter of a megabyte to show four rows.
+#[test]
+fn the_bounded_tail_reads_a_window_not_the_whole_log() {
+    let _guard = lock();
+    let home = fresh_home("tail-bound");
+    fs::create_dir_all(&home).expect("home");
+    let log = home.join("big.log");
+
+    // A full-cap log: 262144 bytes of 32-byte lines.
+    let line = format!("{}\n", "y".repeat(31));
+    let mut body = String::new();
+    while body.len() + line.len() <= PROGRESS_LOG_MAX_BYTES {
+        body.push_str(&line);
+    }
+    fs::write(&log, &body).expect("write big");
+    assert!(
+        body.len() > 250_000,
+        "the fixture must actually be large: {} bytes",
+        body.len()
+    );
+
+    let tail = orc_core::dispatch_progress::tail_lines(&log, 512).expect("exists");
+    // 512 bytes of 32-byte lines, minus the fragment at the front.
+    assert!(
+        (14..=16).contains(&tail.len()),
+        "a 512-byte window over 32-byte lines is ~15 lines, not the whole \
+         file's {}; got {}",
+        body.lines().count(),
+        tail.len()
+    );
+    assert!(
+        tail.iter().all(|shown| *shown == "y".repeat(31)),
+        "and every one is a whole worker line"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **A real worker that exits mid-line: the log ends unterminated, and the
+/// reader agrees with the journal about how many lines exist.**
+///
+/// The helper test above proves `tail_lines` drops a trailing fragment from a
+/// file this test suite wrote. This proves the case is real — that
+/// `drain_to_eof` (`dispatch_supervisor.rs:356-378`) appends whatever
+/// `read_until(b'\n')` returned at EOF, terminator or not — and that the two
+/// numbers a reveal would put on screen beside each other agree.
+///
+/// This is the wiring, not the component: it drives a real dispatch through a
+/// real supervisor process and reads what that process actually left on disk.
+///
+/// Mutation: drop the `rposition` trim from `tail_lines`. The reader then
+/// reports three lines while the journal reports two.
+#[test]
+fn a_worker_that_exits_mid_line_leaves_an_unterminated_log_and_the_reader_says_two() {
+    let _guard = lock();
+    let home = fresh_home("midline");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // Two complete lines and a fragment, exactly as a worker killed or exiting
+    // mid-write leaves them.
+    let config = worker(
+        &home,
+        "midline",
+        "fake",
+        "printf 'done\\nalso done\\nstill typin'",
+    );
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("midline".to_owned(), config);
+    registry.default_workers = vec!["midline".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["midline".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "midline".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "midline".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "midline".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "exit mid line".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let paths = progress_paths(&session, &record.id, 1);
+
+    // 1. The premise: the log really does end without a terminator. If this
+    //    ever stops being true the trim becomes dead code and should go.
+    let raw = fs::read(&paths.stdout_log).expect("log");
+    assert_eq!(
+        raw.last(),
+        Some(&b'n'),
+        "the worker exited mid-line, so the log's last byte is its last \
+         character and not a terminator: {:?}",
+        String::from_utf8_lossy(&raw[raw.len().saturating_sub(20)..])
+    );
+
+    // 2. The journal counts terminators, so it says two.
+    let view = read_progress(&paths.journal)
+        .expect("journal readable")
+        .expect("journal exists");
+    let close = view
+        .frames
+        .iter()
+        .find(|frame| frame.kind == "close")
+        .expect("a close frame");
+    let counters = close.stdout.expect("close carries stdout counters");
+    assert_eq!(counters.lines, 2, "two complete lines were observed");
+    assert_eq!(
+        counters.bytes,
+        raw.len() as u64,
+        "and every byte read reached the log"
+    );
+
+    // 3. The reader must say two as well. Showing `still typin` would put a
+    //    third line on screen beside a journal reporting two.
+    let shown =
+        orc_core::dispatch_progress::tail_lines(&paths.stdout_log, 4096).expect("the log exists");
+    assert_eq!(
+        shown,
+        vec!["done", "also done"],
+        "the reveal and the counters beside it must agree"
+    );
+    assert_eq!(
+        shown.len() as u64,
+        counters.lines,
+        "the reader's line count IS the journal's line count"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **"Since T" is when a stdout LINE moved, never when any counter moved.**
+///
+/// The journal is stamped whenever *any* counter changes — `note` compares the
+/// whole `(stdout, stderr)` pair — so a worker writing only to stderr re-stamps
+/// it without producing a single stdout line. A reader taking `frames.last().t`
+/// would then advance "newest line at …" while stdout had been still, which is
+/// a claim about the worker manufactured out of a fact about stderr.
+///
+/// That is the reveal's hardest honesty problem and it is invisible to any test
+/// whose fixture moves both streams together, which is why this fixture moves
+/// them apart.
+///
+/// Mutation: `facts()` assigns `newest_stdout_line_at` from every frame that
+/// carries counters, or uses `>=` instead of `>`.
+#[test]
+fn since_t_is_when_a_stdout_line_moved_and_not_when_any_counter_moved() {
+    let _guard = lock();
+    let home = fresh_home("since-t");
+    fs::create_dir_all(&home).expect("home");
+    let journal = home.join("j.jsonl");
+
+    // seq 1: the only frame where a stdout LINE appears.
+    // seq 2 and 3: stderr moves, stdout does not. The journal is re-stamped
+    //              both times because `note`'s change gate saw a counter move.
+    fs::write(
+        &journal,
+        concat!(
+            r#"{"v":1,"seq":0,"t":"2026-08-01T12:00:00+00:00","attempt":1,"kind":"open","adapter":"pi","extractable":true}"#,
+            "\n",
+            r#"{"v":1,"seq":1,"t":"2026-08-01T12:00:05+00:00","attempt":1,"kind":"note","stdout":{"bytes":10,"lines":1,"dropped":0,"kept":10},"stderr":{"bytes":0,"lines":0,"dropped":0,"kept":0}}"#,
+            "\n",
+            r#"{"v":1,"seq":2,"t":"2026-08-01T12:03:00+00:00","attempt":1,"kind":"note","stdout":{"bytes":10,"lines":1,"dropped":0,"kept":10},"stderr":{"bytes":40,"lines":2,"dropped":0,"kept":40}}"#,
+            "\n",
+            r#"{"v":1,"seq":3,"t":"2026-08-01T12:09:00+00:00","attempt":1,"kind":"note","stdout":{"bytes":10,"lines":1,"dropped":0,"kept":10},"stderr":{"bytes":90,"lines":5,"dropped":0,"kept":90}}"#,
+            "\n",
+        ),
+    )
+    .expect("write journal");
+
+    let view = read_progress(&journal).expect("readable").expect("exists");
+    let facts = orc_core::dispatch_progress::facts(&view);
+
+    assert_eq!(
+        facts.newest_stdout_line_at.as_deref(),
+        Some("2026-08-01T12:00:05+00:00"),
+        "the last time a stdout LINE appeared was 12:00:05. The journal was \
+         re-stamped at 12:03 and 12:09 because stderr moved, and taking the \
+         newest frame's `t` would tell the reader a line arrived at 12:09"
+    );
+    assert_ne!(
+        facts.newest_stdout_line_at.as_deref(),
+        Some("2026-08-01T12:09:00+00:00"),
+        "explicitly not the newest frame"
+    );
+    assert_eq!(facts.stdout.lines, 1);
+    assert_eq!(facts.stderr.lines, 5, "stderr really did move");
+    assert_eq!(
+        facts.opened_at.as_deref(),
+        Some("2026-08-01T12:00:00+00:00"),
+        "the open frame is the fallback when no line has ever appeared"
+    );
+    assert!(!facts.capped(), "kept == bytes here");
+
+    // No stdout line has EVER appeared: `None`, so a reader falls back to
+    // "since the worker started" rather than inventing a timestamp.
+    fs::write(
+        &journal,
+        concat!(
+            r#"{"v":1,"seq":0,"t":"2026-08-01T12:00:00+00:00","attempt":1,"kind":"open","adapter":"pi","extractable":true}"#,
+            "\n",
+            r#"{"v":1,"seq":1,"t":"2026-08-01T12:04:00+00:00","attempt":1,"kind":"note","stdout":{"bytes":300,"lines":0,"dropped":0,"kept":300},"stderr":{"bytes":0,"lines":0,"dropped":0,"kept":0}}"#,
+            "\n",
+        ),
+    )
+    .expect("rewrite journal");
+    let view = read_progress(&journal).expect("readable").expect("exists");
+    let facts = orc_core::dispatch_progress::facts(&view);
+    assert_eq!(
+        facts.newest_stdout_line_at, None,
+        "300 bytes and no terminator is a worker mid-line: no complete line \
+         has been observed, so there is no time to name"
+    );
+    assert_eq!(facts.stdout.bytes, 300);
+    assert_eq!(facts.stdout.lines, 0);
+
+    // The capped discriminator, in both directions, against a file length that
+    // would answer the opposite.
+    fs::write(
+        &journal,
+        concat!(
+            r#"{"v":1,"seq":0,"t":"2026-08-01T12:00:00+00:00","attempt":1,"kind":"open","adapter":"pi","extractable":true}"#,
+            "\n",
+            r#"{"v":1,"seq":1,"t":"2026-08-01T12:04:00+00:00","attempt":1,"kind":"note","stdout":{"bytes":300001,"lines":1,"dropped":0,"kept":0},"stderr":{"bytes":0,"lines":0,"dropped":0,"kept":0}}"#,
+            "\n",
+        ),
+    )
+    .expect("rewrite journal");
+    let view = read_progress(&journal).expect("readable").expect("exists");
+    let facts = orc_core::dispatch_progress::facts(&view);
+    assert!(
+        facts.capped(),
+        "300 KB observed and nothing mirrored is capped, however empty the file"
+    );
+    assert!(
+        facts.capped_before_first_line(),
+        "and it is the specific case the log's own hole produces: `kept == 0` \
+         with `bytes > 0`, which `kept` against `log_max_bytes` calls quiet"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
