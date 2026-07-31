@@ -1035,3 +1035,327 @@ fn a_killed_supervisor_leaves_its_partial_output_on_disk() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+/// **Reading a dispatch for the screen never reconciles and never writes.**
+///
+/// Issue #49 phase 3. The overlay needs `DispatchRecord.prompt`, and the two
+/// existing readers cannot supply it: `read_dispatch` and `list_dispatches`
+/// both run `reconcile_record`, which terminates the worker's process group,
+/// releases spawn-guard slots, appends `execution_orphaned` to the task board
+/// and rewrites the record. Those are right for a command. In a renderer they
+/// mean that *drawing a frame* kills a worker and raises a `BoardChanged` that
+/// provokes another frame.
+///
+/// So the same state is put in front of both readers, in one test, and they
+/// must disagree. The contrast is the point: without it, "read_briefs did not
+/// orphan anything" could just mean the record was never orphanable, and the
+/// test would pass against any implementation.
+///
+/// Mutation (the call site, not the callee): route `read_briefs` through
+/// `list_dispatches`, or add a `reconcile_record` to its `filter_map` chain.
+/// The record then orphans before the first assertion and four of them fail.
+#[test]
+fn reading_a_dispatch_for_the_screen_never_reconciles_and_never_writes() {
+    let _guard = lock();
+    let home = fresh_home("brief-reader");
+    let (_cwd, _registry) = setup_session_with_harness(&home, "brief-reader");
+    slow_worker(&home);
+    let cwd = home.join("cwd-brief");
+    fs::create_dir_all(&cwd).expect("create session cwd");
+    let session_id = create_session("codex", &["fake-worker".to_owned()], &cwd)
+        .expect("create brief session")
+        .id;
+    let task = running_task(&home, &session_id, "read me for the screen");
+
+    let record = pio_dispatch(&home, &session_id, &task.id, "W-brief");
+    assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
+    let supervisor = record.supervisor_pid.expect("a detached supervisor");
+
+    // Same window as `a_killed_supervisor_leaves_a_durable_board_event_of_its_own`:
+    // wait for the board word so the kill lands on a supervisor that really did
+    // deliver.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !orc_core::tasks::read_task(&session_id, &task.id)
+        .expect("read the board")
+        .history
+        .iter()
+        .any(|entry| entry.action == "delivery_confirmed")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "delivery never reached the board"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    sigkill(supervisor);
+    wait_for_death(supervisor);
+
+    // The record is now orphanable: a reconciling reader would rewrite it and
+    // append to the board. Snapshot both so any write at all is visible.
+    let record_path = dispatch::dispatch_path(&session_id, &record.id);
+    let before_bytes = fs::read(&record_path).expect("read the record file");
+    let before_words = orc_core::tasks::read_task(&session_id, &task.id)
+        .expect("read the board")
+        .history
+        .iter()
+        .map(|entry| entry.action.clone())
+        .collect::<Vec<_>>();
+
+    // Three times, because a renderer calls this on every board change and a
+    // once-only side effect would still be a side effect.
+    let mut briefs = Vec::new();
+    for _ in 0..3 {
+        briefs = orc_core::dispatch::read_briefs(&session_id);
+    }
+    let brief = briefs
+        .iter()
+        .find(|candidate| candidate.id == record.id)
+        .expect("the brief reader finds the dispatch");
+
+    // 1. It reports the unreconciled truth rather than performing the reconcile.
+    assert_eq!(
+        brief.execution_status.as_deref(),
+        Some("running"),
+        "the brief reader must report what is on disk, not orphan the record"
+    );
+    // 2. The record file is byte-for-byte untouched.
+    assert_eq!(
+        fs::read(&record_path).expect("re-read the record file"),
+        before_bytes,
+        "reading for the screen rewrote the dispatch record"
+    );
+    // 3. The board is untouched.
+    let after_words = orc_core::tasks::read_task(&session_id, &task.id)
+        .expect("read the board")
+        .history
+        .iter()
+        .map(|entry| entry.action.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_words, before_words,
+        "reading for the screen appended a task-board event"
+    );
+    assert!(
+        !after_words.iter().any(|word| word == "execution_orphaned"),
+        "reading for the screen orphaned the dispatch: {after_words:?}"
+    );
+    // 4. And it carries the brief that was actually delivered, verbatim.
+    assert_eq!(
+        brief.prompt, "sleep for a while",
+        "the overlay's whole job is the delivered prompt"
+    );
+    assert_eq!(brief.task, task.id);
+    assert_eq!(brief.harness, "fake-worker");
+
+    // THE CONTRAST. The same state, handed to the command reader, really does
+    // reconcile — so the four assertions above are a difference between the two
+    // readers and not an artifact of a record that could never have orphaned.
+    let listed = dispatch::list_dispatches(&session_id).expect("list dispatches");
+    let reconciled = listed
+        .iter()
+        .find(|candidate| candidate.id == record.id)
+        .expect("the record survives the listing");
+    assert_eq!(
+        reconciled.execution_status.as_deref(),
+        Some("orphaned"),
+        "the contrast is the test: this state IS orphanable, and the command \
+         reader orphans it"
+    );
+    let contrast_words = orc_core::tasks::read_task(&session_id, &task.id)
+        .expect("read the board")
+        .history
+        .iter()
+        .map(|entry| entry.action.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        contrast_words
+            .iter()
+            .any(|word| word == "execution_orphaned"),
+        "and it appends to the board, which the brief reader did not: \
+         {contrast_words:?}"
+    );
+
+    // Finally: the brief reader survives the rewrite the command reader just
+    // performed, and now reports the new truth — it is a reader, not a cache.
+    let after = orc_core::dispatch::read_briefs(&session_id);
+    let after_brief = after
+        .iter()
+        .find(|candidate| candidate.id == record.id)
+        .expect("still found after reconciliation");
+    assert_eq!(after_brief.execution_status.as_deref(), Some("orphaned"));
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The supervisor sidecar is not a second dispatch.**
+///
+/// `{id}.supervisor.json` sits beside `{id}.json` and also ends in `.json`, so
+/// the extension filter alone does not exclude it. It lacks the required
+/// fields, so it fails to parse and is skipped — but that is a property of the
+/// two shapes rather than of the filter, and it is worth pinning because
+/// `list_dispatches` has the same hazard and phase 2's evidence note calls the
+/// extensions "load-bearing".
+///
+/// Mutation: give `DispatchBrief` `#[serde(default)]` on `prompt` and `id`.
+/// The sidecar then parses and the session reports two dispatches for one task.
+#[test]
+fn the_supervisor_sidecar_is_not_read_as_a_dispatch() {
+    let _guard = lock();
+    let home = fresh_home("sidecar");
+    let (_cwd, _registry) = setup_session_with_harness(&home, "sidecar");
+    slow_worker(&home);
+    let cwd = home.join("cwd-sidecar");
+    fs::create_dir_all(&cwd).expect("create session cwd");
+    let session_id = create_session("codex", &["fake-worker".to_owned()], &cwd)
+        .expect("create sidecar session")
+        .id;
+    let task = running_task(&home, &session_id, "one dispatch only");
+    let record = pio_dispatch(&home, &session_id, &task.id, "W-sidecar");
+
+    // The sidecar really is there beside the record, so the filter really is
+    // being exercised.
+    let dir = dispatch::dispatch_path(&session_id, &record.id)
+        .parent()
+        .expect("dispatch dir")
+        .to_path_buf();
+    let json_files = fs::read_dir(&dir)
+        .expect("read dispatch dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".json"))
+        .collect::<Vec<_>>();
+    assert!(
+        json_files
+            .iter()
+            .any(|name| name.ends_with(".supervisor.json")),
+        "the sidecar must exist for this test to mean anything: {json_files:?}"
+    );
+    assert!(
+        json_files.len() >= 2,
+        "at least the record and its sidecar: {json_files:?}"
+    );
+
+    let briefs = orc_core::dispatch::read_briefs(&session_id);
+    assert_eq!(
+        briefs.len(),
+        1,
+        "one dispatch was sent, so one brief must be read: {:?}",
+        briefs.iter().map(|brief| &brief.id).collect::<Vec<_>>()
+    );
+    assert_eq!(briefs[0].id, record.id);
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **What the brief reader costs, measured rather than asserted.**
+///
+/// Issue #49 phase 3. Phase 2 bought its design with numbers — "the board
+/// tolerates about two durable writes per second" — and left phase 3 the cost
+/// of *watching* what it made durable. This prints that cost in the same units,
+/// so the overlay's price is on the record next to the board round-trip it has
+/// to be compared against.
+///
+/// The reference points, from `docs/notes/2026-07-31-issue-49-phase2-evidence.md`:
+/// one blocking `task_board` round-trip on the render thread is 221 us at 1 task
+/// in the session and 4267 us at 64; a whole STAGE frame is 1.83 ms debug and
+/// 0.23 ms release; the animating repaint tier is 16 ms.
+///
+/// Records are written directly rather than dispatched for real: this measures
+/// the read path, and spawning 64 supervisors would measure the writer.
+#[test]
+fn what_reading_briefs_costs_at_realistic_session_sizes() {
+    let _guard = lock();
+    let home = fresh_home("brief-cost");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    let session = "S-cost";
+
+    // A brief the size the overlay actually has to carry. `deliver` refuses a
+    // prompt over MAX_CAPTURED_BYTES, so 4 KiB of multi-line Markdown is a
+    // realistic large one rather than a worst case.
+    let prompt = (0..80)
+        .map(|line| format!("- acceptance check {line}: the worker must do the thing\n"))
+        .collect::<String>();
+
+    let mut report = String::from(
+        "issue #49 phase 3 — read_briefs cost, one read_dir + one read+parse per record.\n\
+         Two stdout sizes, because the reader declines to deserialize that field\n\
+         and the question is whether declining is enough:\n",
+    );
+    // 0 KiB is the honest floor. 16 KiB is MAX_CAPTURED_BYTES, the documented
+    // cap. 400 KiB is what #55 actually produced when an extractor fired.
+    for stdout_kib in [0_usize, 16, 400] {
+        report.push_str(&format!("  record stdout = {stdout_kib} KiB\n"));
+        for count in [1_usize, 4, 16, 64] {
+            let home_dir = home.join(format!("run-{stdout_kib}-{count}"));
+            fs::create_dir_all(&home_dir).expect("run home");
+            // SAFETY: serialized through `lock()`.
+            unsafe { std::env::set_var("ORC_HOME", &home_dir) };
+            for index in 0..count {
+                let id = format!("D-cost-{index:04}");
+                let path = dispatch::dispatch_path(session, &id);
+                fs::create_dir_all(path.parent().expect("dispatch dir")).expect("mkdir");
+                let record = json!({
+                    "id": id,
+                    "session": session,
+                    "task": format!("T-{index:04}"),
+                    "actor": "brain",
+                    "harness": "fake-worker",
+                    "command_line": "fake-worker --oneshot",
+                    "prompt": prompt,
+                    "status": "confirmed",
+                    "execution_status": "running",
+                    "stdout": "x".repeat(stdout_kib * 1024),
+                    "created_at": "2026-08-01T00:00:00+00:00",
+                    "updated_at": format!("2026-08-01T00:00:{index:02}+00:00"),
+                });
+                fs::write(&path, serde_json::to_vec(&record).expect("serialize")).expect("write");
+            }
+
+            // Warm the page cache first: this measures read+parse, not
+            // first-touch disk, which is what a client re-reading on every
+            // board change actually pays.
+            let _ = dispatch::read_briefs(session);
+            let samples = 20;
+            let started = Instant::now();
+            let mut last = 0;
+            for _ in 0..samples {
+                last = dispatch::read_briefs(session).len();
+            }
+            let per_call = started.elapsed() / samples;
+            assert_eq!(last, count, "every record must be read back");
+            report.push_str(&format!(
+                "    {count:>3} dispatches : {:>7} us per read_briefs\n",
+                per_call.as_micros()
+            ));
+        }
+    }
+    report.push_str(
+        "  for scale: one blocking task_board round-trip is 221 us at 1 task and\n\
+         4267 us at 64; a STAGE frame is 1830 us debug / 230 us release; the\n\
+         animating repaint tier is 16000 us.\n",
+    );
+    println!("{report}");
+
+    // Not a performance assertion with a magic threshold — a bound loose enough
+    // to survive a loaded CI box and tight enough to fail if someone routes
+    // this through `list_dispatches`, whose per-record `reconcile_record` does a
+    // `kill(pid, 0)` and can write.
+    unsafe { std::env::set_var("ORC_HOME", home.join("run-16-64")) };
+    let started = Instant::now();
+    let briefs = dispatch::read_briefs(session);
+    let elapsed = started.elapsed();
+    assert_eq!(briefs.len(), 64);
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "64 records took {elapsed:?}; the render thread re-reads this on every \
+         board change"
+    );
+    // Newest first, like `list_dispatches`, so a client folding by task keeps
+    // the newest dispatch per task without sorting again.
+    assert_eq!(briefs[0].task, "T-0063");
+
+    let _ = fs::remove_dir_all(&home);
+}
