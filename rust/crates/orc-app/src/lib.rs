@@ -2342,9 +2342,7 @@ pub fn run_initial(
     }
     let (events_tx, events_rx) = mpsc::sync_channel(64);
     spawn_screen_watch(socket, Arc::clone(&shell.watch_session), events_tx.clone());
-    spawn_runs_watch(events_tx.clone());
-    spawn_reports_watch(events_tx.clone());
-    spawn_board_watch(events_tx.clone());
+    spawn_file_watches(&events_tx);
 
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -2640,6 +2638,13 @@ fn run_shell_loop(
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(AppError::EventSource),
         };
+        // Decided before the match, because `Snapshot` consumes its panes and
+        // the obligation must not be restatable per-arm — see `reads_board`.
+        // It runs *after* the match so a snapshot's panes are already applied:
+        // `note_task_events` asks whether a task's worker is a pane on this
+        // stage, and answering that against last frame's panes would send a
+        // live delegation to the off-stage legend.
+        let wants_board = event.as_ref().is_some_and(reads_board);
         match event {
             Some(UiEvent::Snapshot(panes)) => {
                 if let Some(stage) = shell.stage.as_mut() {
@@ -2653,7 +2658,6 @@ fn run_shell_loop(
                     };
                     stage.apply_snapshot(panes);
                 }
-                read_board(commands, shell);
                 let _ = shell.runs.refresh();
                 redraw = true;
             }
@@ -2661,7 +2665,6 @@ fn run_shell_loop(
                 // The board changed on disk. That is the event STAGE exists to
                 // show, and until now the only way it reached this loop was by
                 // riding on a pane's output.
-                read_board(commands, shell);
                 redraw = true;
             }
             Some(UiEvent::Raw(bytes)) => {
@@ -2689,6 +2692,9 @@ fn run_shell_loop(
                 redraw = true;
             }
             None => {}
+        }
+        if wants_board {
+            read_board(commands, shell);
         }
     }
 }
@@ -2838,16 +2844,74 @@ fn spawn_screen_watch(
     });
 }
 
-fn spawn_runs_watch(sender: SyncSender<UiEvent>) {
-    spawn_runs_watch_path(orc_core::registry::home().join("runs"), sender);
+/// Every directory the shell watches for durable state it did not write.
+///
+/// A table rather than three `spawn_*` calls at the top of [`run_initial`],
+/// because the wiring is the half of a wake path that rots without anyone
+/// noticing. Dropping the board entry restores exactly issue #49's defect 4 —
+/// STAGE learning about a delegation only when a PTY happens to tick — and a
+/// watcher tested in isolation cannot see it go: `spawn_change_watch` is handed
+/// its path and its event by the caller, so it keeps passing while nothing
+/// calls it. Naming the set gives the test something to hold.
+fn file_watches() -> [FileWatch; 3] {
+    [
+        FileWatch {
+            root: orc_core::registry::home().join("runs"),
+            what: "runs",
+            raise: || UiEvent::RunsChanged,
+        },
+        FileWatch {
+            root: orc_core::registry::home().join("reports"),
+            what: "reports",
+            raise: || UiEvent::RunsChanged,
+        },
+        FileWatch {
+            root: board_watch_root(),
+            what: "task board",
+            raise: || UiEvent::BoardChanged,
+        },
+    ]
 }
 
-fn spawn_reports_watch(sender: SyncSender<UiEvent>) {
-    spawn_runs_watch_path(orc_core::registry::home().join("reports"), sender);
+/// One directory the shell watches, and what a change under it raises.
+struct FileWatch {
+    /// The tree to watch. Created if it does not exist yet.
+    root: PathBuf,
+    /// What it is called when the watcher has to report a failure.
+    what: &'static str,
+    /// The event a change raises. A plain constructor: the arm that receives
+    /// it re-reads whatever it needs, so nothing is carried.
+    raise: fn() -> UiEvent,
 }
 
-/// Watch the durable task boards, so a delegation between two silent panes is
-/// seen when it happens rather than when a pane next speaks.
+fn spawn_file_watches(sender: &SyncSender<UiEvent>) {
+    for watch in file_watches() {
+        spawn_change_watch(watch.root, watch.what, watch.raise, sender.clone());
+    }
+}
+
+/// Whether an event obliges the loop to re-read the durable task board.
+///
+/// Lifted out of the match arms so the obligation can be tested. `read_board`
+/// sitting inline in an arm is the other half of what rots silently: gut the
+/// `BoardChanged` arm down to `redraw = true` and the watcher still fires, the
+/// shell still wakes, and nothing re-reads the board — with the whole suite
+/// green, because no test drives the loop. Both events read it for the same
+/// reason: something durable may have moved, and only the board says what.
+const fn reads_board(event: &UiEvent) -> bool {
+    match event {
+        // A pane spoke. The board is re-read because a delegation is usually
+        // *why* it spoke, and this was the only path before #49.
+        UiEvent::Snapshot(_) => true,
+        // The board itself changed on disk — the wake path #49 added.
+        UiEvent::BoardChanged => true,
+        UiEvent::Raw(_) | UiEvent::Resize | UiEvent::WatchFailed(_) | UiEvent::RunsChanged => false,
+    }
+}
+
+/// The directory every session's task board lives under — watched so that a
+/// delegation between two silent panes is seen when it happens rather than
+/// when a pane next speaks.
 ///
 /// The board is written by other processes — `pio orch delegate` in the
 /// conductor's pane, and the detached dispatch supervisor minutes later — and
@@ -2856,26 +2920,12 @@ fn spawn_reports_watch(sender: SyncSender<UiEvent>) {
 /// sequence changes; between quiet panes the wait was up to 30 s. This is the
 /// cheap half of what a dedicated renderer thread would buy: "the board
 /// changed" now has its own way in.
-fn spawn_board_watch(sender: SyncSender<UiEvent>) {
-    spawn_change_watch(
-        board_watch_root(),
-        "task board",
-        || UiEvent::BoardChanged,
-        sender,
-    );
-}
-
-/// The directory every session's task board lives under.
 ///
 /// Named rather than inlined so a test can hold it against
 /// `orc_core::tasks::task_path` — watching the wrong tree would leave the
 /// watcher working perfectly and the shell asleep.
 fn board_watch_root() -> PathBuf {
     orc_core::registry::home().join("tasks")
-}
-
-fn spawn_runs_watch_path(path: PathBuf, sender: SyncSender<UiEvent>) {
-    spawn_change_watch(path, "runs", || UiEvent::RunsChanged, sender);
 }
 
 /// Wake the shell whenever anything under `path` changes.
@@ -6093,7 +6143,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("orc-app-runs-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
-        super::spawn_runs_watch_path(root.join("runs"), sender);
+        super::spawn_change_watch(
+            root.join("runs"),
+            "runs",
+            || super::UiEvent::RunsChanged,
+            sender,
+        );
         let runs = root.join("runs").join("event-run");
         // Watcher registration is asynchronous, so under parallel test load
         // a single early write can land before the watch exists. Rewriting
@@ -6986,6 +7041,16 @@ mod tests {
         // is painted in it.
         let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
         state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+        // The control render and the carrying ones are taken at different
+        // wall-clock instants, and a freshly-built `PanePulse` is *live* — the
+        // ambient `▓▒░` ramp sweeps along the rail, so under parallel test load
+        // it moves between them and the diff counts the rail's own motion as a
+        // trail. Review caught this failing ~1 run in 3 of the full workspace.
+        // Decaying every pane first makes the rail static, which is what makes
+        // "exactly one cell differs" a statement about the packet at all.
+        for index in 0..state.panes.len() {
+            decay(&mut state, index);
+        }
         let wire = |state: &mut StageState| {
             let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("stage terminal");
             let traffic = state.traffic(false);
@@ -7268,6 +7333,69 @@ mod tests {
             "the watcher must cover the directory `orc_core::tasks` writes \
              into: watching {watched:?}, board writes {written:?}"
         );
+    }
+
+    #[test]
+    fn the_shell_actually_installs_the_board_watcher() {
+        // Review finding on #49: the two tests below prove the watcher works
+        // and watches the right tree, and *neither* can tell whether anything
+        // ever starts it. Replacing `run_initial`'s board watcher with
+        // `let _ = spawn_board_watch;` left the whole workspace green while
+        // defect 4 was fully restored — the wake path gone, STAGE back to
+        // learning about a delegation only when a PTY happened to tick.
+        //
+        // `run_initial` needs a terminal and a daemon socket, so what is held
+        // here is the set it spawns from. That closes the silent hole: the
+        // board entry cannot be dropped, retargeted at the wrong tree, or made
+        // to raise the wrong event without this failing. Deleting the whole
+        // `spawn_file_watches` call would still pass — but it also takes runs
+        // and reports with it, which is not a change anyone makes by accident.
+        let watches = super::file_watches();
+        let board = watches
+            .iter()
+            .find(|watch| watch.what == "task board")
+            .expect("the shell watches the task board at all");
+        assert!(
+            orc_core::tasks::task_path("some-session", "T0001").starts_with(&board.root),
+            "and watches the tree `orc_core::tasks` writes into: {:?}",
+            board.root
+        );
+        assert!(
+            matches!((board.raise)(), super::UiEvent::BoardChanged),
+            "and raises the event the loop reads the board for"
+        );
+    }
+
+    #[test]
+    fn a_board_change_is_what_makes_the_loop_re_read_the_board() {
+        // The other half of the same finding. `read_board` used to sit inline
+        // in the two match arms, so gutting `BoardChanged` down to
+        // `redraw = true` left the watcher firing, the shell waking, and
+        // nothing re-reading the board — suite green, feature gone.
+        assert!(
+            super::reads_board(&super::UiEvent::BoardChanged),
+            "the wake path #49 added has to end in a board read, or it is a \
+             repaint of unchanged state"
+        );
+        assert!(
+            super::reads_board(&super::UiEvent::Snapshot(Vec::new())),
+            "and the pre-#49 path still does too"
+        );
+        // Everything else must not: a keystroke or a resize paying for a
+        // blocking `task_board` round-trip on the render thread is the
+        // unfluidity STAGE was already blamed for.
+        for quiet in [
+            super::UiEvent::Raw(Vec::new()),
+            super::UiEvent::Resize,
+            super::UiEvent::RunsChanged,
+            super::UiEvent::WatchFailed(String::new()),
+        ] {
+            assert!(
+                !super::reads_board(&quiet),
+                "{:?} must not cost a board round-trip",
+                std::mem::discriminant(&quiet)
+            );
+        }
     }
 
     #[test]

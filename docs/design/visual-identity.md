@@ -161,12 +161,17 @@ all, so it is written up for review before being promoted into this sheet.
   comes back. Same three beats and the same slot as the landing it belongs to,
   because this is still the one landing language; what differs is the word,
   which is a present participle rather than a past one, and the glyph, which is
-  the packet's own directional cell. It has **no hold of its own**: it lasts
-  while the packet is still crossing its first twelve cells of route and stops
-  when the packet lands, so on a short wire it is over before the emote starts
-  and it can never outlive the thing it announces. Under reduced motion nothing
-  travels, so there is no departure to show and the landing emote carries the
-  whole event.
+  the packet's own directional cell. It **cannot outlive the packet it
+  announces**: it lasts while the packet is still crossing its first twelve
+  cells of route and stops when the packet lands, so on a short wire it is over
+  before the emote starts. Under reduced motion nothing travels, so there is no
+  departure to show and the landing emote carries the whole event.
+  *(This first read "no hold of its own", which overclaimed. Every route the
+  router plans in the wide layout exceeds twelve cells, so in practice the beat
+  is a constant 360 ms — the wall-clock cost of crossing the sheet's own rail.
+  It is bounded by real geometry rather than by a number picked to look right,
+  and it starts at a real event; it is not derived from anything the worker
+  did, and STAGE does not claim to show how long a hand-off took.)*
 - **⏻ CONDUCTOR DOWN** — calm and recoverable, never alarming: muted coral,
   slow breath (not a blink), elapsed time, clear `R` to recover. Workers hold
   their last state.

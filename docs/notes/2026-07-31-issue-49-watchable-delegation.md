@@ -293,9 +293,14 @@ the conductor.
   adds one entry per dispatch and so brings a full contracted lifecycle
   (`created, isolated, assigned, moved, delivery_confirmed,
   execution_succeeded, moved→review, report_persisted, moved→done`) to the
-  edge of it. The fix has to populate a total-length field from the daemon,
-  and `orc-daemon` is outside this issue's allowed paths. Reported on the
-  issue as a follow-up.
+  edge of it. **Correction (review):** this first said the fix "has to populate
+  a total-length field from the daemon", and that is wrong. The watermark is
+  `StageState::seen_history` — `orc-app`, inside this issue's allowed paths —
+  and a content-anchored watermark (the last-seen entry's identity, located in
+  the current window) fixes it with no daemon change at all. A daemon-side
+  total-length field would be cleaner; it is not a precondition. Deferred to
+  its own issue on scope, not on impossibility. Reported on the issue as a
+  follow-up.
 - **Orphan reconciliation still tells the board nothing.** If the detached
   supervisor is killed — SIGKILL, OOM, reboot — `dispatch::reconcile_record`
   marks the dispatch `orphaned` and appends no task history, so the board's
