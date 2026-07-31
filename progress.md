@@ -2351,3 +2351,69 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
   which widens the window on a wedge that today clears only by deleting a file
   by hand.
 - **Next:** #49 phase 2, then phase 3, one at a time with a review between each.
+
+## Session — 2026-07-31 (Claude): #49 phase 2 — durable incremental supervisor output
+
+Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `e3a91a5`.
+Defect 3 only. Evidence: `docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
+
+- **The defect, measured first.** A real worker emitting a line every 200 ms for
+  6 s, sampled 9 times through the reader path a user has: `stdout` was `0` at
+  every sample and the record on disk byte-for-byte identical (777 B) for the
+  whole run. Everything landed at once at 6.87 s.
+- **Recon and design were run as judged workflows**, not decided by taste. Seven
+  read-only recon agents plus a contradiction-adjudicating synthesiser; then
+  three independent proposals from different priors, scored by three adversarial
+  judges on separate lenses (honesty / cost / failure semantics). Unanimous
+  winner: an append-only per-attempt sidecar. Both losers are written up in
+  `findings.md` with the number or source fact that killed each.
+- **What shipped.** `dispatch_progress.rs`: two verbatim byte logs per attempt
+  (`{id}.a{n}.out.log`, `.err.log`) written by the drain threads as lines
+  arrive, plus an orchestrator-owned `{id}.a{n}.progress.jsonl` of exact
+  counters written from the supervisor's main thread. `.log`/`.jsonl` are
+  load-bearing: `list_dispatches` filters on `extension() == "json"` and fully
+  parses every match. Never fsynced — "durable" means flushed. One additive
+  `DispatchRecord.progress` pointer, written by the record write that already
+  happens, so zero extra fsyncs; `dispatch::progress_paths` derives the same
+  paths without reading anything, so the field is never load-bearing.
+- **The honesty argument, in one line:** an append-only file cannot reproduce
+  either lie the in-memory capture contains — `Captured::raw()`'s `VecDeque`
+  tail pops from the front so a mid-flight render is not a prefix of the final
+  one, and `result()`'s `persisted` kind-flips raw transport to prose the first
+  time an extractor fires. Keeping orchestrator bytes *out* of the worker's file
+  also leaves nothing in it to forge.
+- **Cadence is real state.** The logs are per-line, bounded structurally by a
+  cap. The journal has a change gate (no new bytes, no write, ever) and a floor
+  *referenced from* `orch::DEFAULT_AWAIT_POLL_MS`. The invariant: every write is
+  caused by a byte arriving; the floor only ever removes a write.
+- **The measurement the issue demanded.** One board write costs a STAGE client a
+  blocking `task_board` round-trip on the render thread — 221 us @1 task,
+  1.31 ms @16, 4.27 ms @64 — and `spawn_change_watch`'s coalescing bounds
+  nothing (1.25–1.59 wakes per write at every cadence, 7213/sec unthrottled).
+  The board tolerates ~2 durable writes/sec; a dispatch lifetime is 9–11 in
+  total. Progress therefore writes the board **zero** extra times: a shipped
+  test measures 2000 worker lines against 2 record writes and 3 board writes.
+- **A per-line mirror on the drain thread is free**, and this had to be measured
+  because #28 was a pipe-buffer deadlock: 20k lines through a real pipe, four
+  variants, four repetitions, all inside the variance of doing nothing.
+- **The floor nobody clears, stated rather than hidden.** `read_until(b'\n')`
+  means a block-buffering worker shows nothing until it exits — measured, Python
+  without `-u` delivered its first line at 2.187 s of a 2.2 s run. The claim is
+  "whatever the worker flushes, when it flushes it".
+- **16/16 mutations caught.** Every mutation rebuilt `target/debug/pio` first —
+  the trap `findings.md` records, which this session hit on its very first test
+  run and recognised from the note. Three of the mutations are the *rejected*
+  proposal's design, including the `reconcile_record` fold that would have let an
+  orphaned reviewer's verdict-shaped output parse as a real verdict.
+- **Two pre-existing defects found and reported, not fixed.** **#54**
+  (`tasks::lock_board` has no stale reclaim) was filed *before* the work began,
+  on the expectation that phase 2 would raise the board write rate — in the
+  event it does not, so the window is not widened after all. **#55**
+  (`DispatchRecord.stdout` unbounded for any adapter with an extractor) was found
+  while costing a snapshot: measured at 409,600 bytes, 25x the documented cap,
+  with no truncation marker, and held by no test because `dispatch_flood.rs`'s
+  fixture declares an adapter that has no extractor.
+- **Not done, deliberately:** no reader surface (that needs `orc-cli`, outside
+  the allowed paths — raised on the issue rather than smuggled in), no
+  `orc-proto`/`orc-daemon` change, no task-history word, no signal handler, no
+  GC, and no fix for the timeout path's byte log trailing the terminal record.

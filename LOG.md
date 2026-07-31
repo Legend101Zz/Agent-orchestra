@@ -36,6 +36,7 @@ ship-log entries are part of finishing an issue.*
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
+| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 👀 | `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -612,6 +613,50 @@ green while the watermark was wrong. The two self-found defects — the daemon
 test under-driving the lifecycle it claimed to measure, and the AC7 test racing
 #50's board-before-record ordering — were the better catch of the round.
 [Full re-review.](https://github.com/Legend101Zz/Agent-orchestra/issues/51#issuecomment-5142275011)
+
+### 2026-07-31 — You can now see what a worker has said before it finishes, issue #49 phase 2 (Claude)
+
+The short version: **while a delegated worker was thinking, pi-orchestra kept
+absolutely nothing.** Everything it said arrived in one lump at the very end,
+and if the supervisor was killed halfway through — an OOM, a reboot, a stray
+`kill -9` — every word it had already produced was simply gone.
+
+Measured rather than described: a worker printing a line every 200 ms for six
+seconds, sampled nine times while it ran, showed `stdout` at zero every single
+time and its record on disk byte-for-byte identical, 777 bytes, for the whole
+run. Then everything at 6.87 s.
+
+Now the supervisor mirrors the worker's output to a file as it arrives. Two
+files per attempt, actually, and keeping them apart is the whole point: one
+holds the worker's bytes and *nothing else* — no timestamps, no counters, no
+labels — and one holds pi-orchestra's own counters. That sounds fussy and it is
+the honest bit. A file you only ever append to can never quietly rewrite what it
+already showed you, and because the worker's file has nothing of ours in it,
+there is nothing in it a worker could fake.
+
+**It costs the screen nothing, and that is measured too, because it was the
+thing most likely to go wrong.** Every time the task board changes, the TUI does
+a blocking round-trip to the daemon on the same thread that draws — 0.2 ms in a
+small session, 4.3 ms in a big one, against a 16 ms frame. And the watcher that
+notices board changes turned out to have no brakes at all: it delivers 1.25 to
+1.6 wakeups *per write*, up to 7000 a second. So writing progress to the board
+would have been somewhere between wasteful and unusable. This writes the board
+zero extra times, and the dispatch record zero extra times: 2000 lines of live
+output, no new writes to anything the screen watches.
+
+Two things worth being straight about. **A worker that buffers its own output
+still shows you nothing** — measured, a Python worker printing every 50 ms
+handed over its first line only when it exited, because that is the worker's
+decision and not ours. So the promise is "whatever the worker flushes, when it
+flushes it", never "you will see it think". And **nobody looks at these files
+yet.** The state exists, bounded and correct; putting it on screen is phase 3.
+
+Found two older bugs on the way and left both alone rather than quietly folding
+them in: the task board's lock can wedge a session permanently if a process dies
+at the wrong moment (**#54**), and a worker's saved output is not actually
+capped for one of the four harnesses — measured at 25 times over the documented
+limit, with nothing saying it had been truncated (**#55**). Both filed with
+reproductions.
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
