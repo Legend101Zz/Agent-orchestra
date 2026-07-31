@@ -427,3 +427,109 @@ cargo test --workspace                                     360 passed, 0 failed
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps  exit=0
 cargo build --release --locked                             exit=0
 ```
+
+---
+
+## 9. Review round: FIX (5), six surviving mutations, all fixed
+
+The reviewer ran eleven mutations of their own and **six survived**. Every one
+is a real gap and all six are fixed on the branch. The mutation battery is now
+**22/22**.
+
+The pattern named in the review is the important part, and it is the third
+occurrence in this program: **#50 shipped a test that could not fail, #51 one
+that under-drove its own lifecycle, and this branch asserted against a helper
+standing in for the path under test.** All three are the same error wearing
+different clothes — testing the component instead of the wiring.
+
+### 1. The headline retry guarantee was held by nothing
+
+`each_attempt_has_its_own_paths_and_they_never_collide` compared
+`progress_paths(…, 1)` against `progress_paths(…, 2)`. That tests the *naming
+function*. **Nothing tested that the supervisor passes the real ordinal**, and
+no test on the branch drove a retry at all — even though retry was one of the
+four design questions the issue mandated.
+
+The reviewer hardcoded the ordinal and the whole suite stayed green while
+`ProgressLog::create`'s `.truncate(true)` destroyed the rate-limited attempt's
+output: the exact outcome the design calls impossible.
+
+**Fixed** by `a_rate_limited_retry_keeps_the_earlier_attempts_bytes`, which
+drives a real retry through `dispatch_with_policy` against a worker that emits,
+returns a 429 signal and exits non-zero on attempt 1, then succeeds on attempt 2.
+It asserts attempt 1's bytes survive, attempt 2's are separate, neither log
+contains the other's, and each journal carries its own `open`/`close` sequence.
+Mutation 17 (constant ordinal) now fails **two** tests.
+
+### 2. The progress-open warnings were built and thrown away
+
+`dispatch_supervisor.rs` had `let _ = progress_warnings;`, while
+`ProgressLog::create`'s doc promised "one durable warning on the record".
+Deleting both `ORC WARNING:` strings passed the whole suite. Worse: when a log
+could not be opened, `record.progress` still named files that do not exist —
+a third state the doc never defined — and the artifact that would have explained
+it was dropped.
+
+**Fixed**: the warnings now flow into the `RefCell<Vec<String>>` that
+`persist_terminal` assigns to `record.warnings`, where `pio dispatch list/show`
+prints them. Threading them through that vec rather than writing them in
+`mark_started` matters — `persist_terminal` *assigns* `record.warnings`, so
+anything written earlier would have been overwritten.
+
+`a_progress_log_that_cannot_be_opened_is_reported_on_the_record` plants a
+**directory** at attempt 2's stdout-log path, which fails exactly that `open`
+with `EISDIR` while leaving `write_dispatch` and the journal alone. Making the
+whole dispatch directory read-only was the first attempt and was the wrong
+instrument: it also breaks `atomic_write_json`, so the dispatch never reaches a
+terminal state and the test hangs on a different failure. The backoff delay is
+what makes the plant possible at all — attempt 1's `open` happens microseconds
+after spawn and cannot be raced.
+
+### 3. Two documented log properties were false
+
+- **"A partial line is never written."** It was: the cap clipped mid-line, and
+  the reviewer has a 262144-byte log ending on `.`. That ends the log on a byte
+  boundary — for a JSON transport a truncated object nothing can parse, for
+  UTF-8 a split code point — and makes the log's last line something the worker
+  never emitted, which is the one claim the byte log exists to make.
+  **Fixed in the code, not the doc**: a line that does not fit is declined in
+  full and the log latches closed. `the_log_never_ends_mid_line` asserts the
+  final byte is `\n`, that the bytes are valid UTF-8, and that every line is
+  verbatim worker output.
+- **`lines` counted reads, not complete lines.** `read_until` also returns the
+  unterminated remainder at EOF, so `printf 'alpha\nbeta'` reported 2. That
+  matters precisely because a block-buffered worker sitting mid-line is the case
+  this journal must not overstate — the honesty floor in §2 is about exactly
+  that. **Fixed**: counted on the terminator.
+  `an_unterminated_final_chunk_is_not_counted_as_a_line` pins `bytes == 10,
+  lines == 1`.
+
+### 4. Three durable record fields were unheld
+
+- `attempts` was structurally identical to `attempt` — the supervisor only ever
+  knows the ordinal it is on, so no implementation could make them differ.
+  **Removed** rather than tested; a field that cannot vary is not data.
+- `extractable` and `log_max_bytes` survived being falsified. **Fixed** by
+  `the_record_states_the_capability_and_cap_that_are_actually_in_force`, which
+  asserts `extractable` against `runner::has_extractor` for the adapter the
+  record itself names, and `log_max_bytes` against the constant the log
+  enforces. Mutations 21 and 22 both die there.
+
+### 5. Dead code
+
+`read_progress`'s guarded arm was identical to its unguarded one — a distinction
+the caller cannot observe and that could not fail — and `progress_lengths` was
+public with zero callers. Both **deleted**.
+
+### Mutation battery, now 22/22
+
+| # | Mutation | Caught by |
+|---|---|---|
+| 17 | supervisor passes a constant attempt ordinal | `a_rate_limited_retry_keeps_the_earlier_attempts_bytes` + 1 |
+| 18 | progress warnings dropped on the floor | `a_progress_log_that_cannot_be_opened_is_reported_on_the_record` |
+| 19 | line clipped at the cap again | `the_log_never_ends_mid_line` |
+| 20 | every read counted as a line again | `an_unterminated_final_chunk_is_not_counted_as_a_line` |
+| 21 | `extractable` hardcoded `true` | `the_record_states_the_capability_and_cap_that_are_actually_in_force` |
+| 22 | `log_max_bytes` zeroed | same |
+
+(1–16 in §5 above.)

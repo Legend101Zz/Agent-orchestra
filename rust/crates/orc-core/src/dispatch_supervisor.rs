@@ -210,13 +210,21 @@ struct Captured {
     /// is why issue #49 phase 2's journal reports these rather than a length.
     bytes: u64,
     /// Complete newline-terminated lines read.
+    ///
+    /// Counted on the terminator, not on the read: `read_until` also returns
+    /// the unterminated remainder at EOF, and counting that would report a
+    /// worker that wrote `alpha\nbeta` as having produced two lines when only
+    /// one is complete. The distinction is the point — a block-buffered worker
+    /// mid-line is exactly the case the journal must not overstate.
     lines: u64,
 }
 
 impl Captured {
     fn push(&mut self, chunk: &[u8]) {
         self.bytes += chunk.len() as u64;
-        self.lines += 1;
+        if chunk.last() == Some(&b'\n') {
+            self.lines += 1;
+        }
         let mut chunk = chunk;
         if self.head.len() < HEAD_BYTES {
             let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
@@ -432,7 +440,7 @@ fn counters_of(stdout: Option<&Drain>, stderr: Option<&Drain>) -> (StreamCounter
 fn invoke_harness<F>(
     spec: &SupervisorSpec,
     attempt: u32,
-    attempts: u32,
+    warnings: &RefCell<Vec<String>>,
     mut on_started: F,
 ) -> std::result::Result<Invoked, InvokeFailure>
 where
@@ -459,9 +467,12 @@ where
         .map_err(|_| Box::new((DispatchFailureKind::MissingExecutable, None)))?;
     let (paths, stdout_log, stderr_log, mut journal, progress_warnings) =
         open_progress(spec, attempt);
+    // Durable, on the record, where `pio dispatch list/show` prints them.
+    // Without this the artifacts can silently not exist while `record.progress`
+    // still names them — a third state nothing documents and nothing explains.
+    warnings.borrow_mut().extend(progress_warnings);
     let progress = DispatchProgress {
         attempt,
-        attempts,
         stdout_log: file_name_of(&paths.stdout_log),
         stderr_log: file_name_of(&paths.stderr_log),
         journal: file_name_of(&paths.journal),
@@ -495,7 +506,6 @@ where
         journal.close(CloseReason::HandshakeFailed, out, err);
         return Err(Box::new((DispatchFailureKind::HarnessError, None)));
     }
-    let _ = progress_warnings;
 
     let timeout = Duration::from_secs(spec.timeout_sec);
     let started = Instant::now();
@@ -588,7 +598,7 @@ where
     let attempt = || -> std::result::Result<Invoked, AttemptError> {
         let ordinal = attempts.get() + 1;
         attempts.set(ordinal);
-        match invoke_harness(spec, ordinal, ordinal, &mut on_started) {
+        match invoke_harness(spec, ordinal, &warnings, &mut on_started) {
             Ok(invoked) if invoked.success => Ok(invoked),
             Ok(invoked) => {
                 let combined = format!("{}\n{}", invoked.raw_stdout, invoked.stderr);
