@@ -238,6 +238,17 @@ pub struct Task {
     /// Linked run or pane identifier when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee_run: Option<String>,
+    /// Run or pane identifier the task's *reviewer* was dispatched to.
+    ///
+    /// A reviewed task has two workers on it, and `orch::review` picks the
+    /// reviewer's harness independently of the executor's — so the two are
+    /// usually different panes. Kept separate from [`Self::assignee_run`]
+    /// rather than replacing it, which is what [`record_review_delivery`]'s
+    /// original "without replacing the executor's run linkage" was protecting;
+    /// the mistake was discarding the reviewer's link rather than storing it
+    /// somewhere of its own (issue #51 defect 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_run: Option<String>,
     /// Isolation request or owned worktree lifecycle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<TaskWorktree>,
@@ -783,6 +794,7 @@ pub fn add_task(session: &str, actor: TaskActor, new: NewTask) -> Result<Task> {
         depends_on: new.depends_on,
         assignee: None,
         assignee_run: None,
+        reviewer_run: None,
         worktree: requires_isolation.then(|| TaskWorktree {
             state: "requested".to_owned(),
             path: None,
@@ -931,29 +943,36 @@ pub fn record_delivery(
     Ok(task)
 }
 
-/// Record reviewer delivery without replacing the executor's run linkage.
+/// Record reviewer delivery on its own run linkage, leaving the executor's alone.
+///
+/// The reviewer's half of [`record_delivery`], and it takes the link for the
+/// same reason that one does: `confirmed_link` is the pane the brief was
+/// actually delivered to, and only a confirmed delivery may claim one. It goes
+/// to [`Task::reviewer_run`] rather than [`Task::assignee_run`] — a reviewed
+/// task has two workers on it, and overwriting the executor's link is what this
+/// function's original signature (a bare `confirmed: bool`) was avoiding.
+/// Discarding the reviewer's link was the cost, and it is issue #51 defect 3:
+/// with nowhere of its own to live, a reviewer's traffic was aimed at the
+/// executor's pane by the only link the task had.
 pub fn record_review_delivery(
     session: &str,
     id: &str,
     actor: TaskActor,
-    confirmed: bool,
+    confirmed_link: Option<String>,
     detail: String,
 ) -> Result<Task> {
     let _lock = lock_board(session)?;
     let _all = read_all_strict(session)?;
     let mut task = read_task(session, id)?;
-    append_history(
-        &mut task,
-        actor,
-        if confirmed {
-            "review_delivery_confirmed"
-        } else {
-            "review_delivery_failed"
-        },
-        None,
-        None,
-        Some(detail),
-    );
+    let action = if confirmed_link.is_some() {
+        "review_delivery_confirmed"
+    } else {
+        "review_delivery_failed"
+    };
+    if let Some(link) = confirmed_link {
+        task.reviewer_run = Some(link);
+    }
+    append_history(&mut task, actor, action, None, None, Some(detail));
     write_task(&task)?;
     Ok(task)
 }
@@ -1052,6 +1071,78 @@ pub fn record_review_execution(
     write_task(&task)?;
     Ok(task)
 }
+
+/// Record that a dispatch's supervisor died and its worker was terminated.
+///
+/// The third terminal outcome, and the one the board never had (issue #51
+/// defect 2). A detached supervisor can be SIGKILLed, OOM-killed, or lost to a
+/// reboot; [`crate::dispatch`] has always noticed — it terminates the worker's
+/// process group, releases the leases and marks the dispatch `orphaned` — and
+/// has always told the board nothing, so the last durable word stayed
+/// `delivery_confirmed` and the task read as running for ever. Since #49 gave
+/// completion a vocabulary, the *absence* of a completion event means "still
+/// working", which makes the silence an active lie rather than a gap.
+///
+/// The word is deliberately neither [`record_execution`]'s: an orphaned
+/// dispatch did not succeed and did not fail — nobody knows what the worker
+/// had done when its supervisor vanished, and `execution_failed` would claim
+/// otherwise. It is `ExecutionStatus::Orphaned`'s own word, so a reader can
+/// match the board against the dispatch record exactly as `record_execution`'s
+/// doc describes.
+///
+/// **Idempotent, and the check is inside the lock.** Unlike every other
+/// recorder here this one is called from reconciliation, which runs in any
+/// process that lists dispatches — so two of them can read the same running
+/// record before either has written it back and both arrive here. Keyed on the
+/// dispatch id rather than on the word alone: a task re-dispatched after one
+/// orphaning and orphaned again has two real events, and silencing the second
+/// would reintroduce the defect one retry later.
+pub fn record_orphaned(
+    session: &str,
+    id: &str,
+    actor: TaskActor,
+    dispatch: &str,
+    review: bool,
+    detail: String,
+) -> Result<Task> {
+    let _lock = lock_board(session)?;
+    let _all = read_all_strict(session)?;
+    let mut task = read_task(session, id)?;
+    let action = if review {
+        "review_execution_orphaned"
+    } else {
+        "execution_orphaned"
+    };
+    if task.history.iter().any(|entry| {
+        entry.action == action
+            && entry
+                .extra
+                .get(HISTORY_DISPATCH_TAG)
+                .and_then(Value::as_str)
+                == Some(dispatch)
+    }) {
+        return Ok(task);
+    }
+    append_history(&mut task, actor, action, None, None, Some(detail));
+    if let Some(entry) = task.history.last_mut() {
+        entry.extra.insert(
+            HISTORY_DISPATCH_TAG.to_owned(),
+            Value::String(dispatch.to_owned()),
+        );
+    }
+    write_task(&task)?;
+    Ok(task)
+}
+
+/// Key under which a history entry names the dispatch it is about.
+///
+/// The first thing written into [`TaskHistory::extra`], which exists for
+/// exactly this: an additive per-event field old readers carry through a
+/// read→write cycle untouched. It is the deduplication key for
+/// [`record_orphaned`], and it is structured rather than parsed back out of
+/// `detail` so that rewording a human-readable string cannot silently turn the
+/// guarantee off.
+const HISTORY_DISPATCH_TAG: &str = "dispatch";
 
 /// Move a running task to review.
 pub fn review_task(session: &str, id: &str, actor: TaskActor) -> Result<Task> {

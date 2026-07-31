@@ -2207,3 +2207,67 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 - **Next: #51 before #49 phase 2.** Its defect 1 is live on `main` as of #50 —
   see the order paragraph in `task_plan.md`. Note #51's own "prefer a path on
   the internal disk" note now contradicts `AGENTS.md`; flagged on the issue.
+
+## Session — 2026-07-31 (Claude, implementer): #51 all three defects, branch `issue-51-board-honesty`
+
+- **All three defects fixed in one branch**, as the issue requires. They shared a
+  cause: `TaskSummary` was too thin to carry what the client needs, and nothing
+  owned telling the board that a supervisor died. Off `origin/main` @ `e82d894`,
+  in a worktree at `pi-orchestra-worktrees/issue-51` on the SSD.
+- **Defect 1 (the eight-event cliff) was reproduced before it was fixed.** The
+  probe drives a full contracted-and-reviewed lifecycle *past* the window — a
+  probe that stops at the boundary passes against the broken code — and failed
+  with `left: 0, right: 1`. `TaskSummary.history_total` now carries the whole
+  history's length; the watermark is an absolute index and the window's offset is
+  `history_total - history.len()`. `orc_proto::TASK_HISTORY_WINDOW` is the named
+  constant, still 8, with a doc listing what depends on it — and *less* depends
+  on it than before, because the client is now window-size-agnostic.
+- **The daemon field was chosen over the client-side anchor on merit, and
+  `findings.md` says so rather than saying the client could not do it.** The
+  anchor was real and #49's review was right to correct the record. The total
+  wins because it is exact, survives any window size, and does not depend on
+  entry identity being unique within a second — `now_iso` is second-granularity,
+  so `(at, actor, action, to)` can collide on a retry.
+- **Defect 2's fork was decided with measurement, not preference.** The issue's
+  premise is factually wrong: `orc-app` and `orc-tui` contain **zero**
+  `list_dispatches`/`read_dispatch`/`drain_queued`/`reconcile`, a TUI refresh
+  never reaches reconciliation, and `ClientRequest::DispatchBoard` has no
+  production sender at all. The real caller set is three processes — `pio`,
+  `pio-mcp`, the detached supervisor — and all three already write the board.
+  Option (ii) fails outright: `orc-mcp` has no daemon dependency, so "only the
+  daemon reconciles" means the event never fires for the headless operator, *and*
+  deferring `terminate_pid`/`release_dispatch_slots` to a daemon that may never
+  run leaks a live worker and both quota slots. Option (iii) is self-defeating:
+  `seed_task_events` treats everything present at attach as old news, so an
+  orphan event written during attach is the one guaranteed never to animate.
+  **Shipped: option (i)'s locus, hardened** — behind the existing guards,
+  best-effort, deduplicated inside the board lock on the dispatch id.
+- **Two orphan words, not one, and it is a stated deviation from AC6's singular
+  wording.** With defect 3's lanes in the same branch, a single word would put an
+  orphaned *reviewer* back on the executor's wire — reintroducing defect 3 for
+  exactly the case defect 2 exists to report.
+- **Defect 3's linkage was never unavailable.** `spec.confirmed_link` — the
+  executor path's own value, computed identically for a review dispatch — was in
+  scope five lines from where the review branch discarded it. What was missing
+  was somewhere to put it that was not `assignee_run`. `Task.reviewer_run` and
+  `circuit::Lane` now aim each message at its own worker; AC7 is driven through
+  the real `orch::review` with two seated panes of different adapter families.
+- **Fifteen deliberate mutations, fifteen caught.** Two of the fifteen survived
+  the first round and produced two new tests — the additive `.max()` guard and
+  the confirmed badge on an orphaned worker were both held by nothing. Also
+  recorded: **a mutation to `orc-core`'s supervisor path is meaningless unless
+  `target/debug/pio` is rebuilt**, because the supervisor is a separate process;
+  the first attempt at mutation 9 silently ran the unmutated binary.
+- **Five gates green. 348 passed, 0 failed** (337 on `origin/main` plus the 11
+  tests this branch adds). Interleaved A/B on the same machine, three rounds
+  each tree: 0 `orc-cli` quota failures on either. No failure to attribute.
+- **Found, not fixed, and reported:** `tasks::lock_board` has **no stale
+  reclaim** — a process SIGKILLed while holding `.board.lock` wedges that
+  session's board permanently, and the case is self-referential (a supervisor
+  killed inside `append_execution` wedges the board, so the orphan event for that
+  death cannot land either). `spawn_guard::lock_slots` already solved this for
+  `.slots.lock`. It is a pre-existing defect in the core locking primitive of the
+  whole task board and deserves its own change. Also out of allowed paths and
+  reported rather than smuggled in: a `pio dispatch reconcile` operator verb, and
+  `orch::status`'s read-then-list ordering.
+- **Next:** review, then **#49 phase 2** — the watermark it builds on now moves.

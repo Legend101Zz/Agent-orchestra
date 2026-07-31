@@ -503,8 +503,17 @@ fn mark_started(spec: &SupervisorSpec, worker_pid: u32) -> Result<()> {
             "dispatch {} delivered to {}; worker running",
             record.id, record.harness
         );
+        // Both halves take the same link, computed the same way by
+        // `dispatch::deliver` — the selected pane, else the requested run,
+        // else the dispatch id. They just write it to different fields.
         if record.is_review() {
-            record_review_delivery(&record.session, &record.task, spec.actor, true, detail)?;
+            record_review_delivery(
+                &record.session,
+                &record.task,
+                spec.actor,
+                Some(spec.confirmed_link.clone()),
+                detail,
+            )?;
         } else {
             record_delivery(
                 &record.session,
@@ -559,7 +568,7 @@ fn persist_terminal(
                         &record.session,
                         &record.task,
                         spec.actor,
-                        false,
+                        None,
                         detail,
                     )?;
                 } else {

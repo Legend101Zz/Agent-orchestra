@@ -35,7 +35,7 @@ ship-log entries are part of finishing an issue.*
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 🔨 **next** | — |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 👀 | pushed `issue-51-board-honesty` · all three fixed · 5 gates green, 348 passed 0 failed · 15/15 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -499,6 +499,66 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-31 — The board stops lying in three places, issue #51 (Claude)
+
+Three small dishonesties, one branch, because they share a cause: the daemon
+was not telling the screen enough, and nothing was telling the board when a
+worker's minder died.
+
+**The screen used to give up on a job after eight events, silently.** The daemon
+only ever hands the screen a task's last eight history lines, and the screen kept
+its place in that list by counting how many it had seen — which works right up
+until the list stops growing. Past eight, the count stuck, and *nothing about
+that task ever animated again*: no error, no fallback, no warning. It became live
+on `main` last week, because the previous issue added a ninth event to a fully
+reviewed job — so the very last step, the answer coming home, was exactly the one
+that fell off. The daemon now also says how long the whole history really is, so
+the screen knows where the window it can see sits in the job's life and never
+loses its place again. The eight is still eight; it is just no longer load-bearing.
+
+**A job whose minder was killed used to read as running for ever.** Every
+delegation gets a small detached process that watches the worker. If that process
+is killed — out of memory, a reboot, a `kill -9` — pi-orchestra already noticed:
+it stopped the worker and freed the slot. It just never told the board, so the
+last thing the board knew was "the worker took the brief", and the job sat there
+looking busy indefinitely. It now writes a third outcome, distinct from both
+"finished" and "the work failed", because a killed minder means *nobody knows*
+what the worker had done. Deciding **who** writes it was the real work: the
+answer is whichever process notices first, which sounds alarming until you
+measure it — the set of processes that can notice is three, all three already
+write to the board, and the event is written at most once per job however many
+of them notice at the same moment. The reasoning, including why the two tidier-
+sounding options are worse, is in `findings.md`.
+
+**And a reviewer's answer used to fly down the executor's wire.** A reviewed job
+has two workers on it — one does the work, another checks it — and they usually
+sit in different panes. But the board only had one place to record "which pane",
+so the reviewer's brief and its verdict were both drawn crossing the *executor's*
+connector and stamping the executor's card with work it had not done. There are
+now two links, and each message goes to the one it belongs to. With no reviewer
+pane on screen, the review is stated as happening off-stage rather than pointed
+at the wrong pane.
+
+**What I did NOT do.** I found a real defect that is not one of these three and
+left it alone: the task board's lock file has no way to recover from a process
+that dies while holding it, so one badly-timed `kill -9` wedges that session's
+board permanently until someone deletes a file by hand. The sibling lock for
+worker slots already solved exactly this, so the fix is about thirty lines of
+already-reviewed code — but it is the core locking primitive for every writer on
+the board, and it deserves its own change and its own test rather than riding
+along on a branch about three other things. It is reported on the issue with the
+fix spelled out. Same for a `pio dispatch reconcile` command that would let you
+repair a board by hand: genuinely useful, and `orc-cli` is not in this issue's
+allowed paths, so I flagged it instead of adding it.
+
+**On evidence.** Every new guarantee was broken on purpose to check the test
+protecting it actually fails — fifteen times, fifteen caught. Two of those checks
+found that the guarantee was held by *nothing*, which is where two of the tests
+in this branch came from. And one trap worth knowing about: the detached minder
+runs as its own program, so breaking the library on purpose proves nothing unless
+you rebuild that program too — the first attempt looked like a passing test and
+was really a stale binary.
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 

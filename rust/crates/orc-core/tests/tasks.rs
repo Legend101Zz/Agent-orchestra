@@ -13,8 +13,8 @@ use orc_core::contract::TaskContract;
 use orc_core::registry::atomic_write_json;
 use orc_core::tasks::{
     NewTask, TaskActor, TaskStatus, add_task, assign_task, diff_task, done_task, drop_task,
-    list_tasks, merge_task, move_task, read_task, record_execution, record_review_execution,
-    review_task, start_task, task_path,
+    list_tasks, merge_task, move_task, read_task, record_execution, record_orphaned,
+    record_review_execution, review_task, start_task, task_path,
 };
 use serde_json::json;
 
@@ -390,4 +390,119 @@ fn every_completion_word_the_supervisor_can_write_is_written_by_something() {
     let final_task = read_task(&session.id, &task.id).unwrap();
     assert!(final_task.assignee_run.is_none());
     let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn the_orphan_event_is_written_once_per_dispatch_and_again_for_the_next_one() {
+    // Issue #51 defect 2, the deterministic half of acceptance check 5.
+    //
+    // `record_orphaned` is the only recorder called from reconciliation, which
+    // runs in any process that lists dispatches. Two of them can read the same
+    // still-`running` record before either writes it back, so both reach here —
+    // and two identical entries would make STAGE animate the same death twice.
+    // The guard is inside the board lock, which is what makes it a guarantee
+    // rather than a race the caller happens to win.
+    //
+    // The four-process version of this lives in `tests/dispatch.rs` and is
+    // corroboration: nothing forces four spawned `pio` children to overlap, so
+    // it can pass without ever exercising the contended path. This one cannot.
+    let _guard = lock();
+    let home = fresh_home();
+    // SAFETY: guarded by `lock()`, so no sibling test is reading it.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_harness_registry(&HarnessRegistry::default()).unwrap();
+    let session = create_session(
+        "codex",
+        &["pi-m3".to_owned()],
+        std::env::temp_dir().as_path(),
+    )
+    .unwrap();
+    let task = add_task(
+        &session.id,
+        TaskActor::Brain,
+        NewTask {
+            title: "orphan me twice".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .unwrap();
+
+    let orphan = |dispatch: &str, review: bool| {
+        record_orphaned(
+            &session.id,
+            &task.id,
+            TaskActor::Brain,
+            dispatch,
+            review,
+            format!("dispatch {dispatch} orphaned"),
+        )
+        .unwrap()
+    };
+
+    let first = orphan("D-0001", false);
+    assert_eq!(
+        first.history.last().map(|entry| entry.action.as_str()),
+        Some("execution_orphaned")
+    );
+    assert_eq!(
+        first
+            .history
+            .last()
+            .and_then(|entry| entry.extra.get("dispatch")),
+        Some(&json!("D-0001")),
+        "the entry names the dispatch it is about, structurally — that tag is \
+         the dedupe key, so rewording `detail` cannot silently disable it"
+    );
+
+    // The same notice arriving again writes nothing.
+    let again = orphan("D-0001", false);
+    assert_eq!(
+        count(&again, "execution_orphaned"),
+        1,
+        "a second reader noticing the same dead supervisor adds nothing: {:?}",
+        words(&again)
+    );
+
+    // A *different* dispatch on the same task is a second real death. Keying
+    // on the word alone would silence every orphaning after the first, which is
+    // the same defect one retry later.
+    let next = orphan("D-0002", false);
+    assert_eq!(
+        count(&next, "execution_orphaned"),
+        2,
+        "a re-dispatched task that is orphaned again says so: {:?}",
+        words(&next)
+    );
+
+    // And a reviewer's death is its own word, so it can be aimed at the
+    // reviewer's pane rather than the executor's (defect 3).
+    let reviewed = orphan("D-0003", true);
+    assert_eq!(
+        count(&reviewed, "review_execution_orphaned"),
+        1,
+        "the reviewer's orphaning is not the executor's: {:?}",
+        words(&reviewed)
+    );
+    assert_eq!(count(&reviewed, "execution_orphaned"), 2);
+    assert_eq!(
+        count(&orphan("D-0003", true), "review_execution_orphaned"),
+        1,
+        "and it dedupes too"
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
+fn words(task: &orc_core::tasks::Task) -> Vec<String> {
+    task.history
+        .iter()
+        .map(|entry| entry.action.clone())
+        .collect()
+}
+
+fn count(task: &orc_core::tasks::Task, action: &str) -> usize {
+    task.history
+        .iter()
+        .filter(|entry| entry.action == action)
+        .count()
 }

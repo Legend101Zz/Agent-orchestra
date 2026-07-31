@@ -568,6 +568,42 @@ impl Emote {
     }
 }
 
+/// Which of a reviewed task's two workers a message is about.
+///
+/// A contracted task is executed by one harness and judged by another, and
+/// `orch::review` picks the reviewer independently of the executor — so they
+/// are usually different panes. The board records the two links separately
+/// (`assignee_run` and `reviewer_run`); this is what says which one a given
+/// history entry should be aimed at. Before issue #51 there was one link and
+/// every message went down it, so a reviewer's brief and verdict were drawn
+/// crossing the *executor's* connector and stamping the executor's card.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Lane {
+    /// The worker doing the task.
+    Executor,
+    /// The independent reviewer judging it.
+    Reviewer,
+}
+
+/// Which lane one task-history action belongs to.
+///
+/// Spelled out rather than tested as a `review_` prefix: the prefix happens to
+/// be exact today, and a future `reviewed` or `review_requested` written by the
+/// conductor rather than by a reviewer dispatch would silently join the wrong
+/// lane. The whole table is pinned in `tests/task_vocabulary.rs` beside the
+/// classification it accompanies.
+#[must_use]
+pub const fn lane_for(action: &str) -> Lane {
+    match action.as_bytes() {
+        b"review_delivery_confirmed"
+        | b"review_delivery_failed"
+        | b"review_execution_succeeded"
+        | b"review_execution_failed"
+        | b"review_execution_orphaned" => Lane::Reviewer,
+        _ => Lane::Executor,
+    }
+}
+
 /// Classify one task-history entry into the message vocabulary.
 ///
 /// Takes the action *and* the destination status, because completion is not an
@@ -632,9 +668,19 @@ pub fn message_for(action: &str, to: Option<&str>) -> Option<(Direction, Outcome
         // `drop_task` and the isolation/merge failures record their own action
         // word rather than a `moved` transition — which is exactly the kind of
         // thing guessing at this table got wrong.
+        // `execution_orphaned` is a return like the rest of this arm — the
+        // brief left, and what came back is that nobody is coming back. It is
+        // a *failure* on the wire without being `execution_failed` on the
+        // board: those two mean different things and the board keeps them
+        // apart, because an orphaned worker was killed mid-flight and nothing
+        // knows what it had done. STAGE has three outcome slots and no fourth
+        // is warranted for it — a new slot would reorder three palettes and
+        // every golden's legend to say "failed, differently".
         (
             "execution_failed"
             | "review_execution_failed"
+            | "execution_orphaned"
+            | "review_execution_orphaned"
             | "delivery_failed"
             | "review_delivery_failed"
             | "dropped"

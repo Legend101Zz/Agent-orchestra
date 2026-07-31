@@ -691,6 +691,22 @@ struct StageState {
     message: String,
 }
 
+/// How long a task's whole durable history is, as far as this client can tell.
+///
+/// [`TaskSummary::history`] is only the newest [`orc_proto::TASK_HISTORY_WINDOW`]
+/// entries, and `history_total` is what says where that window sits. The `max`
+/// is the additive-field guard: a summary from a build without the field parses
+/// with `0`, and taking that at face value would put every watermark back to
+/// the start of a window it has already seen and replay it on every board read.
+/// Falling back to the window's own length is exactly the pre-#51 behaviour —
+/// the eight-entry cliff, but no replay storm. In practice the hello handshake
+/// refuses mixed builds ([`orc_proto::BUILD_IDENTIFIER`]), so this guards
+/// against a hand-written or replayed summary rather than against a daemon in
+/// the wild.
+fn history_total(task: &TaskSummary) -> usize {
+    task.history_total.max(task.history.len())
+}
+
 impl StageState {
     fn new(panes: Vec<PaneSnapshot>, theme: Theme, glyphs: Glyphs) -> Self {
         let now = Instant::now();
@@ -831,7 +847,7 @@ impl StageState {
     fn seed_task_events(&mut self, tasks: &[TaskSummary]) {
         for task in tasks {
             self.seen_history
-                .insert(task.id.clone(), task.history.len());
+                .insert(task.id.clone(), history_total(task));
         }
         self.retain_seen(tasks);
     }
@@ -869,35 +885,66 @@ impl StageState {
             let Some(worker_id) = task.assignee_run.clone() else {
                 continue;
             };
-            self.seen_history
-                .insert(task.id.clone(), task.history.len());
+            let total = history_total(task);
+            self.seen_history.insert(task.id.clone(), total);
+            // The watermark is an absolute index into the task's whole
+            // history; the window is its last `history.len()` entries, so the
+            // first one visible sits at `total - history.len()`. Issue #51
+            // defect 1: this used to be `skip(seen)` against a watermark that
+            // was a *length*, which is the same arithmetic only while the
+            // whole history fits in the window. Once it did not, `seen`
+            // saturated at the window's width, `skip` consumed all of it, and
+            // the task never animated again.
+            //
+            // `saturating_sub` because the window can outrun the watermark:
+            // a client that missed several board reads — a laptop asleep, a
+            // burst of events between two snapshots — finds `seen` behind the
+            // window's first entry. Raising the whole window is then the
+            // honest answer, since those are precisely the events it can still
+            // see. It cannot loop: the watermark is set to `total` above,
+            // whatever is raised below.
+            let first_visible = total.saturating_sub(task.history.len());
             let traffic = task
                 .history
                 .iter()
-                .skip(seen)
-                .filter_map(|entry| circuit::message_for(&entry.action, entry.to.as_deref()))
+                .skip(seen.saturating_sub(first_visible))
+                .filter_map(|entry| {
+                    circuit::message_for(&entry.action, entry.to.as_deref())
+                        .map(|message| (circuit::lane_for(&entry.action), message))
+                })
                 .collect::<Vec<_>>();
             if traffic.is_empty() {
                 continue;
             }
-            // Aimed at a run that is not one of these panes: real traffic,
-            // genuinely somewhere else. Say so rather than raising a packet
-            // with no route, which is what used to be dropped in silence. One
-            // note per message, exactly as the seated branch below raises one
-            // flight per message — a single note for a whole batch would have
-            // the legend undercount the traffic it exists to admit to.
-            if !self.panes.iter().skip(1).any(|pane| pane.id == worker_id) {
-                for _ in &traffic {
-                    self.offstage.push((worker_id.clone(), Instant::now()));
+            for (lane, (direction, outcome)) in traffic {
+                // A reviewed task has two workers on it and they are usually
+                // different panes, so the aim is per message rather than per
+                // task (issue #51 defect 3). A reviewer with no link of its own
+                // is a review whose delivery failed, or one recorded before the
+                // field existed — either way the executor's pane is the one
+                // place it certainly did not happen, so it goes to the legend
+                // below rather than down the executor's wire.
+                let aim = match lane {
+                    circuit::Lane::Executor => worker_id.clone(),
+                    circuit::Lane::Reviewer => task
+                        .reviewer_run
+                        .clone()
+                        .unwrap_or_else(|| format!("{} reviewer", task.id)),
+                };
+                // Aimed at a run that is not one of these panes: real traffic,
+                // genuinely somewhere else. Say so rather than raising a packet
+                // with no route, which is what used to be dropped in silence.
+                // One note per message — a single note for a whole batch would
+                // have the legend undercount the traffic it exists to admit to.
+                if !self.panes.iter().skip(1).any(|pane| pane.id == aim) {
+                    self.offstage.push((aim, Instant::now()));
+                    continue;
                 }
-                continue;
-            }
-            for (direction, outcome) in traffic {
                 if direction == circuit::Direction::Inbound {
-                    self.land_outbound(&worker_id);
+                    self.land_outbound(&aim);
                 }
                 self.flights.push(InFlight {
-                    worker_id: worker_id.clone(),
+                    worker_id: aim,
                     direction,
                     outcome,
                     raised: Instant::now(),
@@ -2385,6 +2432,13 @@ pub fn run_initial(
 /// only at deliveries would leave `✓ TASK CONFIRMED` sitting on a pane whose
 /// work failed. `execution_succeeded` deliberately does not appear here — it
 /// is not a negation, and the badge means the same thing after it as before.
+///
+/// `execution_orphaned` counts for exactly the `execution_failed` reason, and
+/// issue #51 defect 2 is what made it reachable: a supervisor killed after
+/// delivery leaves `delivery_confirmed` as the last word, so without this the
+/// pane of a SIGKILLed worker keeps wearing the badge for ever. The reviewer's
+/// words stay out of this list, all of them — the badge is about the pane that
+/// took the brief, and a reviewer never had it.
 fn confirmed_panes(tasks: &[TaskSummary]) -> std::collections::HashSet<String> {
     tasks
         .iter()
@@ -2395,7 +2449,10 @@ fn confirmed_panes(tasks: &[TaskSummary]) -> std::collections::HashSet<String> {
                 .find(|history| {
                     matches!(
                         history.action.as_str(),
-                        "delivery_confirmed" | "delivery_failed" | "execution_failed"
+                        "delivery_confirmed"
+                            | "delivery_failed"
+                            | "execution_failed"
+                            | "execution_orphaned"
                     )
                 })
                 .filter(|history| history.action == "delivery_confirmed")
@@ -4433,7 +4490,8 @@ fn epoch_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use orc_proto::{
-        HarnessSummary, PaneSnapshot, SessionSummary, TaskHistorySummary, TaskSummary, TerminalCell,
+        HarnessSummary, PaneSnapshot, SessionSummary, TASK_HISTORY_WINDOW, TaskHistorySummary,
+        TaskSummary, TerminalCell,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -4711,12 +4769,14 @@ mod tests {
                 status: "backlog".to_owned(),
                 assignee: None,
                 assignee_run: None,
+                reviewer_run: None,
                 isolated: false,
                 isolation: None,
                 blocked: false,
                 tokens: None,
                 diff: None,
                 history: Vec::new(),
+                history_total: 0,
             }],
             reports: HashMap::new(),
             selected: 0,
@@ -5547,12 +5607,14 @@ mod tests {
             status: status.to_owned(),
             assignee: Some("pi-m3".to_owned()),
             assignee_run: None,
+            reviewer_run: None,
             isolated: true,
             isolation: None,
             blocked,
             tokens: None,
             diff: None,
             history: Vec::new(),
+            history_total: 0,
         };
         let mut score = ScoreState {
             session_id: "mono".to_owned(),
@@ -6629,12 +6691,14 @@ mod tests {
                 status: "done".to_owned(),
                 assignee: Some("hermes".to_owned()),
                 assignee_run: None,
+                reviewer_run: None,
                 isolated: false,
                 isolation: None,
                 blocked: false,
                 tokens: None,
                 diff: None,
                 history: Vec::new(),
+                history_total: 0,
             }],
             selected: 0,
             message: String::new(),
@@ -6747,14 +6811,25 @@ mod tests {
     /// meaning lives entirely in `to`, and the first version of these tests
     /// invented four action words that nothing writes.
     const CREATED: (&str, Option<&str>) = ("created", Some("backlog"));
+    /// A contracted task taking its own worktree, before anyone is assigned.
+    const ISOLATED: (&str, Option<&str>) = ("isolated", None);
     const ASSIGNED: (&str, Option<&str>) = ("assigned", None);
+    /// `start_task`'s transition. `move_task` records every status change as
+    /// `moved` with the destination in `to`.
+    const RUNNING: (&str, Option<&str>) = ("moved", Some("running"));
     /// The brief reaching the worker. Written at `command.spawn()`, so it is
     /// the outbound journey landing — not the answer coming back, which is
     /// what it was read as until issue #49.
     const CONFIRMED: (&str, Option<&str>) = ("delivery_confirmed", None);
     /// The worker exited and its answer is durable: the real return.
     const ANSWERED: (&str, Option<&str>) = ("execution_succeeded", None);
+    /// `review_task`'s transition, and `persist_report`'s own word after it.
+    const MOVED_REVIEW: (&str, Option<&str>) = ("moved", Some("review"));
+    const REPORTED: (&str, Option<&str>) = ("report_persisted", None);
     const DONE: (&str, Option<&str>) = ("moved", Some("done"));
+    /// The reviewer's brief landing, and the reviewer's verdict coming back.
+    const REVIEW_CONFIRMED: (&str, Option<&str>) = ("review_delivery_confirmed", None);
+    const REVIEW_ANSWERED: (&str, Option<&str>) = ("review_execution_succeeded", None);
 
     fn task_with(id: &str, pane: &str, actions: &[(&str, Option<&str>)]) -> TaskSummary {
         TaskSummary {
@@ -6763,6 +6838,7 @@ mod tests {
             status: "running".to_owned(),
             assignee: Some("hermes".to_owned()),
             assignee_run: Some(pane.to_owned()),
+            reviewer_run: None,
             isolated: false,
             isolation: None,
             blocked: false,
@@ -6777,6 +6853,10 @@ mod tests {
                     to: to.map(str::to_owned),
                 })
                 .collect(),
+            // The whole history, untruncated — a board short enough that the
+            // daemon's window does not bite. `as_the_daemon_serves_it` applies
+            // the window when a test needs one that does.
+            history_total: actions.len(),
         }
     }
 
@@ -7149,6 +7229,245 @@ mod tests {
         );
     }
 
+    /// The full contracted-and-reviewed lifecycle, in the order `orc-core`
+    /// writes it. Nine entries — one past the window the daemon serves.
+    const CONTRACTED_LIFECYCLE: [(&str, Option<&str>); 9] = [
+        CREATED,
+        ISOLATED,
+        ASSIGNED,
+        RUNNING,
+        CONFIRMED,
+        ANSWERED,
+        MOVED_REVIEW,
+        REPORTED,
+        DONE,
+    ];
+
+    /// A summary shaped the way `orcd::task_board` really serves one: only the
+    /// last [`TASK_HISTORY_WINDOW`] entries cross the wire.
+    fn as_the_daemon_serves_it(mut task: TaskSummary) -> TaskSummary {
+        task.history_total = task.history.len();
+        task.history = task
+            .history
+            .into_iter()
+            .rev()
+            .take(TASK_HISTORY_WINDOW)
+            .rev()
+            .collect();
+        task
+    }
+
+    #[test]
+    fn a_reviewers_answer_crosses_the_reviewers_wire_and_not_the_executors() {
+        // Issue #51 defect 3. `record_review_delivery` set no linkage, so a
+        // task's only run link stayed the *executor's* pane — and
+        // `note_task_events` aimed every classified event at it. A reviewer
+        // dispatched by `orch::review` to a different seated pane therefore
+        // had its brief and its verdict drawn crossing the executor's
+        // connector, stamping the executor's card with an emote for work it
+        // did not do.
+        let mut state = StageState::new(bench(2), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        let executor = "pane-1";
+        let reviewer = "pane-2";
+        let task = |actions: &[(&str, Option<&str>)]| {
+            let mut task = task_with("T1", executor, actions);
+            task.reviewer_run = Some(reviewer.to_owned());
+            task
+        };
+
+        // The executor's half, which must still aim where it always did.
+        state.note_task_events(&[task(&[CREATED, ASSIGNED, CONFIRMED, ANSWERED])]);
+        assert!(
+            state
+                .flights
+                .iter()
+                .all(|flight| flight.worker_id == executor),
+            "the executor's traffic still crosses the executor's wire: {:?}",
+            state
+                .flights
+                .iter()
+                .map(|flight| flight.worker_id.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // The reviewer's half.
+        state.flights.clear();
+        state.note_task_events(&[task(&[
+            CREATED,
+            ASSIGNED,
+            CONFIRMED,
+            ANSWERED,
+            MOVED_REVIEW,
+            REVIEW_CONFIRMED,
+            REVIEW_ANSWERED,
+        ])]);
+        let aimed = state
+            .flights
+            .iter()
+            .map(|flight| flight.worker_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            aimed,
+            vec![reviewer.to_owned(), reviewer.to_owned()],
+            "the reviewer's brief and its verdict both cross the reviewer's \
+             wire; the executor's connector stays quiet"
+        );
+    }
+
+    #[test]
+    fn review_traffic_with_no_reviewer_pane_seated_is_stated_rather_than_aimed_at_the_executor() {
+        // Issue #51 acceptance check 8. `dispatch::deliver` falls back to the
+        // dispatch id when no seated pane matches the reviewer's harness, so a
+        // review can be entirely real and entirely elsewhere. Aiming it at the
+        // executor because that is the only link the task has is the lie
+        // defect 3 is about; #50 already built the honest alternative.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        let mut task = task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED, ANSWERED]);
+        task.reviewer_run = Some("D-0042".to_owned());
+        state.note_task_events(&[task.clone()]);
+        state.flights.clear();
+        state.offstage.clear();
+
+        task.history = task_with(
+            "T1",
+            "pane-1",
+            &[
+                CREATED,
+                ASSIGNED,
+                CONFIRMED,
+                ANSWERED,
+                MOVED_REVIEW,
+                REVIEW_CONFIRMED,
+                REVIEW_ANSWERED,
+            ],
+        )
+        .history;
+        task.history_total = task.history.len();
+        state.note_task_events(&[task]);
+
+        assert!(
+            state.flights.is_empty(),
+            "no packet is raised down the executor's wire for the reviewer: {:?}",
+            state
+                .flights
+                .iter()
+                .map(|flight| flight.worker_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            state.offstage.len(),
+            2,
+            "one note per review message it could not show"
+        );
+        let text = stage_text(&mut state, false);
+        assert!(
+            text.contains("crossed no wire"),
+            "and STAGE says so: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_summary_with_no_total_degrades_to_the_old_behaviour_and_never_replays() {
+        // The additive-field guard in `history_total`. `TaskSummary::history_total`
+        // is `#[serde(default)]`, so a summary from a build without it parses as
+        // `0` — and taking that at face value would set every watermark to 0 and
+        // re-raise the whole window on *every* board read, which the board is on
+        // a `notify` watcher. A replay storm is a worse failure than the
+        // eight-entry cliff it replaced, and nothing else in the suite would
+        // notice it: the cliff's own test uses a summary that has the field.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        // What an older daemon puts on the wire: a full window, no total.
+        let old_daemon = |actions: &[(&str, Option<&str>)]| {
+            let mut task = as_the_daemon_serves_it(task_with("T1", "pane-1", actions));
+            task.history_total = 0;
+            task
+        };
+
+        state.note_task_events(&[old_daemon(&CONTRACTED_LIFECYCLE)]);
+        let first = state.flights.len();
+        assert!(first > 0, "the window itself still animates once");
+
+        state.flights.clear();
+        state.note_task_events(&[old_daemon(&CONTRACTED_LIFECYCLE)]);
+        assert!(
+            state.flights.is_empty(),
+            "re-reading an unchanged board raises nothing, however old the \
+             daemon: {} packets replayed",
+            state.flights.len()
+        );
+    }
+
+    #[test]
+    fn a_task_past_the_history_window_still_animates_its_next_event() {
+        // Issue #51 defect 1. `orcd::task_board` truncates `TaskSummary.history`
+        // to the last few entries, and the watermark here was `history.len()`
+        // — a length *into that window*. Once a task had as many durable
+        // entries as the window is wide the summary stopped growing, the
+        // watermark saturated, `skip(seen)` on a full window yielded nothing,
+        // and no further event for that task ever animated again. Silently.
+        //
+        // #50 brought a contracted lifecycle to nine entries, so the
+        // `moved -> done` that should fly the final confirmation home is
+        // exactly the one that falls off the cliff.
+        //
+        // The assertion that matters is the last one, and it is why this test
+        // drives *past* the window rather than up to it: a probe that stops at
+        // the window boundary passes against the broken code.
+        let mut state = StageState::new(panes(), ThemeName::Nocturne.into(), GLYPHS);
+        state.pane_areas = stage_areas(ratatui::layout::Rect::new(0, 0, 120, 40), &state);
+
+        assert!(
+            CONTRACTED_LIFECYCLE.len() > TASK_HISTORY_WINDOW,
+            "this test is only meaningful while a real lifecycle outruns the \
+             window: {} entries against a window of {TASK_HISTORY_WINDOW}",
+            CONTRACTED_LIFECYCLE.len()
+        );
+
+        // Read the board after every append, exactly as the client does.
+        for upto in 1..CONTRACTED_LIFECYCLE.len() {
+            state.note_task_events(&[as_the_daemon_serves_it(task_with(
+                "T1",
+                "pane-1",
+                &CONTRACTED_LIFECYCLE[..upto],
+            ))]);
+        }
+        assert!(
+            !state.flights.is_empty(),
+            "the first eight entries animate on any implementation; if this \
+             fails the test is broken, not the watermark"
+        );
+
+        // Everything up to the window has been seen. The ninth entry is the
+        // one that used to vanish.
+        state.flights.clear();
+        state.note_task_events(&[as_the_daemon_serves_it(task_with(
+            "T1",
+            "pane-1",
+            &CONTRACTED_LIFECYCLE,
+        ))]);
+
+        assert_eq!(
+            state.flights.len(),
+            1,
+            "the reviewed task's `moved -> done` must still raise a packet at \
+             entry {} of a {TASK_HISTORY_WINDOW}-entry window; a watermark \
+             that is a length into the window pins itself at the window and \
+             raises nothing ever again",
+            CONTRACTED_LIFECYCLE.len()
+        );
+        assert_eq!(
+            state.flights[0].direction,
+            circuit::Direction::Inbound,
+            "and it is the answer coming home"
+        );
+    }
+
     #[test]
     fn a_delivery_receipt_does_not_take_the_confirmed_badge_off_when_the_worker_finishes() {
         // `confirmed_panes` read `history.last()`, which only ever worked
@@ -7164,6 +7483,14 @@ mod tests {
         };
         let mut task = task_with("T1", "pane-1", &[CREATED, ASSIGNED, CONFIRMED]);
         assert!(confirmed_panes(std::slice::from_ref(&task)).contains("pane-1"));
+
+        let mut orphaned = task.clone();
+        orphaned.history.push(entry("execution_orphaned"));
+        assert!(
+            !confirmed_panes(std::slice::from_ref(&orphaned)).contains("pane-1"),
+            "a worker whose supervisor was killed is not a confirmed one \
+             (issue #51 defect 2): the badge has to come off"
+        );
 
         task.history.push(entry("execution_succeeded"));
         assert!(
@@ -7957,6 +8284,7 @@ mod tests {
                         status: "review".to_owned(),
                         assignee: Some("pi-m3".to_owned()),
                         assignee_run: Some("pane-worker".to_owned()),
+                        reviewer_run: None,
                         isolated: true,
                         isolation: Some("ready".to_owned()),
                         blocked: true,
@@ -7968,6 +8296,7 @@ mod tests {
                             action: "moved".to_owned(),
                             to: Some("review".to_owned()),
                         }],
+                        history_total: 1,
                     }],
                     selected: 0,
                     message: "dependency still open".to_owned(),

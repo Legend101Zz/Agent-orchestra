@@ -37,7 +37,8 @@ use crate::registry::{atomic_write_json, home, now_iso, pid_alive};
 use crate::runner::Usage;
 use crate::spawn_guard;
 use crate::tasks::{
-    Task, TaskActor, TaskStatus, read_task, record_delivery, record_queued, record_review_delivery,
+    Task, TaskActor, TaskStatus, read_task, record_delivery, record_orphaned, record_queued,
+    record_review_delivery,
 };
 
 /// Maximum bytes of stdout captured from one dispatch invocation.
@@ -544,7 +545,7 @@ fn record_pre_delivery_failure(
     detail: String,
 ) -> Result<()> {
     if record.is_review() {
-        record_review_delivery(&record.session, &record.task, actor, false, detail)?;
+        record_review_delivery(&record.session, &record.task, actor, None, detail)?;
     } else {
         record_delivery(&record.session, &record.task, actor, None, detail)?;
     }
@@ -1017,7 +1018,18 @@ pub fn write_dispatch(record: &DispatchRecord) -> Result<()> {
     atomic_write_json(&path, record)
 }
 
-/// Read every parseable dispatch for one session newest first, tolerating corrupt siblings.
+/// Read every parseable dispatch for one session newest first, tolerating
+/// corrupt siblings — **and reconcile any whose supervisor has died.**
+///
+/// The second half is not a read. A record whose detached supervisor is gone
+/// has its worker's process group terminated, its durable leases released, one
+/// `execution_orphaned` event appended to the task board, and the record itself
+/// rewritten as terminal — see `reconcile_record`. That has been true of the
+/// first three since issue #30 and of the board event since #51; the doc
+/// comment said "read" throughout, which is the same class of dishonesty #51
+/// exists to fix, one layer up. A record whose reconcile fails is dropped from
+/// the returned list rather than surfaced, which is why the board append inside
+/// it must never propagate.
 pub fn list_dispatches(session: &str) -> Result<Vec<DispatchRecord>> {
     if session.trim().is_empty() {
         bail!("dispatch session is required")
@@ -1044,7 +1056,11 @@ pub fn list_dispatches(session: &str) -> Result<Vec<DispatchRecord>> {
     Ok(records)
 }
 
-/// Read one durable dispatch record.
+/// Read one durable dispatch record, reconciling it if its supervisor has died.
+///
+/// Reconciling is a write; see [`list_dispatches`] and `reconcile_record`.
+/// `read_dispatch_unreconciled` is the genuine read, and it is what every hot
+/// path inside a live dispatch uses.
 pub fn read_dispatch(session: &str, id: &str) -> Result<DispatchRecord> {
     reconcile_record(read_dispatch_unreconciled(session, id)?)
 }
@@ -1060,25 +1076,46 @@ pub(crate) fn read_dispatch_unreconciled(session: &str, id: &str) -> Result<Disp
         .with_context(|| format!("parse dispatch {}", path.display()))
 }
 
+/// Whether this record's detached supervisor is gone while it still claims to
+/// be running.
+///
+/// Pure, and cheap enough to run per record per listing: for a terminal record
+/// — which almost every record in a session is — it is one string compare, and
+/// otherwise one `kill(pid, 0)`. Split out from [`reconcile_record`] so the
+/// question "is this orphaned?" is answerable without the answer being a write.
+fn supervisor_is_lost(record: &DispatchRecord) -> bool {
+    record.is_running()
+        && record
+            .supervisor_pid
+            .is_some_and(|pid| !pid_alive(Some(pid)))
+}
+
 /// Reconcile a dispatch whose detached supervisor no longer exists.
 ///
 /// The worker is a separate process group, so a killed supervisor can leave it
-/// alive. Reconciliation terminates that group, marks the record terminal, and
-/// releases only this dispatch's durable leases.
+/// alive. Reconciliation terminates that group, marks the record terminal,
+/// releases only this dispatch's durable leases, **and tells the task board**.
+///
+/// It runs from [`list_dispatches`] and [`read_dispatch`], i.e. in any process
+/// that lists dispatches — so this function is where a read becomes a write.
+/// It already was one before issue #51: on this same branch it signals a
+/// worker's whole process group, takes a slot lock per harness directory, and
+/// fsyncs a dispatch record. #51 adds one durable task-board event, behind the
+/// same guards, so that a supervisor's death is a fact the board knows rather
+/// than one only the dispatch record knows. See `findings.md`, 2026-07-31, for
+/// why the writer is the reader rather than an owner.
 fn reconcile_record(mut record: DispatchRecord) -> Result<DispatchRecord> {
-    if !record.is_running() {
-        return Ok(record);
-    }
-    let Some(supervisor_pid) = record.supervisor_pid else {
-        return Ok(record);
-    };
-    if pid_alive(Some(supervisor_pid)) {
+    if !supervisor_is_lost(&record) {
         return Ok(record);
     }
     if let Some(worker_pid) = record.worker_pid {
         crate::runner::terminate_pid(worker_pid);
     }
+    // Before the board append, and its `.slots.lock` holds are scoped to this
+    // call — nothing in the workspace takes the board lock and then a slot
+    // lock, and keeping the two disjoint is what keeps it that way.
     let _ = spawn_guard::release_dispatch_slots(&record.id);
+    append_orphan(&mut record);
     record.execution_status = Some(ExecutionStatus::Orphaned.as_str().to_owned());
     record.worker_pid = None;
     record.failure_kind = Some("supervisor_lost".to_owned());
@@ -1088,6 +1125,56 @@ fn reconcile_record(mut record: DispatchRecord) -> Result<DispatchRecord> {
     write_dispatch(&record)?;
     let _ = fs::remove_file(supervisor_spec_path(&record.session, &record.id));
     Ok(record)
+}
+
+/// Append the orphaning to the task board, before the dispatch record is
+/// written.
+///
+/// Board-before-record for the reason [`crate::dispatch_supervisor`]'s
+/// `append_execution` is: it makes "the dispatch is terminal" imply "the board
+/// has been told", so a test can wait on one and assert the other instead of
+/// racing two writers. Note what that does *not* mean — a caller holding a
+/// `Task` it read before this ran still holds a snapshot from before the
+/// append. `orch::status` reads the task at `orch.rs:491` and lists dispatches
+/// at `:492`, in that order, so the very invocation that performs the reconcile
+/// returns a board snapshot that predates it. Anything asserting on the board
+/// must re-read it.
+///
+/// Best-effort, and the miss is durable rather than swallowed — the same trade
+/// `append_execution` makes, for a stronger reason. [`list_dispatches`] drops a
+/// record whose reconcile returns `Err` (`.filter_map(...ok())`), so
+/// propagating a busy board here would make the dispatch **vanish** from
+/// `pio dispatch list`, `pio dispatch show`, `orch status`, `orch review`,
+/// `orch finish` and `drain_queued`: a silent board would become an invisible
+/// dispatch. A refusal instead lands on the record's own warnings, which
+/// `pio dispatch list` and `pio dispatch show` both print.
+///
+/// There is no retry: once `execution_status` is `orphaned` the guards in
+/// [`supervisor_is_lost`] never admit this record again. A refused append is
+/// therefore permanently absent from the board, loudly present on the dispatch
+/// record, and that is a deliberate limit — see `findings.md`, 2026-07-31.
+fn append_orphan(record: &mut DispatchRecord) {
+    let detail = format!(
+        "dispatch {} orphaned on {}: supervisor lost, worker terminated",
+        record.id, record.harness
+    );
+    // The actor that dispatched, not whichever process happened to notice:
+    // `TaskActor` has no "system" and attributing a `pio dispatch list` run to
+    // its operator would be a different lie.
+    let actor = DispatchActor::parse(&record.actor).map_or(TaskActor::Brain, TaskActor::from);
+    if let Err(error) = record_orphaned(
+        &record.session,
+        &record.task,
+        actor,
+        &record.id,
+        record.is_review(),
+        detail,
+    ) {
+        record.warnings.push(format!(
+            "ORC WARNING: dispatch {} was orphaned but the task board refused the event: {error}",
+            record.id
+        ));
+    }
 }
 
 /// Re-attempt every queued dispatch for a session, oldest first (issue #7).
