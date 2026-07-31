@@ -39,7 +39,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ merged 2026-07-31, PR #50 · **phases 2–3 still open**) |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (👀 pushed 2026-07-31, `issue-51-board-honesty` — all three fixed, awaiting review) |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (✅ merged 2026-07-31, PR #53 — review FIX (2) → both fixed → re-review ACCEPT) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
@@ -50,8 +50,9 @@ record. (Issue numbers are filled in as issues are created.)
 (README) is the last original V1 item and all that stands between here and
 launch.**
 
-**#51 is pushed (2026-07-31, `issue-51-board-honesty`) — all three defects, one
-branch, awaiting review.** Defect 1's cliff is closed at the seam rather than at
+**#51 is merged (2026-07-31, PR #53) — all three defects, one branch.** Review
+returned FIX (2); both were fixed in `4ae609b` and the re-review was ACCEPT.
+Defect 1's cliff is closed at the seam rather than at
 the client: `TaskSummary` gains `history_total`, the watermark becomes an
 absolute index, and `orc_proto::TASK_HISTORY_WINDOW` is the named constant whose
 doc says what depends on it — which is now *less* than before, because the client
@@ -71,7 +72,19 @@ it away; `Task.reviewer_run` plus `circuit::Lane` now aim each message at its ow
 worker. Five gates green, 348 passed / 0 failed against `origin/main`'s 337, with
 an interleaved three-round A/B showing 0 `orc-cli` quota failures on either tree.
 Fifteen mutations, fifteen caught — two of which produced new tests because the
-guarantee turned out to be held by nothing. **Carried out and reported rather
+guarantee turned out to be held by nothing. **The review then found a sixteenth
+the branch's own set had missed:** reverting the watermark assignment *alone*,
+leaving the `skip` arithmetic correct, left the acceptance-check test green,
+because a length and an absolute index agree until the *second* crossing of the
+window. The combined revert was caught; only isolating the two lines exposed it.
+Fixed in `4ae609b` by asserting the watermark directly at every board read and
+driving the real eleven-entry reviewed lifecycle — plus two defects found while
+fixing it, a daemon test that under-drove the lifecycle it claimed to measure
+and an AC7 test that raced #50's board-before-record ordering one run in ten.
+Re-review: 13/13 mutations caught, 348 passed across three clean runs, ACCEPT.
+**The durable lesson, recorded in `findings.md`: when one fix changes two lines,
+mutate them separately** — a combined revert only proves the pair is
+load-bearing, never each line. **Carried out and reported rather
 than fixed:** `tasks::lock_board` has no stale reclaim, so a process SIGKILLed
 while holding `.board.lock` wedges that session's board for ever — the
 self-referential case being a supervisor killed inside `append_execution`, whose
@@ -91,6 +104,14 @@ the `moved→done` that should fly the final confirmation home is precisely the
 one that falls off. Plain delegations (seven events) still animate end to end;
 contracted-and-reviewed ones do not. **Run #51 before #49 phase 2** — phase 2
 builds more animation on top of a watermark that has already stopped moving.
+*(Done: #51 merged as PR #53, so phase 2 is unblocked and the watermark moves.)*
+
+**Next: #49 phase 2, then phase 3** — never in parallel, both touch `orc-app`'s
+event path, with an adversarial review between each. Copy-paste prompts live in
+[`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md).
+**One thing worth doing first:** open an issue for `tasks::lock_board`'s missing
+stale reclaim. Phase 2 writes the board far more often, which widens the window
+on a wedge that today needs a file deleted by hand to clear.
 
 **#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
 now records that a worker *answered*, and the animation is driven from that.**

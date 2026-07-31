@@ -1,33 +1,41 @@
-# NEXT SESSIONS — #51, then #49 phase 2, then #49 phase 3
+# NEXT SESSIONS — #49 phase 2, then #49 phase 3
 
-Three sessions, run **in that order, one at a time, with a review between each**.
+Two sessions, run **in that order, one at a time, with a review between each**.
 Each block below the line is copy-paste ready.
 
-State when this was written: `main` @ `492ff6c`. #50 (#49 phase 1) merged as
-`32c5058`, #52 (SSD rule) as `e1b8e0a`.
+State: `main` @ `77b6c11`. **#51 merged as PR #53** (review FIX (2) → both fixed
+in `4ae609b` → re-review ACCEPT), #50 (#49 phase 1) as `32c5058`, #52 (SSD rule)
+as `e1b8e0a`. Session 1 (#51) has been removed from this file per the
+maintenance rule at the bottom.
 
 ## Why this order, and why not in parallel
 
-Not stylistic — each one is load-bearing for the next.
+Not stylistic — phase 2 is load-bearing for phase 3.
 
-- **#51 first because its defect 1 is live on `main` right now.** `orc-daemon`
-  truncates `TaskSummary.history` to the last eight entries while `orc-app`'s
-  `note_task_events` watermark counts *into* that window, so a task past eight
-  events stops animating permanently. #50 added the ninth event to a full
-  contracted lifecycle, so the `moved→done` that should fly the final
-  confirmation home is exactly the one that falls off. Start phase 2 first and
-  you will spend it debugging phantom "why isn't this showing" problems that
-  are #51's, not yours.
 - **Phase 3 reveals what phase 2 makes durable.** Without phase 2 there is
   nothing to reveal and scope item 2 is empty.
-- **Never in parallel.** All three touch `orc-app`'s event path, and #51 changes
-  the very watermark phase 2's write frequency will hammer.
+- **Never in parallel.** Both touch `orc-app`'s event path.
+- **#51 is done, and that is what unblocks phase 2.** Its defect 1 — the
+  eight-entry cliff that silently stopped a task animating for good — is fixed,
+  so the watermark phase 2's write frequency will hammer now moves. Had you
+  started phase 2 first you would have spent it chasing phantom "why isn't this
+  showing" problems that were #51's.
 
-Session 1 and 2 are implementer sessions (code-puppy, or whatever is building);
-after each push, a Claude session reviews adversarially per `docs/WORKFLOW.md`
-prompt 2. Do not merge on the implementer's own say-so.
+Phase 2 is an implementer session (code-puppy, or whatever is building); after
+the push, a Claude session reviews adversarially per `docs/WORKFLOW.md` prompt 2.
+Do not merge on the implementer's own say-so.
 
-## Shared preamble — paste this at the top of all three
+## Before you start phase 2 — one open follow-up from #51
+
+`tasks::lock_board` has **no stale reclaim**: a process SIGKILLed while holding
+`.board.lock` wedges that session's board for ever. `spawn_guard::lock_slots`
+already solved exactly this for `.slots.lock`. Found during #51 and deliberately
+not fixed there (it is the core locking primitive for every board writer and
+deserves its own change and its own test) — the fix is spelled out on issue #51
+and in `findings.md`, 2026-07-31. **Phase 2 adds board writes at a much higher
+frequency, which widens the window on this.** Worth its own issue first.
+
+## Shared preamble — paste this at the top of both
 
 Kept in one place deliberately. It was duplicated across three prompts once and
 drifted: all three ended up telling the session to work on the internal disk,
@@ -85,70 +93,6 @@ open a PR. Say plainly what you did NOT do and why.
 
 ---
 
-# Session 1 — issue #51 (do this first)
-
-```
-Work GitHub issue #51 of Legend101Zz/Agent-orchestra - three places the board and the
-screen disagree. Branch: issue-51-board-honesty, worktree slug issue-51.
-
-[PASTE THE SHARED PREAMBLE HERE]
-
-Read in this order: AGENTS.md -> docs/WORKFLOW.md -> task_plan.md -> issue #51 INCLUDING
-its comments -> PR #50 and its evidence note docs/notes/2026-07-31-issue-49-watchable-delegation.md.
-#51 was carried out of #50; that note records what was already tried. The issue's task
-contract is binding.
-
-#50 is merged (32c5058); main is at 492ff6c. Branch off fresh origin/main.
-
-## Scope
-
-All three defects. They share a cause - the daemon's TaskSummary is too thin to carry what
-the client needs - and the issue says not to split the branch.
-
-Defect 1 is reproducible on main TODAY. Acceptance check 1 asks for a test that "fails if
-the watermark goes back to being a length"; this probe shape is exactly it. Mimic
-orcd::task_board's .rev().take(8).rev() against a contracted-then-reviewed task, drive it
-PAST eight entries, and assert the next event still raises a flight. A test that stops AT
-eight passes on the broken code.
-
-Note on defect 1's framing: the issue says all three defects "need orc-daemon". True for 2
-and 3, not for 1 - the watermark is orc-app's own StageState::seen_history and a
-content-anchored watermark would fix it client-side. The daemon-side total-length field the
-issue specifies is still the BETTER fix (it is exact, survives any window size, and does not
-depend on entry identity being unique within a second - now_iso is second-granularity, so
-(at, actor, action, to) can collide). Record that as "we chose the daemon field over the
-client-side anchor, and here is why" in findings.md, not as "the client could not do it".
-
-Defect 2 has a real design fork that is yours to resolve and record in findings.md:
-reconcile_record runs inside read_dispatch/list_dispatches, so making it append task history
-turns ANY process that lists dispatches into a board writer. Decide with evidence - measure
-what actually calls those functions - not preference.
-
-Acceptance check 5 is the one to be most careful with. #50's append_execution already had to
-be best-effort-with-durable-warning because propagating a board-lock failure there would
-abort execute() before drain_queued and strand every queued dispatch in the session. Option
-(i) is the same hazard with a wider blast radius. Whatever you pick, state plainly which
-processes may now write to the board.
-
-## Use workflows
-
-Orchestrate it. Fan out recon over: the daemon's task_board and everything consuming
-TaskSummary; every call path reaching reconcile_record; the reviewer dispatch lifecycle
-(orch::review -> dispatch_review -> record_review_delivery) and what it does and does not
-link. Then a judged design phase for defect 2's fork. Then implement, then adversarially
-verify - attack hardest the claim that two processes listing dispatches concurrently cannot
-corrupt the board or deadlock.
-
-## Definition of done
-
-Additive JSON proven, not asserted: show an old reader parsing a new record AND a new reader
-parsing an old one. Confirm deliberately whether PROTOCOL_VERSION moves (the hello handshake
-compares BUILD_IDENTIFIER and refuses mixed builds - there is precedent in findings.md,
-2026-07-29). The window size ends up a named constant with a comment saying what depends on it.
-```
-
----
-
 # Session 2 — #49 phase 2 (incremental progress persistence)
 
 ```
@@ -161,9 +105,19 @@ issue-49-phase2.
 Read: AGENTS.md -> docs/WORKFLOW.md -> task_plan.md -> issue #49 IN FULL -> PR #50 and
 docs/notes/2026-07-31-issue-49-watchable-delegation.md. Phase 1 is merged; do not rebuild it.
 
-Confirm #51 is merged before starting. If it is not, check specifically whether its
-history-window fix landed - without it a task past eight events does not animate at all and
-you will chase ghosts that are not yours.
+#51 is merged (PR #53); main is at 77b6c11. Branch off fresh origin/main. Read
+docs/notes/2026-07-31-issue-51-board-honesty.md too: it changed the watermark your write
+frequency will hammer (StageState::seen_history is now an absolute index located by
+TaskSummary.history_total, not a length into the daemon's window), it added reviewer_run and
+a per-message circuit::Lane, and it added execution_orphaned / review_execution_orphaned to
+the vocabulary. If you add a task-history word, it needs a circuit::message_for arm, a
+circuit::lane_for arm, and a row in orc-app/tests/task_vocabulary.rs.
+
+Known open defect you may hit, NOT yours to fix: tasks::lock_board has no stale reclaim, so a
+process SIGKILLed while holding .board.lock wedges that session's board until the file is
+deleted by hand. Phase 2 writes the board far more often, so you are likelier to meet it than
+anyone so far. If a test wedges, check for a stale .board.lock before assuming your own bug.
+Report it, do not fix it here.
 
 ## The problem, precisely
 
