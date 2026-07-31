@@ -209,9 +209,9 @@ you find something that genuinely bears on it, comment; do not act on it.
 Recon: how render_pane composes its chrome and what an overlay would displace; where
 DispatchRecord.prompt is reachable from the client; the existing overlay precedent
 (conductor_down, orc-app/src/lib.rs:4387); how the client would reach the progress artifacts at
-all, given they cross no wire today; tachyonfx's actual API surface against our render path. Judged design phase
-for the overlay's dismissal model. Implement, then adversarially verify - attack "never shows a
-character the worker has not produced" hardest.
+all, given they cross no wire today; tachyonfx's actual API surface against our render path.
+Judged design phase for the overlay's dismissal model. Implement, then adversarially verify -
+attack "never shows a character the worker has not produced" hardest.
 
 ## Definition of done
 
