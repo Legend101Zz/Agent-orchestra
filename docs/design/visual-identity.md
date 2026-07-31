@@ -107,8 +107,19 @@ to the baton alone.)*
   `▶` travelling conductor → worker, `◀` travelling worker → conductor.
   ASCII column: `>` and `<`. Direction is the meaning, so the glyph carries it
   and colour never has to.
-- ~60 ms/frame, two cells/frame — deliberately faster than the 110 ms ambient
-  sweep. A dispatch should read as a snap, not as flow.
+- One cell every ~30 ms — deliberately faster than the 110 ms ambient sweep.
+  A dispatch should read as a snap, not as flow.
+  *(REV 2026.07c, #49. This read "~60 ms/frame, two cells/frame" — the same
+  33⅓ cells per second, but expressed as a frame counter, and implemented as
+  one: the packet stood still for 60 ms and then jumped two cells, so it was
+  ~16 fps of visible motion however often the shell repainted. Position is now
+  a continuous function of the elapsed clock, so the speed is unchanged and the
+  travel is smooth. There is no "frame" left to name.)*
+- **No trail.** The smoothness above comes from cadence, not from persistence
+  behind the head. A trail costs the "single directional cell" rule two lines
+  up, and with it the *shape* leg of the three-way separation below — the one
+  leg that survives when colour is removed. The argument, and the two forms
+  that were considered, are in `findings.md` under 2026-07-31.
 - Colour from the map, never a new slot: `brain` outbound (the conductor's
   intent leaving), `confirmed` on a confirmed delivery, `failed` on a failure.
 - It rides **over** the connector's current state; the rail underneath keeps
@@ -144,6 +155,23 @@ all, so it is written up for review before being promoted into this sheet.
   It never takes focus, never blocks input, and never survives the pane that
   raised it. Under reduced motion the flash frame is dropped: it appears
   already settled, holds, and leaves.
+- **The departure beat** (added REV 2026.07c for #49) — the mirror of the
+  landing emote, on the pane a message is *leaving*: `▶ HANDING OFF` on the
+  conductor as a brief goes out, `◀ ANSWERING` on the worker as its answer
+  comes back. Same three beats and the same slot as the landing it belongs to,
+  because this is still the one landing language; what differs is the word,
+  which is a present participle rather than a past one, and the glyph, which is
+  the packet's own directional cell. It **cannot outlive the packet it
+  announces**: it lasts while the packet is still crossing its first twelve
+  cells of route and stops when the packet lands, so on a short wire it is over
+  before the emote starts. Under reduced motion nothing travels, so there is no
+  departure to show and the landing emote carries the whole event.
+  *(This first read "no hold of its own", which overclaimed. Every route the
+  router plans in the wide layout exceeds twelve cells, so in practice the beat
+  is a constant 360 ms — the wall-clock cost of crossing the sheet's own rail.
+  It is bounded by real geometry rather than by a number picked to look right,
+  and it starts at a real event; it is not derived from anything the worker
+  did, and STAGE does not claim to show how long a hand-off took.)*
 - **⏻ CONDUCTOR DOWN** — calm and recoverable, never alarming: muted coral,
   slow breath (not a blink), elapsed time, clear `R` to recover. Workers hold
   their last state.

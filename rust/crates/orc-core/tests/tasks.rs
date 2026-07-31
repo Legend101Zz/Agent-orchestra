@@ -13,7 +13,8 @@ use orc_core::contract::TaskContract;
 use orc_core::registry::atomic_write_json;
 use orc_core::tasks::{
     NewTask, TaskActor, TaskStatus, add_task, assign_task, diff_task, done_task, drop_task,
-    list_tasks, merge_task, move_task, read_task, review_task, start_task, task_path,
+    list_tasks, merge_task, move_task, read_task, record_execution, record_review_execution,
+    review_task, start_task, task_path,
 };
 use serde_json::json;
 
@@ -313,5 +314,80 @@ fn isolation_refuses_symlinked_roots_and_preserves_the_calling_actor() {
     );
     assert_eq!(task.history.last().unwrap().actor, "brain");
     assert!(fs::read_dir(&redirected).unwrap().next().is_none());
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn every_completion_word_the_supervisor_can_write_is_written_by_something() {
+    // Issue #49 added four durable action words, and only one of them —
+    // `execution_succeeded` — is reached by an end-to-end dispatch test. The
+    // other three are on the failure and reviewer branches of
+    // `dispatch_supervisor::append_execution`, which no test drives, so
+    // renaming or misspelling any of them would leave the whole workspace
+    // green. This pins the strings themselves against the writers that produce
+    // them; `orc-app/tests/task_vocabulary.rs` pins what STAGE does with each.
+    let _guard = lock();
+    let home = fresh_home();
+    // SAFETY: guarded by `lock()`, so no sibling test is reading it.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    write_harness_registry(&HarnessRegistry::default()).unwrap();
+    let session = create_session(
+        "codex",
+        &["pi-m3".to_owned()],
+        std::env::temp_dir().as_path(),
+    )
+    .unwrap();
+
+    let task = add_task(
+        &session.id,
+        TaskActor::Brain,
+        NewTask {
+            title: "completion vocabulary".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .unwrap();
+
+    for (review, succeeded, want) in [
+        (false, true, "execution_succeeded"),
+        (false, false, "execution_failed"),
+        (true, true, "review_execution_succeeded"),
+        (true, false, "review_execution_failed"),
+    ] {
+        let written = if review {
+            record_review_execution(
+                &session.id,
+                &task.id,
+                TaskActor::Brain,
+                succeeded,
+                format!("{want} detail"),
+            )
+        } else {
+            record_execution(
+                &session.id,
+                &task.id,
+                TaskActor::Brain,
+                succeeded,
+                format!("{want} detail"),
+            )
+        }
+        .unwrap();
+        let last = written.history.last().unwrap();
+        assert_eq!(last.action, want, "review={review} succeeded={succeeded}");
+        assert_eq!(last.actor, "brain");
+        assert_eq!(
+            last.detail.as_deref(),
+            Some(format!("{want} detail").as_str())
+        );
+        assert!(
+            last.from.is_none() && last.to.is_none(),
+            "a completion is an event, not a status transition: {last:?}"
+        );
+    }
+
+    // None of them touches the executor's linkage: the worker finishing does
+    // not change which pane it ran on.
+    let final_task = read_task(&session.id, &task.id).unwrap();
+    assert!(final_task.assignee_run.is_none());
     let _ = fs::remove_dir_all(home);
 }

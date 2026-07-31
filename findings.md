@@ -199,3 +199,115 @@ including, ironically, the `src/theme/mod.rs` + `src/theme/palette.rs` split
 this 1100-line file is heading for. If the map ever moves, repoint `THEME_MAP`;
 a dedicated assertion fails by name rather than letting the gate scan its own
 table.
+
+## 2026-07-31 — Decision 2: the packet gets no trail, and the reason is the ASCII column (#49)
+
+Issue #49 asked for a fading trail behind the in-flight packet, and left the
+call open: propose a trail row for the design sheet, or get the smoothness from
+cadence and intensity alone. **Decided: no trail.** Three pieces of evidence,
+in the order they mattered.
+
+**1. The sheet defines the packet as one cell, and makes that load-bearing.**
+`docs/design/visual-identity.md:106` — "Packet = a single directional cell, not
+the pulse's three-cell ramp" — and `:120-122` — "Distinguishable from the
+ambient pulse by all three of shape (one cell vs three), behaviour (crosses
+once vs loops) and colour — so removing any one of them still leaves the two
+tellable apart." A three-cell trail deletes the *shape* leg outright; a
+two-cell one halves it. On the monochrome tier colour is already gone
+(`Theme::resolve` answers `Color::Reset` throughout), and behaviour needs time
+to observe, so with colour removed **shape is the only instantaneous
+discriminator left**. Spending it on decoration is not affordable.
+
+**2. The ASCII column has no unclaimed directional character.** A Unicode-only
+trail (`▸ ›` / `◂ ‹`) is genuinely defensible against the baton — triangles and
+guillemets cannot be confused with `▓ ▒ ░ ─ · ━`. But `baton.rs:84-96` already
+claims `- # + : . =`, `circuit.rs` collapses every wire junction to `+`, and
+the packet owns `> <`. What is left (`,` `` ` `` `'`) does not read as an arrow
+or as a fade, so an ASCII trail would break `:108`'s promise that direction is
+carried by the glyph. A vocabulary that exists at one tier and not the other is
+exactly what "Design in layers, each stands alone" forbids.
+
+**3. The chunkiness was never the absence of persistence.** It was
+`FLIGHT_STEP = 2` cells per `FLIGHT_FRAME_MS = 60` — the packet was never drawn
+in an odd-numbered cell at all, however fast the loop polled. Making position a
+continuous function of the elapsed clock halves the jump and roughly doubles
+the drawn frames at the same speed, which is where the smoothness comes from.
+
+**A trap worth recording.** The issue said a trail drawn from `▓▒░·─━` "would
+fail" the shipped test at `orc-app/src/lib.rs:6667`. It would not.
+`the_message_vocabulary_survives_no_color_and_the_ascii_column` asserts on the
+return value of `circuit::packet()` and never counts painted buffer cells, so a
+trail of *any* glyph would have gone straight past it. The decision is now
+enforced by `the_packet_is_one_cell_and_draws_no_trail`, which counts packet
+cells on the actual route in the rendered buffer, and which a deliberately
+added two-cell trail fails.
+
+**What the decision cost, and what it bought back.** Nothing visible was given
+up, and one real defect came out of it: the packet was shipping as `bold+dim`.
+`paint_cell` merges modifiers into whatever the cell already carries
+(`Cell::set_style` inserts rather than replaces), and the rail underneath a
+packet is `Slot::Faint`, i.e. DIM — so `theme.state(Slot::Brain)`'s BOLD landed
+on top of it and the golden's own legend recorded
+`j fg=#5ad1c8 bg=#0a0c11 mod=bold+dim`. The packet now clears the dim it
+inherits. That is the whole of the "intensity" half: one bright cell on a dim
+rail.
+
+## 2026-07-31 — `delivery_confirmed` means "the worker took it", never "it answered" (#49)
+
+Recorded because it was believed twice, once in the shipped code and once in
+the first version of issue #49 itself.
+
+`dispatch_supervisor::mark_started` is invoked from the `on_started` callback
+at `invoke_harness`, **immediately after `command.spawn()`** and before any
+wait. Its detail string says so in as many words: *"dispatch {} delivered to
+{}; worker running"*. `persist_terminal`'s success arm — which sets
+`execution_status`, `exit_code`, `stdout`, `stderr` and `usage` — appended no
+task history at all. So the last durable word the board ever had about a
+finished delegation was that its process had started.
+
+The completion event is now `execution_succeeded` / `execution_failed`
+(`review_execution_*` for a reviewer dispatch), written by `persist_terminal`
+once the child has exited *and* `Drain::finish` has joined both reader threads,
+so the answer it announces is EOF-complete. It is appended **before**
+`write_dispatch`, deliberately: that makes "the dispatch is terminal" imply
+"the board has been told", which is what lets a test wait on one and assert the
+other instead of racing two writers. It is best-effort and its failure is
+durable on `record.warnings` rather than propagated — propagating would abort
+`execute` before it removes the supervisor spec and calls `drain_queued`, so
+one contended board would stall every queued dispatch in the session.
+
+**`delivery_confirmed` was not silenced, and the reason is not obvious.** The
+tempting simplification is that `assigned` always precedes it, so the receipt
+is redundant. It does not always precede it: `orch::review` dispatches a
+reviewer without ever calling `assign_task`, and `orch::delegate` skips
+`assign_task` when the task is already `running` — a retry against the same
+worker. On both paths `delivery_confirmed` is the only record that a brief left
+the conductor. It is therefore classified `(Outbound, Confirmed)`: the outbound
+journey landing, which is what it always was.
+
+**A watermark hazard the wake path exposes.** `note_task_events` used to
+advance its per-task history watermark *before* checking whether the task had
+an `assignee_run` to aim at. `pio orch delegate` passes no run to
+`assign_task`, and it is the detached supervisor's `record_delivery` — another
+process, later — that writes the link, so a board read landing between the two
+consumed `assigned` and the outbound packet was never raised. #45 never saw
+this because the board was only read when a pane spoke; #49's board watcher
+reads it the moment the file changes, which is exactly that window. The
+watermark now moves only once there is a wire to aim at.
+
+**Still open — and the fix does *not* need `orc-daemon`, contrary to what this
+entry first said.** `task_board` truncates `TaskSummary.history` to the last
+eight entries and the watermark is a length into that window, so once a task's
+real history passes eight, `history.len()` pins at 8, `seen` pins at 8, and
+`skip(seen)` on an 8-element window is empty forever: every later event is
+silently unanimated, including `execution_succeeded` itself. Adding the
+completion event brings a full contracted lifecycle to nine.
+
+The watermark is `StageState::seen_history` — `orc-app`, inside #49's allowed
+paths — and it is a *length* by choice, not by necessity. Anchoring it on the
+last-seen entry's identity (`at`/`actor`/`action`/`to`) and locating that in
+the current window, or keeping the window's entry identities and raising the
+set difference, both fix it without touching the daemon and both survive a
+sliding window. A daemon-side total-length field would be cleaner still, but
+it is not what makes the fix possible. Deferred to its own issue on scope,
+not on impossibility.

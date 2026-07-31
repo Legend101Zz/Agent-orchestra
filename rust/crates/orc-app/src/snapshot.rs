@@ -350,11 +350,26 @@ mod tests {
     #[test]
     fn the_message_vocabulary_is_snapshotted_against_the_ambient_pulse() {
         let theme = Theme::from(ThemeName::Nocturne);
-        // 180 ms in: three frames at 60 ms, two cells each, so the packet is
-        // six cells along whichever way it is going.
-        let raised = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_millis(180))
-            .unwrap_or_else(std::time::Instant::now);
+        // 180 ms in: at one cell every `FLIGHT_MS_PER_CELL`, the packet is six
+        // cells along whichever way it is going. The same six cells the
+        // pre-#49 cadence reached in three 60 ms frames of two — the speed did
+        // not change, only how finely it is sampled — so this golden pins that
+        // equivalence as well as the frame.
+        //
+        // The anchor is taken per case, immediately before that case renders,
+        // and this matters more than it used to. Cell six holds for an elapsed
+        // in `[180, 210)`, so a case has 30 ms of slack — but one anchor shared
+        // across three renders spends that slack cumulatively, and under
+        // parallel test load a later case drifted into cell seven and failed
+        // its golden. The pre-#49 cadence absorbed this because the packet only
+        // moved every 60 ms; halving the quantum halved the tolerance, which is
+        // a cost of the smoothness fix rather than a pre-existing flake. Review
+        // caught it at ~1 run in 6 of the full workspace.
+        let anchor = || {
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_millis(180))
+                .unwrap_or_else(std::time::Instant::now)
+        };
         let cases = [
             (
                 "stage-message-dispatch",
@@ -388,7 +403,7 @@ mod tests {
                     worker_id: "pane-1".to_owned(),
                     direction,
                     outcome,
-                    raised,
+                    raised: anchor(),
                 }];
             }
             gate(

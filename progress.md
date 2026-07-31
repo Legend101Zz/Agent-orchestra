@@ -2078,3 +2078,88 @@ FIX, so both findings are now open on `main`.
   `git worktree list` first and review inside the existing one.
 - **Next: a follow-up issue for the two findings**, then #14 (README +
   screenshots) closes V1.
+
+## 2026-07-31 — #49 phase 1 pushed: a delegation you can watch (Claude Code)
+
+Branch `issue-49-watchable-delegation` off `origin/main` @ `47a4b33`, worked in
+a `git worktree` on the internal disk (the checkout is shared with other agent
+sessions, and the external-SSD volume is the variable the documented wall-clock
+flakes turn on). **Phase 1 only** — defects 1, 4 and 5 plus the departure beat.
+Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
+
+- **Defect 1, the one everything else was waiting on.** `delivery_confirmed` is
+  written by `mark_started` from the `on_started` callback, right after
+  `command.spawn()`, and `persist_terminal`'s success arm appended no history
+  at all — so nothing on the board ever said the answer arrived, and
+  `message_for` was animating a *return* from an event that means "a process
+  started". `orc_core::tasks` gains `record_execution` /
+  `record_review_execution`, written by `persist_terminal` once the child has
+  exited and both pipes are drained; `delivery_confirmed` is reclassified from
+  `(Inbound, Confirmed)` to `(Outbound, Confirmed)`, which is what it always
+  meant. Evidence, on a worker told to sleep 1.5 s:
+  `delegate returned at 68.8ms; delivery_confirmed seen at 68.9ms;
+  execution_succeeded seen at 1.629s`. Both used to land in the same
+  millisecond.
+- **Defect 4, the wake path.** `~/.orchestra/tasks` is now watched with the
+  same `notify` machinery the runs and reports watchers already use, raising
+  `UiEvent::BoardChanged`. A delegation between two silent panes is seen when
+  it happens rather than when a pane next speaks or after 30 s.
+- **Defect 5, the cadence.** `FLIGHT_FRAME_MS = 60` / `FLIGHT_STEP = 2` become
+  `FLIGHT_MS_PER_CELL = 30`: identical speed, one cell at a time instead of
+  two-cell jumps at ~16 fps, and position is a function of the elapsed clock
+  and nothing else. The `in_flight` repaint tier is now 15 ms and leads the
+  chain. The wrong comment claiming the 16 ms `animating` tier is the packet is
+  corrected in place — it is the baton pulse, and believing otherwise is what
+  the issue warns about.
+- **The departure beat.** `▶ HANDING OFF` on the conductor as a brief leaves,
+  `◀ ANSWERING` on the worker as its answer goes back. Same three beats as the
+  landing emote, no hold of its own: it lasts while the packet crosses its
+  first twelve cells of route and ends when the packet lands.
+- **Decision 2 resolved: no trail.** The sheet defines the packet as one cell
+  and makes shape one of three separation legs, any one of which must survive
+  removal of the others — and with colour gone on the monochrome tier, shape is
+  the only instantaneous one left. The ASCII column also has no unclaimed
+  directional character. Recorded with the full argument in `findings.md`;
+  `visual-identity.md` gains the amended cadence line and a REV 2026.07c note.
+- **Two defects this branch would otherwise have caused, fixed here.**
+  `confirmed_panes` read `history.last()`, so appending a completion event
+  would have taken the `✓ TASK CONFIRMED` badge off every pane silently; and
+  the packet was drawn `bold+dim` because `paint_cell` merges modifiers into
+  the dim rail underneath it.
+- **Acceptance 7 by construction plus a statement.** No flight is raised for a
+  run link that is not a worker pane on this stage — the case #45's fallback
+  creates — and the legend says so instead, for as long as the packet it
+  replaced would have been visible.
+- **Adversarially reviewed before pushing, and seven real defects fixed.** A
+  multi-agent attack pass found: the off-stage legend note had no repaint
+  reason (painted once, stranded up to 30 s); it ate the whole legend at 80
+  columns; the reduced-motion connector still inherited the rail's DIM — the
+  exact smudge the branch claimed to have fixed on the packet, left on the one
+  path where the connector *is* the message; a fast worker's answer could
+  overtake its own brief and cross it; `confirmed_panes` kept the badge on a
+  worker whose execution failed; three of the four new action words were
+  written by nothing any test drove; and `halving_the_frame_interval…` was a
+  tautology that could not fail. All fixed or deleted, each with a test that
+  the corresponding mutation breaks.
+- **Two claims walked back rather than defended.** The departure beat's "no
+  hold of its own" is true only in the sense that it cannot outlive its packet;
+  every route the router plans is longer than twelve cells, so in practice it
+  is a constant 360 ms. And travel time is the wire's length, not the work's —
+  what the branch guarantees is that no phase boundary is invented, not that a
+  200 ms worker gets 200 ms of animation.
+- **Verification.** Five gates green: 335 passed, 0 failed (319 on `main` plus
+  16 new tests). Eleven deliberate mutations, eleven caught by their intended
+  test. `background_dispatch` ran 6/6 in isolation on the branch and 3/3 on
+  `origin/main`, and three interleaved full-workspace A/B rounds gave 0
+  failures on both trees. One earlier gate run *did* fail it — taken while five
+  review subagents were running `cargo test` against this same worktree — and
+  that number is discarded rather than explained away.
+- **Left open, reported on the issue:** `orc-daemon` truncates a task's history
+  to the last eight entries and `note_task_events`' watermark is a length into
+  that window, so a task past eight entries stops animating; adding the
+  completion event brings a full contracted lifecycle to nine. Corrected in
+  review: the fix does **not** need `orc-daemon` — the watermark is `orc-app`'s
+  own `seen_history` and a content-anchored one fixes it inside the allowed
+  paths. Deferred on scope, not impossibility.
+- **Next:** review, then phase 2 (incremental progress persistence) once
+  Decision 1 has an answer.

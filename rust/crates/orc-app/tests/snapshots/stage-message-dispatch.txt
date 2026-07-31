@@ -3,7 +3,7 @@ STAGE nocturne truecolor outbound dispatch 100x30
                                                                                                     
                                                                      ╭ ● PI-M3-0  LIVE ──────────╮  
                                                                      │pi-m3-0 ready              │▐ 
- ╭ ◆ CODEX  LIVE ──────────────────────────────────╮                 │                           │▐ 
+ ╭ ◆ CODEX  LIVE · ▶ HANDING OFF ──────────────────╮                 │                           │▐ 
  │codex ready                                      │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
  │                                                 │▐                │                           │▐ 
@@ -34,7 +34,7 @@ STAGE nocturne truecolor outbound dispatch 100x30
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcccccccccccccccccbbbbbbbbbbbaa
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
-afgggggggggggggggfffffffffffffffffffffffffffffffffffaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
+afgggggggggggggggggggggggggggggggfffffffffffffffffffaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
@@ -45,7 +45,7 @@ afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddd
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
-afdddddddddddddddddddddddddddddddddddddddddddddddddfehaiiiijiiiiiiiakbdddddddddddddddddddddddddddbea
+afdddddddddddddddddddddddddddddddddddddddddddddddddfehaiiiihiiiiiiiajbdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 afdddddddddddddddddddddddddddddddddddddddddddddddddfeaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
@@ -60,7 +60,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddd
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabdddddddddddddddddddddddddddbea
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbea
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeea
-llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
 --- legend ---
 a fg=reset bg=#0a0c11 mod=-
 b fg=#262c3a bg=#10131b mod=-
@@ -71,6 +71,5 @@ f fg=#39425a bg=#10131b mod=-
 g fg=#5ad1c8 bg=#10131b mod=bold
 h fg=#5ad1c8 bg=#0a0c11 mod=bold
 i fg=#454c60 bg=#0a0c11 mod=dim
-j fg=#5ad1c8 bg=#0a0c11 mod=bold+dim
-k fg=#8ea2ff bg=#0a0c11 mod=bold
-l fg=#727b8f bg=#0a0c11 mod=dim
+j fg=#8ea2ff bg=#0a0c11 mod=bold
+k fg=#727b8f bg=#0a0c11 mod=dim

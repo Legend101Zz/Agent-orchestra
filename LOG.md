@@ -34,6 +34,7 @@ ship-log entries are part of finishing an issue.*
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 🧪 | `issue-49-watchable-delegation` · review FIX (4) all fixed in `1989e2b` |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -484,6 +485,106 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
+
+The short version: **STAGE was telling you the answer had come back about a
+tenth of a second after the job went out, every single time, no matter how long
+the worker really took.** It was not a timing bug. There was simply no such
+thing as "the worker answered" anywhere in pi-orchestra, so the animation was
+hung off the nearest event that existed — and that event means "the worker's
+process has started". You can see it in the old wording, which said so out
+loud: *"delivered to hermes; worker running"*. The packet came back because a
+program had launched, not because it had finished. Nothing on the board ever
+recorded that an answer arrived at all.
+
+So that event now exists. When a worker exits and everything it printed has
+been collected, the task board gets a new line saying it finished and whether
+it succeeded. The old "delivered" line stays and keeps its real meaning — the
+worker *took* the brief — so the two are different facts and read as such: the
+brief goes out and lands on the worker, the worker works, and some time later
+the answer comes back. Measured on a worker deliberately told to take a second
+and a half: the hand-off is confirmed at 69 ms, the answer arrives at 1.63 s.
+Before this branch both of those were the same instant.
+
+Three smaller things came with it. **The board is now watched directly**, so a
+delegation between two quiet panes shows up when it happens instead of waiting
+for one of the panes to print something — previously the wait could be up to
+thirty seconds, because the only way the screen learned anything was by
+overhearing a terminal. **The packet moves smoothly**: it used to sit still for
+60 ms and then jump two characters, which is about sixteen frames a second of
+visible motion however fast everything else was running; it now crosses one
+character at a time at exactly the same overall speed. And **the brain pane now
+shows the hand-off leaving** — `▶ HANDING OFF` as a brief goes out, `◀
+ANSWERING` on the worker as its answer comes back — which is the other half of
+the arrival stamp that was already there.
+
+**On the fading trail behind the packet: I decided against it, and wrote down
+why.** The design sheet defines the packet as one character precisely so it can
+never be confused with the three-character pulse that means "this pane is
+producing output", and it says that has to stay true with colour removed. A
+trail spends that. The ASCII fallback also has no arrow-ish characters left to
+build one from, so it would have existed on good terminals and not on plain
+ones. The smoothness people were asking for turned out to be the two-character
+jump anyway, not the lack of a trail. Full argument in `findings.md`; the sheet
+now says "no trail" with the reason.
+
+**What I did NOT do.** Phases 2 and 3 of the issue are untouched — the worker
+still produces nothing durable until it exits, so there is still nothing to
+drive a live character-by-character reveal, and the reveal itself waits on your
+call about whether briefs get typed into the pane you are watching (Decision 1
+in the issue; I have commented what phase 1 learned that bears on it). Zoom
+still hides the packet, unchanged. And one thing I found but could not fix
+here: the daemon only hands the screen a task's **last eight** history lines,
+and adding this one takes a full contracted job to nine — past that point a
+task quietly stops animating. Fixing it means changing `orc-daemon`, which this
+issue's contract does not allow, so it is reported on the issue as a follow-up
+rather than smuggled in.
+
+**I had it reviewed hard before pushing, and it found seven things.** A
+multi-agent adversarial pass over the branch turned up real defects, and they
+are fixed rather than noted: the "no wire here" legend line was painted once
+and then stranded on screen for up to thirty seconds because nothing asked for
+the frame that removes it; the same line ate the entire control legend on an
+80-column terminal; the reduced-motion connector had exactly the smudge I said
+I had fixed on the packet; a fast worker's answer could overtake its own brief
+and cross it on the wire; the confirmed badge stayed on a worker whose work had
+failed; three of the four new words were written by nothing any test observed;
+and one of my own new tests could not fail. That last one is deleted, and the
+reason is written down where the next person will read it.
+
+Five gates green, 335 tests, 0 failed. Every guarantee was broken on purpose
+first to prove its test bites — eleven deliberate breaks, eleven caught.
+Evidence, including the two claims I had to walk back:
+`docs/notes/2026-07-31-issue-49-watchable-delegation.md`.
+
+> **Reviewed 2026-07-31 — 👀→🔨, FIX (3).** Gates re-verified (forced re-lint,
+> 3× clean runs at 335/0); 15 mutations run, 13 caught. The code is right; the
+> gaps are enforcement and record. (1) **AC4's wake path is held by nothing** —
+> deleting `spawn_board_watch` from `run_initial`, *or* gutting the
+> `BoardChanged` arm, leaves the whole suite green: the two AC4 tests pin the
+> component but never that the shell is wired to it. (2) The 8-entry history
+> cliff is real (reproduced), but "the fix needs `orc-daemon`" is not — the
+> watermark is `orc-app`'s own `seen_history` and a content-anchored one fixes
+> it inside the allowed paths. (3) `visual-identity.md:163` still carries the
+> bolded "no hold of its own" the branch walked back everywhere else.
+>
+> **A fourth, found while re-running the gates: `cargo test --workspace` failed
+> 3 runs in 6 on the branch as pushed** — the "335, 0 failed" claim (and my own
+> first 3 clean runs) were undersampled. Two *new* orc-app flakes, both racing
+> the time-animated ambient rail: `the_packet_is_one_cell_and_draws_no_trail`
+> diffed a control render against later ones while the baton ramp swept between
+> them, and the message goldens shared one 180 ms anchor across three renders —
+> where halving the packet quantum halved the slack, so it is a cost of the
+> smoothness fix, not pre-existing. `origin/main` A/B: 0/6 for orc-app.
+>
+> **All four fixed on the branch (`1989e2b`) — 🔨→🧪.** The wake path is now a
+> named `FileWatch` table plus a `reads_board` predicate, and both surviving
+> mutations die against it; the two doc claims are corrected; the rail is
+> decayed before the diff and the golden anchor taken per case. Eight
+> consecutive full-workspace runs: **337 passed, zero orc-app failures.** The
+> two `orc-cli` quota flakes that remain are pre-existing and reproduce on
+> `origin/main`. Five gates green on a forced re-lint. **Ready to merge.**
 
 ### 2026-07-30 — The rainbow now respects a colourless terminal, and the no-hex test looks everywhere, issue #39 (code-puppy)
 Two leftovers from the new look, both about the code meaning what it says. First:
