@@ -35,7 +35,7 @@ ship-log entries are part of finishing an issue.*
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 🧪 | pushed `issue-51-board-honesty` (PR #53) · all three fixed · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim) |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -407,10 +407,11 @@ disks.
 
 > **▶ Next up, copy-paste ready:**
 > [`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md)
-> — **#51 → #49 phase 2 → #49 phase 3**, in that order, one at a time, with a
-> review between each. Includes a shared preamble (worktree-on-the-SSD, mount
-> check, mutation-check rule, flake A/B rule) that all three paste, so the three
-> cannot drift apart. The generic templates below stay as the loop's reference.
+> — #51 is merged, so the next one is **#49 phase 2, then #49 phase 3**, one at
+> a time with a review between each. Includes a shared preamble
+> (worktree-on-the-SSD, mount check, mutation-check rule, flake A/B rule) that
+> both paste, so they cannot drift apart. The generic templates below stay as
+> the loop's reference.
 
 ### 0. Foundations research (Claude Code session, once, no code)
 

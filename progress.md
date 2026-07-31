@@ -2307,3 +2307,47 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
     workspace afterwards. **A load-sensitive failure in a test you did not touch
     is not evidence that the cause is not yours**; recorded in `findings.md`.
 - **Next:** re-review, then **#49 phase 2** — the watermark it builds on now moves.
+
+## Session — 2026-07-31 (Claude, adversarial reviewer): #51 re-review ACCEPT, merged as PR #53
+
+- **Round 1: FIX (2).** All three implementations were correct and unbreakable —
+  13 independent mutations, five gates green from a reviewer-owned worktree on a
+  cold `target/`, and 348 passed verified against `origin/main`'s 337. But one
+  mutation **survived**: reverting `note_task_events`' watermark assignment
+  *alone*, leaving the `skip` arithmetic correct, left AC1's test green. AC1
+  explicitly requires that test to fail on exactly that revert, so the acceptance
+  check did not hold. The branch's own 15-mutation set had reverted both lines
+  together, which is caught — **only isolating the two lines exposed it.** Second
+  finding: a doc comment landed on the wrong test in `orc-daemon`, invisible to
+  the gates because rustdoc skips `#[cfg(test)]`.
+- **Why it mattered.** A length watermark and an absolute index agree below the
+  window *and* on the first crossing; they diverge from the second, where the
+  length lags the sliding window and replays entries already shown. A real
+  reviewed lifecycle is eleven entries, so the mirror of the original defect —
+  silent double-animation instead of a silent stall — was live for every
+  reviewed task with nothing to catch it.
+- **Round 2 (`4ae609b`): ACCEPT.** Both fixed, test-only — every hunk inside a
+  `#[cfg(test)]` module, no production code moved, count unchanged at 348. The
+  fix is stronger than the one proposed: it asserts the **watermark itself** at
+  every board read rather than the packet count, which matters because on this
+  lifecycle the replayed entries classify to nothing, so a count-based test would
+  have stayed green while the watermark was already wrong. Re-verified: 13/13
+  mutations caught, five gates green, 348 passed × 3 consecutive clean runs, AC7
+  hammered 15× in isolation with 0 failures.
+- **The two defects the implementer found while fixing were the better catch:**
+  the daemon test under-drove the very lifecycle it claimed to measure (nine
+  entries, not eleven, and its `> WINDOW` assertion passed anyway — so the doc
+  claiming "nine entries is a fact about the product" was itself the invented
+  number), and the AC7 test raced #50's board-before-record ordering one run in
+  ten.
+- **Flake attribution, done properly.** A 3/3 failure streak on the branch looked
+  damning; the A/B against `origin/main` in its own worktree showed
+  `delegate_confirms_while_running_…` firing on **both** trees, and the other
+  failure was an unmodified #50 wall-clock test missing by 110 ms. Neither was
+  the branch's. **Undersampling is how the #50 review got this wrong** — three
+  runs is not a measurement.
+- **Carried forward, not fixed:** `tasks::lock_board` still has no stale reclaim.
+  **Open this before #49 phase 2** — phase 2 writes the board far more often,
+  which widens the window on a wedge that today clears only by deleting a file
+  by hand.
+- **Next:** #49 phase 2, then phase 3, one at a time with a review between each.
