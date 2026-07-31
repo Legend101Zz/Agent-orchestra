@@ -34,7 +34,7 @@ ship-log entries are part of finishing an issue.*
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 👀 | `issue-49-watchable-delegation` |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 🔨 | `issue-49-watchable-delegation` · review FIX (3) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -557,6 +557,17 @@ Five gates green, 335 tests, 0 failed. Every guarantee was broken on purpose
 first to prove its test bites — eleven deliberate breaks, eleven caught.
 Evidence, including the two claims I had to walk back:
 `docs/notes/2026-07-31-issue-49-watchable-delegation.md`.
+
+> **Reviewed 2026-07-31 — 👀→🔨, FIX (3).** Gates re-verified (forced re-lint,
+> 3× clean runs at 335/0); 15 mutations run, 13 caught. The code is right; the
+> gaps are enforcement and record. (1) **AC4's wake path is held by nothing** —
+> deleting `spawn_board_watch` from `run_initial`, *or* gutting the
+> `BoardChanged` arm, leaves the whole suite green: the two AC4 tests pin the
+> component but never that the shell is wired to it. (2) The 8-entry history
+> cliff is real (reproduced), but "the fix needs `orc-daemon`" is not — the
+> watermark is `orc-app`'s own `seen_history` and a content-anchored one fixes
+> it inside the allowed paths. (3) `visual-identity.md:163` still carries the
+> bolded "no hold of its own" the branch walked back everywhere else.
 
 ### 2026-07-30 — The rainbow now respects a colourless terminal, and the no-hex test looks everywhere, issue #39 (code-puppy)
 Two leftovers from the new look, both about the code meaning what it says. First:
