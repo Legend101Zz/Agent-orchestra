@@ -38,7 +38,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ merged 2026-07-31, PR #50 · **phases 2–3 still open**) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ PR #50, phase 2 ✅ PR #56, both 2026-07-31 · **phase 3 is the last one, and it closes #49**) |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (✅ merged 2026-07-31, PR #53 — review FIX (2) → both fixed → re-review ACCEPT) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
@@ -106,8 +106,9 @@ contracted-and-reviewed ones do not. **Run #51 before #49 phase 2** — phase 2
 builds more animation on top of a watermark that has already stopped moving.
 *(Done: #51 merged as PR #53, so phase 2 is unblocked and the watermark moves.)*
 
-**#49 phase 2 pushed (2026-07-31, `issue-49-phase2-incremental-output`) — a
-worker's partial output is durable while it is still working.** Defect 3. The
+**#49 phase 2 MERGED (2026-07-31, PR #56 as `2dc35db`) — a worker's partial
+output is durable while it is still working.** Defect 3. Review **FIX (5)** →
+all fixed in `881fb37` → re-review **ACCEPT**. The
 supervisor's drain threads now mirror each stream verbatim to an append-only
 per-attempt log beside the dispatch record, with a separate orchestrator-owned
 counters journal; neither is ever fsynced, and neither touches the task board or
@@ -130,12 +131,30 @@ unbounded for any adapter with an extractor — measured at 25x the documented c
 with no truncation marker, and held by no test because the flood fixture's
 adapter has no extractor).
 
+**One follow-up merged unfixed, and it belongs to phase 3.** `ProgressLog`'s
+`capped` latch is what stops a declined over-long line being followed by a
+shorter one that fits — which would leave the log with a *hole*, the one thing
+"byte N is byte N forever" forbids. It is correct in the code and **held by no
+test**; removing it passes the whole suite. The test is written and verified
+(passes on `b7f6954`, fails with the latch removed) and is named in the
+re-review. Phase 3 is the natural place to land it, because phase 3 is the first
+code that *reads* the log and therefore the first that a hole would lie to.
+
+**The durable lesson from this review, third occurrence in this program:**
+#50 shipped a test that could not fail, #51 one that under-drove the lifecycle it
+claimed to measure, and #56 one that asserted against a helper standing in for
+the path under test — `progress_paths(.., 1)` vs `(.., 2)` instead of a real
+retry. Same error in three costumes: **testing the component instead of the
+wiring.** Phase 3 is the most exposed yet, because a reveal is easy to assert
+about a pure function and hard to assert about what a reader actually sees.
+
 **Next: #49 phase 3** — the in-pane reveal, gated on Decision 1 (option (a),
 answered by Mrigesh on 2026-07-31). Phase 3 is where the cost of *watching*
 this state lands: `~/.orchestra/dispatches` is not in `file_watches()`, so
 phase 2 raises no wakes at all, and phase 3 must decide deliberately what it
-adds. Copy-paste prompts live in
-[`docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md`](docs/prompts/2026-07-31-issue-51-and-49-phases-2-3-next-session.md).
+adds. **Phase 3 closes #49**, which unblocks #14 and V1. Copy-paste prompt lives
+in
+[`docs/prompts/2026-08-01-issue-49-phase3-next-session.md`](docs/prompts/2026-08-01-issue-49-phase3-next-session.md).
 
 **#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
 now records that a worker *answered*, and the animation is driven from that.**
