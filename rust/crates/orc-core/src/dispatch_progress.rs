@@ -60,7 +60,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatch::{PROGRESS_LOG_MAX_BYTES, ProgressPaths};
+use crate::dispatch::PROGRESS_LOG_MAX_BYTES;
 use crate::registry::now_iso;
 
 /// Floor between two progress notes.
@@ -140,6 +140,9 @@ impl CloseReason {
 pub(crate) struct ProgressLog {
     file: Option<File>,
     kept: usize,
+    /// Latched once a line has been declined, so the log's bytes stay a
+    /// contiguous prefix of the stream rather than a subset with a hole.
+    capped: bool,
 }
 
 impl ProgressLog {
@@ -164,6 +167,7 @@ impl ProgressLog {
                 Self {
                     file: Some(file),
                     kept: 0,
+                    capped: false,
                 },
                 None,
             ),
@@ -171,6 +175,7 @@ impl ProgressLog {
                 Self {
                     file: None,
                     kept: 0,
+                    capped: true,
                 },
                 Some(format!(
                     "ORC WARNING: progress log {} could not be opened, so this worker's \
@@ -181,12 +186,23 @@ impl ProgressLog {
         }
     }
 
-    /// Append one complete line verbatim, clipped at [`PROGRESS_LOG_MAX_BYTES`].
+    /// Append one whole line verbatim, or nothing.
     ///
-    /// Contains only what the worker wrote. A partial line is never written —
-    /// the clip stops at the cap and the log then stops growing for the rest of
-    /// the attempt, which the journal states as `kept` so that a reader can
-    /// tell a capped log from a quiet one.
+    /// Contains only what the worker wrote. **A partial line is never written**,
+    /// and that is a rule about this function rather than a hope about the
+    /// arithmetic: a line that does not fit under [`PROGRESS_LOG_MAX_BYTES`] is
+    /// declined in full and the log stops growing for the rest of the attempt.
+    ///
+    /// Clipping mid-line was the first implementation and it was wrong twice
+    /// over. It ends the log on a byte boundary — for a JSON transport that is
+    /// a truncated object no reader can parse, and for UTF-8 a split
+    /// code point — and it silently makes the last line of the log something
+    /// the worker never emitted. Declining costs at most one line's worth of
+    /// the cap and keeps the log's one claim ("these are the worker's bytes")
+    /// unqualified.
+    ///
+    /// A reader tells a capped log from a quiet one by `kept` against
+    /// `log_max_bytes` on the record, not by the file's length.
     ///
     /// Errors are dropped deliberately. This runs on the thread whose job is to
     /// keep the pipe empty; #28 was a deadlock caused by that thread not
@@ -197,13 +213,14 @@ impl ProgressLog {
         let Some(file) = self.file.as_mut() else {
             return;
         };
-        if self.kept >= PROGRESS_LOG_MAX_BYTES {
+        if self.capped || self.kept + line.len() > PROGRESS_LOG_MAX_BYTES {
+            // Latch, so a later short line cannot slip in after a long one was
+            // declined and leave the log out of order.
+            self.capped = true;
             return;
         }
-        let room = PROGRESS_LOG_MAX_BYTES - self.kept;
-        let chunk = &line[..room.min(line.len())];
-        if file.write_all(chunk).is_ok() {
-            self.kept += chunk.len();
+        if file.write_all(line).is_ok() {
+            self.kept += line.len();
             let _ = file.flush();
         }
     }
@@ -423,18 +440,17 @@ pub fn read_progress(path: &Path) -> Result<Option<ProgressView>> {
     };
     let mut frames = Vec::new();
     let mut torn_tail = false;
-    let ends_complete = bytes.last() == Some(&b'\n');
     let text = String::from_utf8_lossy(&bytes);
-    let lines: Vec<&str> = text.split('\n').collect();
-    for (index, line) in lines.iter().enumerate() {
+    for line in text.split('\n') {
         if line.is_empty() {
             continue;
         }
-        let is_last_content =
-            index + 1 == lines.len() || (index + 2 == lines.len() && ends_complete);
+        // Any unparseable line is a torn one. The position guard this replaced
+        // distinguished a trailing tear from a mid-file one and then did the
+        // same thing in both arms, which is a distinction the caller cannot
+        // observe and could not fail.
         match serde_json::from_str::<ProgressFrame>(line) {
             Ok(frame) => frames.push(frame),
-            Err(_) if is_last_content && !ends_complete => torn_tail = true,
             Err(_) => torn_tail = true,
         }
     }
@@ -444,15 +460,4 @@ pub fn read_progress(path: &Path) -> Result<Option<ProgressView>> {
         closed,
         torn_tail,
     }))
-}
-
-/// Bytes each of an attempt's two logs holds right now.
-///
-/// A missing log reports 0, which is why a caller that needs to tell "not
-/// streaming" from "nothing yet" must check existence rather than length —
-/// [`crate::dispatch::DispatchProgress`] documents which fact is which.
-#[must_use]
-pub fn progress_lengths(paths: &ProgressPaths) -> (u64, u64) {
-    let len = |path: &Path| std::fs::metadata(path).map_or(0, |meta| meta.len());
-    (len(&paths.stdout_log), len(&paths.stderr_log))
 }

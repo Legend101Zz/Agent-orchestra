@@ -256,10 +256,14 @@ pub enum DispatchFailureKind {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DispatchProgress {
     /// 1-based ordinal of the attempt these paths belong to.
+    ///
+    /// Every earlier attempt's files are still on disk under its own ordinal;
+    /// nothing is ever replaced. A reader wanting attempt N's bytes derives
+    /// them with [`progress_paths`] rather than needing a count here — a
+    /// separate `attempts` field was carried briefly and removed, because the
+    /// supervisor only ever knows the ordinal it is currently on, so the two
+    /// were structurally equal and no implementation could make them differ.
     pub attempt: u32,
-    /// How many attempts have been started so far. Every earlier attempt's
-    /// files are still on disk under its own ordinal; nothing is replaced.
-    pub attempts: u32,
     /// Verbatim worker stdout for this attempt, relative to the dispatch
     /// directory.
     pub stdout_log: String,

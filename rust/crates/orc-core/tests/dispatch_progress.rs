@@ -21,9 +21,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orc_core::bench::{HarnessConfig, HarnessRegistry, create_session, write_harness_registry};
 use orc_core::dispatch::{
-    self, DispatchActor, DispatchRecord, DispatchRequest, PROGRESS_LOG_MAX_BYTES, progress_paths,
+    self, DispatchActor, DispatchRecord, DispatchRequest, PROGRESS_LOG_MAX_BYTES,
+    dispatch_with_policy, progress_paths,
 };
 use orc_core::dispatch_progress::read_progress;
+use orc_core::ratelimit::BackoffPolicy;
 use orc_core::tasks::{self, NewTask, TaskActor, assign_task, start_task};
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -917,6 +919,536 @@ fn making_progress_durable_adds_no_record_writes_and_no_board_writes() {
     assert!(
         final_record.stdout.contains("measured line"),
         "the terminal record still carries the answer, unchanged by this branch"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **A rate-limited attempt's bytes are neither deleted nor spliced onto the
+/// next attempt's** — driven through a real retry, not asserted about a helper.
+///
+/// This is the guarantee the design's answer to "what happens on a rate-limit
+/// retry" rests on, and the first version of this branch tested only that
+/// `progress_paths(.., 1)` and `progress_paths(.., 2)` differ. That tests the
+/// naming function. Hardcoding the ordinal the *supervisor* passes left the
+/// whole suite green while attempt 2's `create(..).truncate(true)` destroyed
+/// attempt 1's output — the exact outcome the design calls impossible. Found in
+/// review; this drives the real path.
+///
+/// Mutation: pass a constant `1` as the attempt ordinal in
+/// `invoke_with_backoff`. Attempt 1's marker vanishes from disk and this fails.
+#[test]
+fn a_rate_limited_retry_keeps_the_earlier_attempts_bytes() {
+    let _guard = lock();
+    let home = fresh_home("retry");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+
+    // Attempt 1 emits a distinctive line and exits non-zero with a rate-limit
+    // signal `ratelimit::detect` recognises; attempt 2 emits a different line
+    // and succeeds. A marker file distinguishes the two runs.
+    let marker = home.join("attempted");
+    let config = worker(
+        &home,
+        "flaky",
+        "flaky",
+        &format!(
+            "if [ -f {m} ]; then \
+               echo 'SECOND ATTEMPT OUTPUT'; exit 0; \
+             else \
+               touch {m}; echo 'FIRST ATTEMPT OUTPUT'; \
+               echo 'HTTP 429 Too Many Requests' 1>&2; exit 1; \
+             fi",
+            m = marker.display()
+        ),
+    );
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("flaky".to_owned(), config);
+    registry.default_workers = vec!["flaky".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["flaky".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "retry".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "flaky".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+
+    // The millisecond-scale schedule, so the backoff is deterministic and the
+    // test does not sit through production's 2 s minimum.
+    let record = dispatch_with_policy(
+        &DispatchRequest {
+            session: session.clone(),
+            task: task.id.clone(),
+            actor: DispatchActor::Brain,
+            harness: "flaky".to_owned(),
+            pane_id: None,
+            run: Some("W-1".to_owned()),
+            prompt: "retry me".to_owned(),
+            timeout_sec: Some(60),
+        },
+        &BackoffPolicy::fast(),
+    )
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    assert_eq!(
+        record.execution_status.as_deref(),
+        Some("succeeded"),
+        "the second attempt must succeed, or this is testing the wrong path"
+    );
+    assert!(
+        marker.exists(),
+        "the worker must actually have run twice for this test to mean anything"
+    );
+
+    let first = progress_paths(&session, &record.id, 1);
+    let second = progress_paths(&session, &record.id, 2);
+
+    // Both attempts' artifacts exist. This is what a truncating or
+    // ordinal-blind implementation destroys.
+    let first_out = fs::read_to_string(&first.stdout_log)
+        .expect("attempt 1's log must still exist after the retry");
+    let second_out = fs::read_to_string(&second.stdout_log).expect("attempt 2's log must exist");
+
+    assert!(
+        first_out.contains("FIRST ATTEMPT OUTPUT"),
+        "the rate-limited attempt's bytes must survive its own retry; got {first_out:?}"
+    );
+    assert!(
+        second_out.contains("SECOND ATTEMPT OUTPUT"),
+        "attempt 2's own output must be there; got {second_out:?}"
+    );
+    assert!(
+        !second_out.contains("FIRST ATTEMPT OUTPUT"),
+        "attempt 1's bytes must not be spliced into attempt 2's log; got {second_out:?}"
+    );
+    assert!(
+        !first_out.contains("SECOND ATTEMPT OUTPUT"),
+        "attempt 2 must not have written into attempt 1's log; got {first_out:?}"
+    );
+
+    // The record points at the newest attempt, and says which one it is.
+    let progress = record.progress.as_ref().expect("progress pointer");
+    assert_eq!(
+        progress.attempt, 2,
+        "the record must name the attempt whose files it points at"
+    );
+    assert!(progress.stdout_log.ends_with(".a2.out.log"));
+
+    // Each attempt's journal is its own: own `open`, own `close`, own sequence.
+    for (label, paths, reason) in [("attempt 1", &first, "eof"), ("attempt 2", &second, "eof")] {
+        let view = read_progress(&paths.journal)
+            .unwrap_or_else(|error| panic!("{label} journal readable: {error}"))
+            .unwrap_or_else(|| panic!("{label} journal exists"));
+        assert_eq!(
+            view.frames.first().map(|frame| frame.kind.as_str()),
+            Some("open"),
+            "{label}'s journal starts its own sequence"
+        );
+        assert!(view.closed, "{label}'s journal is closed");
+        assert_eq!(
+            view.frames.last().and_then(|frame| frame.reason.as_deref()),
+            Some(reason),
+            "{label} closes with its own reason"
+        );
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The record's declared capability and cap are the ones actually in force.**
+///
+/// `extractable` and `log_max_bytes` are read by anything deciding what a log
+/// can be turned into and whether a short log is capped or quiet. Both survived
+/// being falsified in review, because nothing compared them against the code
+/// that enforces them.
+///
+/// Mutation: hardcode `extractable: true`, or write `log_max_bytes: 0`. Each
+/// fails here.
+#[test]
+fn the_record_states_the_capability_and_cap_that_are_actually_in_force() {
+    let _guard = lock();
+    let home = fresh_home("declared");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // `fake` has no extractor; the record must say so rather than leave an
+    // empty answer to be misread as "the worker said nothing".
+    let config = worker(&home, "declared", "fake", "echo hello");
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("declared".to_owned(), config);
+    registry.default_workers = vec!["declared".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["declared".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "declared".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "declared".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "declared".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "declare".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let progress = record.progress.as_ref().expect("progress");
+
+    assert_eq!(
+        progress.extractable,
+        orc_core::runner::has_extractor(&progress.adapter),
+        "the record must declare the capability the extractor actually has for \
+         the adapter it names"
+    );
+    assert!(
+        !progress.extractable,
+        "`fake` has no extractor, and the record must say so rather than hide it"
+    );
+    assert_eq!(
+        progress.log_max_bytes, PROGRESS_LOG_MAX_BYTES as u64,
+        "the record's stated cap must be the cap the log actually enforces — a \
+         reader tells `capped` from `quiet` by comparing against it"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **A progress log that cannot be opened says so on the record.**
+///
+/// `ProgressLog::create`'s doc promises "a disabled writer and one durable
+/// warning on the record". The warning was built and then dropped on the floor
+/// (`let _ = progress_warnings;`), so deleting both `ORC WARNING:` strings
+/// passed the whole suite — and a reader was left with `record.progress`
+/// naming files that do not exist and nothing explaining why. Found in review.
+///
+/// The obstruction is a **directory** planted at the path attempt 2's stdout
+/// log will take, which makes exactly that `open` fail with `EISDIR` while
+/// leaving `write_dispatch` and the journal alone. Making the whole dispatch
+/// directory read-only was the first attempt and it is the wrong instrument:
+/// it also breaks `atomic_write_json`, so the dispatch never reaches a terminal
+/// state and the test hangs on a different failure. The backoff delay is what
+/// makes the plant possible — attempt 1's `open` happens microseconds after
+/// spawn and cannot be raced.
+///
+/// Mutation: drop the `warnings.borrow_mut().extend(progress_warnings)` line.
+/// The artifacts are missing and nothing on the record says so.
+#[test]
+fn a_progress_log_that_cannot_be_opened_is_reported_on_the_record() {
+    let _guard = lock();
+    let home = fresh_home("unwritable");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    let marker = home.join("attempted");
+    let config = worker(
+        &home,
+        "obstructed",
+        "fake",
+        &format!(
+            "if [ -f {m} ]; then \
+               echo 'SECOND ATTEMPT'; exit 0; \
+             else \
+               touch {m}; echo 'FIRST ATTEMPT'; \
+               echo 'HTTP 429 Too Many Requests' 1>&2; exit 1; \
+             fi",
+            m = marker.display()
+        ),
+    );
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("obstructed".to_owned(), config);
+    registry.default_workers = vec!["obstructed".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["obstructed".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "obstructed".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "obstructed".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+
+    // A backoff long enough to plant the obstruction between the two attempts.
+    let policy = BackoffPolicy {
+        min_delay: Duration::from_millis(2_000),
+        max_delay: Duration::from_millis(2_000),
+        factor: 1.0,
+        max_retries: 1,
+        jitter: false,
+    };
+    let record = dispatch_with_policy(
+        &DispatchRequest {
+            session: session.clone(),
+            task: task.id.clone(),
+            actor: DispatchActor::Brain,
+            harness: "obstructed".to_owned(),
+            pane_id: None,
+            run: Some("W-1".to_owned()),
+            prompt: "obstruct me".to_owned(),
+            timeout_sec: Some(60),
+        },
+        &policy,
+    )
+    .expect("dispatch");
+
+    // Wait until attempt 1 has run, then obstruct attempt 2's stdout log.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "attempt 1 never ran");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let second = progress_paths(&session, &record.id, 2);
+    fs::create_dir_all(&second.stdout_log).expect("plant the obstruction");
+
+    let record = await_terminal(&session, &record.id);
+    assert!(
+        marker.exists(),
+        "the worker must really have retried for this to mean anything"
+    );
+    assert!(
+        second.stdout_log.is_dir(),
+        "the obstruction must still be the thing that blocked the open"
+    );
+
+    assert!(
+        record
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("ORC WARNING") && warning.contains("progress") }),
+        "a progress artifact that could not be opened must leave a durable \
+         warning on the record, or the record names files that do not exist \
+         and nothing explains why; warnings were {:?}",
+        record.warnings
+    );
+    // The dispatch itself is unharmed: losing a progress log never fails a
+    // delivery.
+    assert_eq!(record.execution_status.as_deref(), Some("succeeded"));
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **The log never ends mid-line, and never fabricates a byte.**
+///
+/// The first implementation clipped a line at the cap. That ends the log on a
+/// byte boundary — a truncated JSON object no reader can parse, or a split
+/// UTF-8 code point — and makes the log's last line something the worker never
+/// emitted, which is the one claim the byte log exists to make. Found in
+/// review, with a 262144-byte log ending mid-word.
+///
+/// Mutation: restore the clip (`&line[..room.min(line.len())]`). The final-byte
+/// assertion fails.
+#[test]
+fn the_log_never_ends_mid_line() {
+    let _guard = lock();
+    let home = fresh_home("wholeline");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // Long lines that do not divide the cap evenly, so a clipping
+    // implementation is guaranteed to land mid-line.
+    let config = worker(
+        &home,
+        "longlines",
+        "fake",
+        "i=0\nwhile [ $i -lt 4000 ]; do \
+         echo \"$i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; \
+         i=$((i+1)); done",
+    );
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("longlines".to_owned(), config);
+    registry.default_workers = vec!["longlines".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["longlines".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "wholeline".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "longlines".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "longlines".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "long lines".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let paths = progress_paths(&session, &record.id, 1);
+    let bytes = fs::read(&paths.stdout_log).expect("log");
+
+    assert!(
+        bytes.len() <= PROGRESS_LOG_MAX_BYTES,
+        "still bounded: {} bytes",
+        bytes.len()
+    );
+    assert!(
+        bytes.len() > PROGRESS_LOG_MAX_BYTES - 200,
+        "this worker far exceeds the cap, so the log should be near it; got {}",
+        bytes.len()
+    );
+    assert_eq!(
+        bytes.last(),
+        Some(&b'\n'),
+        "the log must end on a line terminator — a clipped last line is bytes \
+         the worker never wrote as a line, and for a JSON transport it is an \
+         object nothing can parse"
+    );
+    // Nothing fabricated: every line in the log is one the worker emitted.
+    let text = String::from_utf8(bytes).expect("the log is never cut mid-code-point");
+    for line in text.lines() {
+        assert!(
+            line.ends_with('a') && line.contains('-'),
+            "every line must be verbatim worker output; found {line:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// **`lines` counts complete lines, not reads.**
+///
+/// `read_until` returns the unterminated remainder at EOF too, so counting per
+/// read reports `alpha\nbeta` as two lines when only one is complete. That
+/// matters precisely because a block-buffered worker sitting mid-line is the
+/// case the journal must not overstate. Found in review.
+///
+/// Mutation: count unconditionally in `Captured::push`. This reports 2.
+#[test]
+fn an_unterminated_final_chunk_is_not_counted_as_a_line() {
+    let _guard = lock();
+    let home = fresh_home("halfline");
+    fs::create_dir_all(&home).expect("home");
+    // SAFETY: serialized through `lock()`.
+    unsafe { std::env::set_var("ORC_HOME", &home) };
+    // `printf` with no trailing newline: one complete line, then a fragment.
+    let config = worker(&home, "halfline", "fake", "printf 'alpha\\nbeta'");
+    let mut registry = HarnessRegistry::default();
+    registry.harnesses.insert("halfline".to_owned(), config);
+    registry.default_workers = vec!["halfline".to_owned()];
+    write_harness_registry(&registry).expect("registry");
+    let cwd = home.join("cwd");
+    fs::create_dir_all(&cwd).expect("cwd");
+    let session = create_session("codex", &["halfline".to_owned()], &cwd)
+        .expect("session")
+        .id;
+    let task = tasks::add_task(
+        &session,
+        TaskActor::Brain,
+        NewTask {
+            title: "halfline".to_owned(),
+            ..NewTask::default()
+        },
+    )
+    .expect("task");
+    assign_task(
+        &session,
+        &task.id,
+        "halfline".to_owned(),
+        Some("W-1".to_owned()),
+        TaskActor::Brain,
+    )
+    .expect("assign");
+    start_task(&session, &task.id, TaskActor::Brain).expect("start");
+    let record = dispatch::dispatch(&DispatchRequest {
+        session: session.clone(),
+        task: task.id.clone(),
+        actor: DispatchActor::Brain,
+        harness: "halfline".to_owned(),
+        pane_id: None,
+        run: Some("W-1".to_owned()),
+        prompt: "half a line".to_owned(),
+        timeout_sec: Some(60),
+    })
+    .expect("dispatch");
+    let record = await_terminal(&session, &record.id);
+    let paths = progress_paths(&session, &record.id, 1);
+    let view = read_progress(&paths.journal)
+        .expect("journal readable")
+        .expect("journal exists");
+    let close = view
+        .frames
+        .iter()
+        .find(|frame| frame.kind == "close")
+        .expect("a close frame");
+    let stdout = close.stdout.expect("close carries stdout counters");
+
+    assert_eq!(
+        stdout.bytes, 10,
+        "all ten bytes of `alpha\\nbeta` were read"
+    );
+    assert_eq!(
+        stdout.lines, 1,
+        "only `alpha\\n` is a complete line; the trailing `beta` has no \
+         terminator and must not be counted, or a worker stalled mid-line \
+         reads as having produced one more line than it has"
     );
     let _ = fs::remove_dir_all(&home);
 }

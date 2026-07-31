@@ -86,6 +86,13 @@ cargo build --release --locked
 - One issue = one branch (`issue-<N>-<slug>`) = one merge. Stay inside the
   issue's allowed paths; if the contract is wrong, stop and comment on the
   issue — do not improvise.
+- **An issue's allowed-path list is a scope fence for *code*. It never gags the
+  process files.** `progress.md`, `LOG.md`, `task_plan.md` and `findings.md`
+  live at the repo root and are always in scope, because this file and
+  `docs/WORKFLOW.md` require updating them on every issue — the first two
+  unconditionally, `task_plan.md` as item 2 of the reading list, `findings.md`
+  as the home for durable decisions. Write an issue's allowed paths as if those
+  four were listed, and do not make a session choose between two rules.
 - Commits: imperative, prefixed `feat:` / `fix:` / `docs:` / `test:` /
   `refactor:`, body explains why. Never commit directly to `main`.
 - TUI state must degrade honestly: never claim a capability that wasn't
