@@ -311,3 +311,297 @@ set difference, both fix it without touching the daemon and both survive a
 sliding window. A daemon-side total-length field would be cleaner still, but
 it is not what makes the fix possible. Deferred to its own issue on scope,
 not on impossibility.
+
+## 2026-07-31 — The daemon field beat the client-side anchor, and it is a choice not a necessity (#51 defect 1)
+
+The eight-entry cliff was fixable on either side of the wire, and the record
+should say which one was chosen and why rather than implying only one existed.
+
+`orcd::task_board` sends a task's newest `TASK_HISTORY_WINDOW` history entries;
+`orc-app`'s `StageState::seen_history` stored `history.len()` and `skip`ped that
+many. That arithmetic is only right while the whole history fits in the window.
+Past it the summary stops growing, the watermark saturates at the window's
+width, `skip` consumes all of it, and **no further event for that task ever
+animates again** — silently, with no error and no fallback. #50 brought a
+contracted-and-reviewed lifecycle to nine entries, so the `moved → done` that
+should fly the final confirmation home is exactly the one that fell off.
+
+**Two real fixes existed. We took the daemon-side one.**
+
+- **Client-side anchor** (`orc-app` only, inside #49's own allowed paths):
+  remember the *identity* of the last entry raised and locate it in the current
+  window. #49's review corrected the deferral note to say so, and that
+  correction was right — the claim that the fix "needs `orc-daemon`" was false.
+- **Daemon-side total** (what shipped): `TaskSummary` gains `history_total`, and
+  the watermark becomes an absolute index with the window's offset computed as
+  `history_total - history.len()`.
+
+**Why the total wins, on merit rather than on availability.** It is exact rather
+than inferential. It survives any window size, so widening or narrowing the
+window is a rendering decision again instead of a correctness one. And the
+anchor's identity is not reliably unique: `registry::now_iso()` is
+second-granularity, so two entries written inside the same second can agree on
+`(at, actor, action, to)` — which is the whole tuple `TaskHistorySummary`
+carries. A retry that re-assigns and re-confirms inside one second is exactly
+the case, and the anchor would then either replay or skip.
+
+**Two things fell out of the choice and both are load-bearing:**
+
+- `history_total` is `#[serde(default)]`, so a summary from a build without it
+  parses as `0`. Taken at face value that resets every watermark to the start of
+  a window the client has already seen — and the board is on a `notify` watcher,
+  so that is a replay storm on every board read: a *worse* failure than the
+  cliff it replaced. The one consumer therefore reads
+  `history_total.max(history.len())`, which degrades an absent field to exactly
+  the pre-#51 behaviour. `a_summary_with_no_total_degrades_to_the_old_behaviour_and_never_replays`.
+- The window is now a named constant, `orc_proto::TASK_HISTORY_WINDOW`, whose
+  doc lists what depends on it. It is still 8: nothing about the defect argued
+  for a different number, and the client no longer cares what it is.
+
+**`PROTOCOL_VERSION` does not move**, deliberately, and by the rule its own doc
+states — the version is reserved for a change that alters the meaning of an
+existing message. An added field nobody reads cannot; `history` still means what
+it meant. Same precedent as `SetTheme` (2026-07-29 above): the handshake that
+actually protects mixed builds is `BUILD_IDENTIFIER`, and it refuses them
+outright. Both directions of additivity are now proven in-tree rather than
+asserted — `the_new_task_summary_fields_are_additive_in_both_directions` parses
+a pre-#51 record with the current struct *and* a current record with a locally
+declared pre-#51 struct. Nothing in this workspace uses
+`#[serde(deny_unknown_fields)]`, which is what makes the second direction work.
+
+## 2026-07-31 — Reconciliation writes the board from wherever it notices it, because the "unbounded set of readers" is three enumerable processes that already write it (#51 defect 2)
+
+`dispatch::reconcile_record` marks a dispatch `orphaned` when its detached
+supervisor is gone and told the board nothing, so a SIGKILLed, OOM-killed or
+rebooted supervisor left the board's last word at `delivery_confirmed` and the
+task read as running for ever. Since #49 gave completion a vocabulary, the
+*absence* of a completion event means "still working", so the silence became an
+active lie rather than a gap.
+
+**Decision: option (i)'s locus, hardened.** The append happens inside
+`reconcile_record`, behind its existing three guards, after
+`release_dispatch_slots` and before `write_dispatch`, best-effort with the
+refusal recorded on `record.warnings`, deduplicated inside the board lock.
+Options (ii) "give reconciliation an owner" and (iii) "sweep on attach" are
+rejected on measurement, not on preference.
+
+**The fork's premise was factually wrong, and that is what decided it.** The
+issue lists the callers as "the CLI, the MCP server, the daemon, a TUI refresh".
+Measured: `orc-app` and `orc-tui` contain **zero** occurrences of
+`list_dispatches`, `read_dispatch`, `drain_queued` or `reconcile`, tests
+included. A TUI refresh asks for `ClientRequest::TaskBoard`, which the daemon
+serves from `list_tasks` + `diff_task` with no dispatch listing at all.
+`ClientRequest::DispatchBoard` has **no production sender** — the only hits
+outside the proto definitions are the daemon's own handler and two tests. The
+real caller set is three process classes — `pio`, `pio-mcp`, and the detached
+`pio _dispatch_exec` supervisor — and **all three already write the task board.**
+
+**`list_dispatches` was already a writer before #51 touched it.** On its
+mutating branch `reconcile_record` already SIGTERMs a worker's whole process
+group, takes a slot lock per harness directory, fsyncs a dispatch record and
+unlinks a spec file. The question was never "may a reader write" — that was
+settled by #30. It is "which file". #51 adds a fourth durable write behind the
+same guards.
+
+**Option (ii) fails acceptance check 4 outright, because the owner does not
+exist.** `orc-mcp` depends on `orc-core` alone: no `orc-proto`, no socket, no
+daemon. Every `pio orch delegate|status|await|review|finish` and every MCP tool
+calls `orc_core::orch::*` in-process. "Only the daemon reconciles" therefore
+means the event never fires for the headless CLI or MCP operator, who is the
+primary user of the dispatch subsystem. And its second half — readers *report*
+orphaned state without persisting — cannot be built without regressing a tested
+guarantee: `terminate_pid` and `release_dispatch_slots` sit in the same branch
+behind the same guards, so deferring them to a daemon that may never run leaks a
+live worker and both quota slots, which
+`orc-cli/tests/background_dispatch.rs` already asserts against. Pure (ii) trades
+a silent board for a leaked worker and a wedged concurrency cap.
+
+**Option (iii) loses on the same axis and is self-defeating.** `attach_stage`
+asks for `TaskBoard`, which is `list_tasks` — not `list_dispatches` — so (iii)
+is *new dispatch-subsystem code in the one crate that has never touched it*. It
+makes durability conditional on a human attaching a TUI. And
+`seed_task_events` is documented as "the *only* thing that may treat history as
+old news" and sets every watermark at attach, so an orphan event written during
+attach is precisely the one guaranteed never to animate. The human would be
+present for a silent screen.
+
+**The append must be best-effort, and here that is forced rather than
+stylistic.** `list_dispatches` swallows a failing reconcile
+(`.filter_map(|record| reconcile_record(record).ok())`), so a propagated
+`TaskError::Busy` would make the record **vanish** from `pio dispatch list`,
+`pio dispatch show`, `orch status`, `orch review`, `orch finish` and
+`drain_queued`. A silent board would become an invisible dispatch — the same
+hazard #50's `append_execution` refuses, with a wider blast radius, so it takes
+the same remedy.
+
+**The product owner's scope note, made precise.** "Option (i) is the same hazard
+with a wider blast radius" is half right: what is wider is the *call graph* —
+three binaries instead of one. What is **not** wider is the write set. Those
+binaries already write the board, and the append fires at most once per record
+because the record latches: once `execution_status` is `orphaned`,
+`is_running()` is false, so all 600 iterations of `orch::await_delegation`'s
+500 ms poll short-circuit on one string compare. Total board-write budget added
+across the whole system: **one append per orphaned dispatch.**
+
+**Which processes may now write to the board, plainly.** `pio` (already writes
+on every `task` and `orch` verb; newly on `dispatch list/show/drain`,
+`orch status/await/review/finish`), `pio-mcp` (already via
+`orch_delegate/review/finish/cancel`; newly via `orch_status`/`orch_await`), and
+the detached `pio _dispatch_exec` supervisor (already via `record_delivery` and
+`append_execution`; newly for a *sibling* dispatch through the `drain_queued` at
+the tail of `execute`). **`orc-app`, `orc-tui` and `orc-pty` may not, before or
+after** — no process gains a capability it did not already have on this exact
+line. The only genuinely new resource any of them touches is `.board.lock`.
+
+**Acceptance check 5 holds by construction, not by test result.** `lock_board`
+contains no blocking syscall: `create_new(true)` spun at most
+`LOCK_ATTEMPTS × LOCK_WAIT` (100 × 5 ms) and then `TaskError::Busy`. A hang is
+unreachable; the worst outcome of contention from any number of processes is a
+~500 ms refusal. No lock-order inversion is introduced —
+`release_dispatch_slots` scopes its slot lock to its own loop body and returns
+holding nothing, so the board append never runs while holding `.slots.lock`, and
+nothing in the workspace takes them the other way round. No re-entrancy:
+`lock_board` is private to `tasks.rs` and `tasks.rs` never calls `dispatch::`.
+No torn read: `atomic_write_json` is temp + `sync_all` + rename, and the temp
+has no `.json` extension so `task_files` never lists it.
+
+**The deduplication is load-bearing, not belt-and-braces.** Two concurrent
+listers both read the record before either writes it back, and the window
+between those points contains a SIGTERM, up to 100 × 5 ms of slot locking, a
+board lock and an fsync. Both pass the guards and both would append. The check
+therefore sits *inside* the board lock and is keyed on the **dispatch id**, held
+in `TaskHistory.extra["dispatch"]` — structured rather than parsed back out of
+`detail`, so rewording a human-readable string cannot silently turn the
+guarantee off. Keyed on the word alone it would silence the second orphaning of
+a re-dispatched task, which is the same defect one retry later.
+
+**Two words, not one, and this is a deliberate deviation from the acceptance
+check's wording.** AC6 says "the new word", singular; we write
+`execution_orphaned` **and** `review_execution_orphaned`. The codebase's own
+rule demands it — `record_review_execution`'s doc says collapsing the reviewer
+and executor vocabularies "would make a reviewer's verdict indistinguishable
+from the executor's answer" — and in this branch it is stronger than style: with
+defect 3's lanes, a single word would put an orphaned *reviewer* back on the
+executor's wire, reintroducing defect 3 for exactly the case defect 2 exists to
+report.
+
+**A known limit, stated rather than footnoted: a refused append is permanently
+silent.** Once `execution_status` flips to `orphaned` the guards never admit the
+record again, so there is no retry. The miss is loud on the dispatch record
+(`ORC WARNING`, printed by `pio dispatch list` and `pio dispatch show`) and
+absent from the board and from STAGE. The obvious retry — re-enter when
+`orphaned && !board_told` — is worse: it fires on every `list_dispatches`, and
+`orch::await_delegation` calls that up to 600 times at 500 ms intervals against
+a possibly-contended lock. The recorder is idempotent, so a repair verb can be
+added later without redesign; this branch does not add one (`orc-cli` is outside
+its allowed paths).
+
+**PID reuse is unchanged but its consequence grows.** `pid_alive` reads `EPERM`
+as alive. A recycled supervisor pid means no orphan event is ever written; a
+wrongly-dead read means an orphan event *and* a SIGTERM to a live worker's
+process group. This design does not make that mistake likelier — the guards are
+untouched — but it upgrades the consequence from "a wrong dispatch record" to
+"a wrong durable board event and a wrong STAGE animation".
+
+## 2026-07-31 — When one fix changes two lines, mutate them separately (#51 review)
+
+#51's defect 1 changes two lines in `note_task_events`: the watermark assignment
+(`history.len()` → an absolute total) and the `skip` offset (`skip(seen)` →
+`skip(seen - first_visible)`). The mutation round reverted them **together**, the
+test died, and that was recorded as the guarantee being held.
+
+It was not. Review isolated the assignment — leaving the offset correct — and the
+test still passed. The reason is worth keeping: below the window a length
+watermark and an absolute one are *the same number*, and on the first crossing
+they still agree on what to raise. They diverge only from the **second** crossing
+on, where a saturated length lags the sliding window and re-raises entries it has
+already shown. The original fixture read 1…8 and then once at 9, so it never got
+there — and a real reviewed lifecycle is eleven entries, so the regression was
+live for every reviewed task: the mirror of the original defect, a silent
+double-animation instead of a silent stall.
+
+**A combined revert only proves the pair is load-bearing, not that each line is.**
+Where a fix touches more than one line, each one needs its own mutation.
+
+Two smaller things fell out of fixing it, both worth having:
+
+- **The behavioural assertion was still not enough.** With only the assignment
+  reverted, the entries the watermark re-raises on this lifecycle happen to be
+  `moved → review` and `report_persisted` — both silent — so the packet count
+  stayed right while the watermark was wrong. The test now asserts
+  `seen_history` directly, which is what the acceptance check names anyway. A
+  behavioural-only assertion can be blind to a real defect purely because of
+  what happens to sit in the affected range.
+- **The fixture is now pinned to the real API rather than hand-written.** The
+  daemon test drives a genuinely isolated, genuinely reviewed task and asserts
+  the eleven action words in order, plus `len() >= TASK_HISTORY_WINDOW + 2` with
+  the reason stated. If the real lifecycle ever shortens, that fails and the
+  client fixture is told to follow instead of silently going soft.
+
+## 2026-07-31 — "the board has been told" does not mean "the record is terminal", and a test of mine raced exactly that (#51)
+
+#50 orders `append_execution` **before** `write_dispatch` so that *"the dispatch
+is terminal" implies "the board has been told"*. That is a one-way implication
+and the converse is false: between the two writes there is a real window where
+the board already says `execution_succeeded` and the dispatch record is not yet
+terminal.
+
+`orch::review` gates on the **record** — terminal, `execution_status ==
+"succeeded"`, exit code 0. #51's AC7 test polled the **board** for
+`execution_succeeded` and then called `review`, which raced that window and
+failed **1 run in 10** with *"task T0001 executor has not completed
+successfully; await it before review"*. A defect in the test, not in the code
+under it — and a fairly exact demonstration of the ordering guarantee's shape.
+
+It was found by A/B rather than by inspection, and only after it had been
+mistaken for something else: the same branch had failed a *different*,
+unmodified wall-clock test in the same binary, and the tempting reading was "a
+known load-sensitive flake". Running the binary alone twelve times per tree is
+what separated them — branch 1/10 with **my** test named, `origin/main` 0/10.
+
+**The rule, for anything that waits between delegate and review: poll the
+dispatch record, not the board.** `orch::await_delegation` is the verb for it,
+it is what a real conductor calls there, and it waits on the thing `review`
+actually reads. The test now uses it and asserts `execution_status == succeeded`
+before proceeding; branch and `main` are both 0 failures in 12 on the isolated
+binary afterwards.
+
+Worth stating because it generalises past this test: the board is the *earlier*
+of the two writes, so it is the wrong thing to wait on for any precondition
+expressed in terms of the dispatch record. It is the right thing to wait on for
+anything about animation, which is what it exists for.
+
+## 2026-07-31 — Two traps found while testing #51, neither of them ours
+
+**`.board.lock` has no stale reclaim, and a supervisor killed while holding it
+wedges the whole session's board.** `tasks::lock_board` is a bare
+`create_new` lockfile: it writes no holder pid, has no TTL, and `BoardLock::drop`
+never runs for a SIGKILLed process. Every `record_*` and every `pio task` verb in
+that session then fails `Busy` for ever, until a human deletes the file.
+`spawn_guard::lock_slots` already solved exactly this for `.slots.lock` — it
+records the pid and reclaims a dead holder's lock, "so a SIGKILL mid-hold never
+wedges this harness's cap forever". The board lock never got the same treatment.
+
+The case is self-referential and it is #51's own scenario: a supervisor
+SIGKILLed inside `append_execution` or `record_delivery` — i.e. while holding
+`.board.lock` — wedges the board, and then the orphan event for *that death*
+cannot land either. **Found, not fixed.** It is a pre-existing defect in the
+core locking primitive of the whole task board, it affects every writer, and it
+deserves its own change with its own test rather than a rider on a branch about
+three other things. The fix is ~30 lines already reviewed once: port
+`lock_slots`' pid record and `reclaim_if_stale` to `lock_board`, with a test
+that plants a lock naming a reaped pid and asserts the next acquire steals it.
+Reported on #51.
+
+**A mutation check against `orc-core`'s supervisor path is meaningless unless
+`target/debug/pio` is rebuilt first.** `dispatch_supervisor::execute` runs in a
+*separate process*, launched from the `pio` binary that
+`dispatch_supervisor::pio_executable` finds — for a test, `target/debug/pio`
+beside `deps/`. `cargo test -p orc-app --test task_vocabulary` rebuilds
+`orc-core` and the test target but **not** `pio`, so a mutation to
+`record_review_delivery` was still running the *unmutated* supervisor: the test
+passed and briefly looked like one of #50's tests-that-cannot-fail. It is not —
+`cargo build -p orc-cli --bin pio` first and the mutation is caught immediately.
+The full `cargo test --workspace` gate builds everything, so the gate was never
+wrong; only a narrowed mutation run is. Anything mutating `orc-core` and
+asserting through a real dispatch must rebuild `pio` in the same step.

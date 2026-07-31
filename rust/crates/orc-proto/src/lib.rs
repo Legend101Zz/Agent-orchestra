@@ -184,6 +184,25 @@ pub struct HarnessSummary {
     pub dispatch_verified: bool,
 }
 
+/// How many of a task's newest history entries [`TaskSummary`] carries.
+///
+/// The board keeps a task's whole history; a summary is a card, and SCORE's
+/// detail panel shows the tail of it. Everything downstream of this number:
+///
+/// - **SCORE's history panel** shows at most this many lines for one task.
+/// - **STAGE's message animation** turns *newly appended* history into packets
+///   in flight, and it can only see what crosses this wire. It tracks its place
+///   with an absolute index into the task's whole history and locates the
+///   window with [`TaskSummary::history_total`], so widening or narrowing this
+///   number changes how much scrollback SCORE gets and nothing else. It was not
+///   always so: while the client's watermark was a *length*, a task with this
+///   many entries stopped animating for good (issue #51 defect 1), which is why
+///   the number is named and why this list exists.
+///
+/// Widening it costs one `TaskHistorySummary` per entry per task per board
+/// read, on every snapshot, for up to 256 tasks.
+pub const TASK_HISTORY_WINDOW: usize = 8;
+
 /// Lightweight durable task card rendered by SCORE.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskSummary {
@@ -197,6 +216,19 @@ pub struct TaskSummary {
     pub assignee: Option<String>,
     /// Linked pane or run when known.
     pub assignee_run: Option<String>,
+    /// Pane or run the task's *reviewer* was dispatched to, when known.
+    ///
+    /// Separate from [`Self::assignee_run`] because a reviewed task has two
+    /// workers on it and they are usually different panes: the executor did
+    /// the work, and an independent reviewer judged it. Aiming a reviewer's
+    /// traffic at the executor is issue #51 defect 3.
+    ///
+    /// Additive: `None` on a summary written before the field existed, and
+    /// also on every task that has not been reviewed — which is the same thing
+    /// a client should do with it either way, namely fall back to saying the
+    /// review happened off-stage rather than pointing it at the executor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_run: Option<String>,
     /// Whether this task owns an isolated worktree.
     pub isolated: bool,
     /// Plain isolation state or reason.
@@ -209,6 +241,22 @@ pub struct TaskSummary {
     pub diff: Option<String>,
     /// Last actor-attributed task event.
     pub history: Vec<TaskHistorySummary>,
+    /// How many entries the task's durable history holds in total.
+    ///
+    /// [`Self::history`] carries only the newest [`TASK_HISTORY_WINDOW`] of
+    /// them, so this is what tells a client *where in the task's life* that
+    /// window sits: the first entry it can see has absolute index
+    /// `history_total - history.len()`. A client tracking what it has already
+    /// reacted to needs an absolute index, because a length into a saturated
+    /// window stops moving (issue #51 defect 1).
+    ///
+    /// Additive: a summary written before this field existed parses with `0`,
+    /// which is why the one consumer takes `history_total.max(history.len())`
+    /// rather than trusting it outright — an absent field then degrades to the
+    /// window's own length, the old behaviour, instead of reading as "this
+    /// task has no history" and replaying the window on every board read.
+    #[serde(default)]
+    pub history_total: usize,
 }
 
 /// One actor-attributed history line for SCORE detail.
@@ -564,9 +612,11 @@ pub enum ServerResponse {
 
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
+
     use super::{
         BUILD_IDENTIFIER, ClientRequest, PROTOCOL_VERSION, PaneSnapshot, ServerResponse,
-        TerminalCell,
+        TaskHistorySummary, TaskSummary, TerminalCell,
     };
 
     #[test]
@@ -598,6 +648,112 @@ mod tests {
         let encoded = serde_json::to_vec(&current).expect("encode welcome");
         let decoded: ServerResponse = serde_json::from_slice(&encoded).expect("decode welcome");
         assert_eq!(decoded, current);
+    }
+
+    /// The two new `TaskSummary` fields are additive in **both** directions,
+    /// and the protocol version does not move for them.
+    ///
+    /// Issue #51 adds `history_total` (defect 1) and `reviewer_run` (defect 3).
+    /// Every other additive test in this repo proves one direction — a current
+    /// struct parsing an older JSON literal — which says nothing about what an
+    /// *older binary* does with a record this build writes. Both directions are
+    /// pinned here, the forward one against a locally-declared struct with the
+    /// field set this crate had before #51.
+    ///
+    /// `PROTOCOL_VERSION` stays at 1 deliberately, on the rule its own doc
+    /// states: the version is reserved for a change that alters the meaning of
+    /// an existing message. A field nobody reads cannot; `history` still means
+    /// what it meant, and `assignee_run` still means the executor's pane. The
+    /// handshake that actually protects mixed builds is `BUILD_IDENTIFIER`
+    /// (`findings.md`, 2026-07-29), and it refuses them outright.
+    #[test]
+    fn the_new_task_summary_fields_are_additive_in_both_directions() {
+        assert_eq!(
+            PROTOCOL_VERSION, 1,
+            "an additive field must not move the protocol version"
+        );
+
+        let current = TaskSummary {
+            id: "T0001".to_owned(),
+            title: "a brief".to_owned(),
+            status: "done".to_owned(),
+            assignee: Some("hermes".to_owned()),
+            assignee_run: Some("bench-worker-1".to_owned()),
+            reviewer_run: Some("bench-worker-2".to_owned()),
+            isolated: true,
+            isolation: Some("ready".to_owned()),
+            blocked: false,
+            tokens: None,
+            diff: None,
+            history: vec![TaskHistorySummary {
+                at: "2026-07-31T09:00:00Z".to_owned(),
+                actor: "brain".to_owned(),
+                action: "moved".to_owned(),
+                to: Some("done".to_owned()),
+            }],
+            history_total: 9,
+        };
+
+        // 1. A NEW reader parses an OLD record: neither field is present, and
+        //    the defaults are the ones the client is written to survive —
+        //    `history_total: 0`, which `orc-app` reads as "the window is all
+        //    there is", and `reviewer_run: None`, which it reads as off-stage.
+        let old_record = r#"{
+            "id":"T0001","title":"a brief","status":"done",
+            "assignee":"hermes","assignee_run":"bench-worker-1",
+            "isolated":true,"isolation":"ready","blocked":false,
+            "tokens":null,"diff":null,
+            "history":[{"at":"2026-07-31T09:00:00Z","actor":"brain",
+                        "action":"moved","to":"done"}]
+        }"#;
+        let parsed: TaskSummary =
+            serde_json::from_str(old_record).expect("a pre-#51 summary must still parse");
+        assert_eq!(parsed.history_total, 0);
+        assert_eq!(parsed.reviewer_run, None);
+        assert_eq!(parsed.history.len(), 1);
+
+        // 2. An OLD reader parses a NEW record. `TaskSummaryBefore51` is this
+        //    struct exactly as it stood at `origin/main` — no `history_total`,
+        //    no `reviewer_run`, and no `deny_unknown_fields` anywhere in this
+        //    crate, which is what makes the two extra keys inert rather than
+        //    fatal.
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct TaskSummaryBefore51 {
+            id: String,
+            title: String,
+            status: String,
+            assignee: Option<String>,
+            assignee_run: Option<String>,
+            isolated: bool,
+            isolation: Option<String>,
+            blocked: bool,
+            tokens: Option<String>,
+            diff: Option<String>,
+            history: Vec<TaskHistorySummary>,
+        }
+
+        let encoded = serde_json::to_string(&current).expect("encode a #51 summary");
+        assert!(
+            encoded.contains("\"history_total\":9") && encoded.contains("\"reviewer_run\""),
+            "the record under test must actually carry both fields: {encoded}"
+        );
+        let old_reader: TaskSummaryBefore51 =
+            serde_json::from_str(&encoded).expect("a pre-#51 reader must still parse a #51 record");
+        assert_eq!(old_reader.assignee_run.as_deref(), Some("bench-worker-1"));
+        assert_eq!(old_reader.history.len(), 1);
+
+        // 3. And a task nobody reviewed does not carry an empty reviewer key
+        //    at all, matching every other optional field on this struct.
+        let unreviewed = TaskSummary {
+            reviewer_run: None,
+            ..current.clone()
+        };
+        let encoded = serde_json::to_string(&unreviewed).expect("encode unreviewed");
+        assert!(
+            !encoded.contains("reviewer_run"),
+            "an absent reviewer is absent from the wire: {encoded}"
+        );
     }
 
     #[test]

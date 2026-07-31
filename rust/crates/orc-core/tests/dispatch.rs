@@ -625,3 +625,313 @@ fn contracted_dispatch_refuses_to_fall_back_to_the_main_session_cwd() {
     );
     let _ = fs::remove_dir_all(home);
 }
+
+// --- Issue #51 defect 2: a killed supervisor tells the board -----------------
+
+/// A worker that outlives its own supervisor, so the supervisor can be killed
+/// while the dispatch is genuinely still `running`.
+fn slow_worker(home: &Path) {
+    let script = home.join("bin").join("fake-worker.sh");
+    fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("write slow worker");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod slow worker");
+}
+
+/// SIGKILL — uncatchable, so nothing cooperative runs in that process
+/// afterwards. This is the OOM-kill and the reboot, not a polite shutdown.
+fn sigkill(pid: u32) {
+    let status = Command::new("/bin/kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .expect("run kill");
+    assert!(status.success(), "kill -9 {pid} failed");
+}
+
+/// Dispatch through the real `pio` binary rather than in-process.
+///
+/// The supervisor must be a *grandchild*: `dispatch_supervisor::launch` spawns
+/// it from whatever process calls `dispatch`, and a SIGKILLed child of a
+/// still-running parent is a zombie, which `pid_alive`'s `kill(pid, 0)` reads
+/// as alive — correctly, since the process entry does still exist. In
+/// production the dispatching `pio` exits immediately and the supervisor is
+/// reparented and reaped, so killing it really does make it disappear. Going
+/// through the binary reproduces that instead of fighting it.
+fn pio_dispatch(home: &Path, session: &str, task: &str, run: &str) -> DispatchRecord {
+    let output = Command::new(pio_binary())
+        .args([
+            "dispatch",
+            "send",
+            task,
+            "fake-worker",
+            "sleep for a while",
+            "--session",
+            session,
+            "--run",
+            run,
+            "--timeout",
+            "60",
+            "--json",
+        ])
+        .env("ORC_HOME", home)
+        .env("HOME", home.join("empty-home"))
+        .output()
+        .expect("run pio dispatch send");
+    assert!(
+        output.status.success(),
+        "pio dispatch send failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("pio emitted a dispatch record")
+}
+
+fn wait_for_death(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("run kill -0")
+        .success()
+    {
+        assert!(Instant::now() < deadline, "pid {pid} never died");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_killed_supervisor_leaves_a_durable_board_event_of_its_own() {
+    // Issue #51 defect 2, acceptance check 4. `reconcile_record` marked the
+    // dispatch `orphaned` and appended nothing to the board, so the board's
+    // last word stayed `delivery_confirmed` — "the worker took the brief and
+    // started" — and the task read as running for ever. #50 made that
+    // conspicuous rather than causing it: once a completion vocabulary exists,
+    // the *absence* of a completion event means something.
+    //
+    // The supervisor here is a real detached process and it is really
+    // SIGKILLed. Reconciliation is then performed by an ordinary reader, which
+    // is the whole design question this settles.
+    let _guard = lock();
+    let home = fresh_home("orphan-board");
+    let (_cwd, _registry) = setup_session_with_harness(&home, "orphan-board");
+    slow_worker(&home);
+    let cwd = home.join("cwd-orphan");
+    fs::create_dir_all(&cwd).expect("create session cwd");
+    let session_id = create_session("codex", &["fake-worker".to_owned()], &cwd)
+        .expect("create orphan session")
+        .id;
+    let task = running_task(&home, &session_id, "orphan me");
+
+    let record = pio_dispatch(&home, &session_id, &task.id, "W-orphan");
+    assert_eq!(record.status, DeliveryStatus::Confirmed.as_str());
+    let supervisor = record.supervisor_pid.expect("a detached supervisor");
+
+    // `mark_started` writes the dispatch record before it appends
+    // `delivery_confirmed`, so `pio dispatch send` can return between the two.
+    // Killing inside that window would test a supervisor that died before it
+    // delivered, which is a different thing.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !orc_core::tasks::read_task(&session_id, &task.id)
+        .expect("read the board")
+        .history
+        .iter()
+        .any(|entry| entry.action == "delivery_confirmed")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "delivery never reached the board"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    sigkill(supervisor);
+    wait_for_death(supervisor);
+
+    // An ordinary reader notices. This is the only thing that happens between
+    // the kill and the assertions.
+    let listed = dispatch::list_dispatches(&session_id).expect("list dispatches");
+    let reconciled = listed
+        .iter()
+        .find(|candidate| candidate.id == record.id)
+        .expect("the record survives the listing");
+    assert_eq!(
+        reconciled.execution_status.as_deref(),
+        Some("orphaned"),
+        "the dispatch record already said this before #51"
+    );
+    assert_eq!(reconciled.failure_kind.as_deref(), Some("supervisor_lost"));
+    assert!(
+        reconciled.warnings.is_empty(),
+        "the board took the event: {:?}",
+        reconciled.warnings
+    );
+
+    // Read the board *after* the reconciling call returned. Reconciliation
+    // happens inside the listing, so a `Task` snapshot taken before it — the
+    // shape `orch::status` returns — predates its own append.
+    let board = orc_core::tasks::read_task(&session_id, &task.id).expect("read the board");
+    let words = board
+        .history
+        .iter()
+        .map(|entry| entry.action.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        words.last(),
+        Some(&"execution_orphaned"),
+        "the board's last word must be the orphaning, not `delivery_confirmed`: {words:?}"
+    );
+    // Distinguishable from "still running": there is a completion event at all.
+    assert!(
+        words.contains(&"delivery_confirmed"),
+        "the brief really was delivered first: {words:?}"
+    );
+    // Distinguishable from "the worker failed": a different word, and neither
+    // of the two words that mean the worker itself reached a verdict.
+    assert!(
+        !words.contains(&"execution_failed") && !words.contains(&"execution_succeeded"),
+        "an orphaned dispatch is not a failed one and not a successful one: {words:?}"
+    );
+    assert!(
+        board
+            .history
+            .last()
+            .and_then(|entry| entry.detail.as_deref())
+            .is_some_and(|detail| detail.contains(&record.id) && detail.contains("supervisor")),
+        "and it names the dispatch it is about: {:?}",
+        board.history.last()
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn concurrent_listers_write_one_orphan_event_and_never_wedge_the_board() {
+    // Issue #51 acceptance check 5. Reconciliation now writes the task board,
+    // and it runs in any process that lists dispatches — so two of them racing
+    // must neither corrupt the board nor deadlock, and must not double-animate
+    // by appending the same event twice.
+    //
+    // Four real `pio` processes, not threads: the board lock is a lock *file*,
+    // so processes are the honest unit even though the mechanism makes threads
+    // equivalent. The deterministic half of the guarantee — that the dedupe
+    // key is the dispatch and not the word — is pinned separately below,
+    // because a spawned race is corroboration and not proof: nothing forces
+    // the four to overlap.
+    let _guard = lock();
+    let home = fresh_home("orphan-race");
+    let (_cwd, _registry) = setup_session_with_harness(&home, "orphan-race");
+    slow_worker(&home);
+    let cwd = home.join("cwd-race");
+    fs::create_dir_all(&cwd).expect("create session cwd");
+    let session_id = create_session("codex", &["fake-worker".to_owned()], &cwd)
+        .expect("create race session")
+        .id;
+
+    let mut tasks = Vec::new();
+    for index in 0..2 {
+        let task = running_task(&home, &session_id, &format!("race me {index}"));
+        let record = pio_dispatch(&home, &session_id, &task.id, &format!("W-race-{index}"));
+        let supervisor = record.supervisor_pid.expect("a detached supervisor");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !orc_core::tasks::read_task(&session_id, &task.id)
+            .expect("read the board")
+            .history
+            .iter()
+            .any(|entry| entry.action == "delivery_confirmed")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "delivery never reached the board"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        sigkill(supervisor);
+        wait_for_death(supervisor);
+        tasks.push((task.id, record.id));
+    }
+
+    let pio = pio_binary();
+    let started = Instant::now();
+    let children = (0..4)
+        .map(|_| {
+            Command::new(&pio)
+                .args(["dispatch", "list", "--session", &session_id, "--json"])
+                .env("ORC_HOME", &home)
+                .env("HOME", home.join("empty-home"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn pio dispatch list")
+        })
+        .collect::<Vec<_>>();
+    for child in children {
+        let output = child.wait_with_output().expect("wait for pio");
+        assert!(
+            output.status.success(),
+            "pio dispatch list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("pio emitted JSON");
+        // Nothing was silently dropped: `list_dispatches` swallows a failing
+        // reconcile with `.ok()`, so a propagated board error would make a
+        // record vanish from every listing rather than merely go unannounced.
+        assert_eq!(
+            records.as_array().map(Vec::len),
+            Some(2),
+            "both records survive every listing: {records}"
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "four concurrent listers must not wedge: took {:?}",
+        started.elapsed()
+    );
+
+    for (task_id, dispatch_id) in &tasks {
+        let board = orc_core::tasks::read_task(&session_id, task_id).expect("read the board");
+        let orphans = board
+            .history
+            .iter()
+            .filter(|entry| entry.action == "execution_orphaned")
+            .count();
+        assert_eq!(
+            orphans,
+            1,
+            "exactly one orphan event for dispatch {dispatch_id}, however many \
+             processes noticed: {:?}",
+            board
+                .history
+                .iter()
+                .map(|entry| entry.action.clone())
+                .collect::<Vec<_>>()
+        );
+        // And the board is still parseable as a whole — a torn write would
+        // take the task out of `list_tasks` entirely.
+        assert!(
+            orc_core::tasks::list_tasks(&session_id)
+                .expect("list tasks")
+                .iter()
+                .any(|task| task.id == *task_id),
+            "no torn task file"
+        );
+    }
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// The `pio` binary this test run built, found the same way the production
+/// supervisor launcher finds it: a sibling of `target/<profile>/deps`.
+fn pio_binary() -> PathBuf {
+    let current = std::env::current_exe().expect("current exe");
+    let candidate = current
+        .parent()
+        .and_then(Path::parent)
+        .map(|dir| dir.join("pio"))
+        .expect("target dir");
+    assert!(
+        candidate.is_file(),
+        "pio must be built for this test (it is, under `cargo test --workspace`): {}",
+        candidate.display()
+    );
+    candidate
+}
