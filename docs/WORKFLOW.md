@@ -74,9 +74,30 @@ Hard rules:
   it. **This note previously said the opposite** (that `pi-orchestra` was not
   this repo); that was true when written and cost a later session real time.
   Confirm with `git log --oneline -1` against `origin/main`, never by path.
-- Nothing above is load-bearing for an agent session: the remote is the source
-  of truth, so `git clone` somewhere convenient and `git fetch` first. Never
-  assume a path — `git rev-parse --show-toplevel` if you need one.
+- **Worktrees live on the SSD too, in one folder:**
+  `/Volumes/Mrigesh SSD/pi-orchestra-worktrees/issue-<N>`. A reviewer or a
+  second parallel session takes one from there rather than checking the branch
+  out over the main checkout — which is also how you avoid the
+  `git diff main` trap below.
+  ```bash
+  git -C "/Volumes/Mrigesh SSD/pi-orchestra" \
+      worktree add "/Volumes/Mrigesh SSD/pi-orchestra-worktrees/issue-<N>" issue-<N>-<slug>
+  ```
+  Remove it when the issue merges (`git worktree remove <path>`) — each one
+  carries its own 2–4 GB `target/`.
+- **Nothing for this repo goes on the system disk** — no checkout, no worktree,
+  no `target/`. It has ~35 GB free against the SSD's ~645 GB. `~/Agent-orchestra`
+  is gone for exactly this reason and must not come back.
+- **If the SSD is not mounted, stop and report back.** Do not fall back to
+  `$HOME` and do not clone "somewhere convenient": an unmounted
+  `/Volumes/Mrigesh SSD` is a plain directory on the system disk, so anything
+  written there silently fills the wrong volume under a path that looks right.
+  Check `/Volumes/Mrigesh SSD/pi-orchestra/.git` exists before doing anything
+  else; if it does not, say so and wait for the human to plug the drive in.
+- The remote is still the source of truth (`git fetch` first), but "clone
+  somewhere convenient" is **not** licence to use the system disk — convenient
+  means another folder on the SSD. Never assume a path —
+  `git rev-parse --show-toplevel` if you need one.
 - **After moving the checkout, re-run `./install.sh`.** Everything the installer
   links (`~/.claude/skills/*`, the `UserPromptSubmit` hook in
   `~/.claude/pi-orchestra/`, the `~/.zshrc` block) is an absolute symlink into
