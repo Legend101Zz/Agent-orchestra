@@ -972,12 +972,33 @@ fn a_real_review_links_the_reviewers_pane_and_leaves_the_executors_alone() {
     .expect("delegate a contracted task");
     let task_id = delegated.tasks[0].id.clone();
 
-    // The reviewer may not be dispatched until the executor is terminal.
-    poll_task(&session_id, &task_id, |task| {
-        task.history
-            .iter()
-            .any(|entry| entry.action == "execution_succeeded")
-    });
+    // Wait on the executor's **dispatch record**, not on the board.
+    //
+    // `orch::review` gates on the record being terminal and `succeeded`, and
+    // `append_execution` deliberately writes the board *before* `write_dispatch`
+    // (#50, so that "the dispatch is terminal" implies "the board has been
+    // told"). That ordering means the converse does not hold: there is a real
+    // window where the board already says `execution_succeeded` and the record
+    // is not terminal yet. Polling the board for it and then calling `review`
+    // raced that window and failed 1 run in 10 with "executor has not completed
+    // successfully" — a defect in this test, not in the code under it, and a
+    // neat demonstration of the ordering guarantee's exact shape.
+    //
+    // `orch::await_delegation` is what a real conductor calls here, and it
+    // waits on the thing `review` actually reads.
+    let awaited = orc_core::orch::await_delegation(orc_core::orch::AwaitRequest {
+        session: session_id.clone(),
+        task: task_id.clone(),
+        timeout_sec: Some(30),
+        poll_interval_ms: Some(20),
+    })
+    .expect("await the executor");
+    assert_eq!(
+        awaited.dispatches[0].execution_status.as_deref(),
+        Some("succeeded"),
+        "the executor must really have finished before a review is dispatched: {:?}",
+        awaited.dispatches[0]
+    );
 
     let reviewed = orc_core::orch::review(orc_core::orch::TaskRef {
         session: session_id.clone(),

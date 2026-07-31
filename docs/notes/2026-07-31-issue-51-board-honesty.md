@@ -24,36 +24,92 @@ Everything below was run, not reasoned about.
 ### 1. A task past the window still animates its next event
 
 `orc-app/src/lib.rs::tests::a_task_past_the_history_window_still_animates_its_next_event`
-drives the full contracted-and-reviewed lifecycle — nine entries — through
-`note_task_events`, reading the board after every append and serving each read
-through the daemon's own `.rev().take(TASK_HISTORY_WINDOW).rev()` shape. It
-asserts *past* the window rather than at it, because a probe that stops at the
-boundary passes against the broken code.
+walks the full contracted-and-reviewed lifecycle — **eleven** entries — through
+`note_task_events` one board read at a time, serving each read through the
+daemon's own `.rev().take(TASK_HISTORY_WINDOW).rev()` shape, and asserting at
+*every* read that exactly the entries appended since the last one animate.
 
-It fails on `origin/main`'s behaviour, which is what it is for:
+**Corrected after review (FIX 1).** The first version read 1…8 and then once at
+9, and that is not enough. The two changed lines in `note_task_events` — the
+watermark assignment and the `skip` offset — are independent, and reverting
+**only** the assignment left the first version green. Below the window a length
+watermark and an absolute one are the same number, and on the *first* crossing
+they still agree on what to raise; they diverge from the **second** crossing on,
+where a saturated length lags the sliding window and re-raises entries it has
+already shown. The original mutation run reverted both lines together, which is
+caught — isolating the assignment is what exposed it. A real reviewed lifecycle
+is eleven entries, so the regression AC1 exists to catch was live for every
+reviewed task: the mirror of the original defect, a silent double-animation
+instead of a silent stall.
 
-```
-thread 'tests::a_task_past_the_history_window_still_animates_its_next_event' panicked at
-  crates/orc-app/src/lib.rs:7237:9:
-assertion `left == right` failed: the reviewed task's `moved -> done` must still raise a
-packet at entry 9 of a 8-entry window; a watermark that is a length into the window pins
-itself at the window and raises nothing ever again
-  left: 0
- right: 1
-```
+Three things changed to close it, and the third is the one that actually bites:
+
+1. The fixture is the **real** eleven-entry lifecycle, pinned action-by-action
+   against the live API by the daemon test below, so it crosses the window twice.
+2. Both panes are seated, so the four `review_*` entries raise packets instead of
+   correctly going to the off-stage legend — otherwise the per-read arithmetic
+   would be measuring defect 3, not the watermark.
+3. **The watermark itself is asserted**, and it has to be. The behavioural
+   arithmetic alone is still insufficient on this lifecycle, measured rather than
+   assumed: with only the assignment reverted, the entries the watermark re-raises
+   happen to be `moved → review` and `report_persisted`, which animate nothing, so
+   the packet count stays right while the watermark is wrong. The next durable
+   event a real task appended would break that silence and double-animate.
+   Asserting `seen_history` directly is what makes the revert fail here rather
+   than in front of a user — and it is what the acceptance check names.
 
 The issue's acceptance wording is *"fails if the watermark goes back to being a
-length"*. Mutation 1 in the table below is exactly that revert, and the test
-dies on it.
+length"*. That revert is mutations 1a and 1b below — together and in isolation —
+and the test now dies on both at the same place, the second crossing:
+
+```
+=== 1a: both lines reverted ===
+thread 'tests::a_task_past_the_history_window_still_animates_its_next_event' panicked at
+  crates/orc-app/src/lib.rs:7492:13:
+assertion `left == right` failed: board read 9: the watermark must be an absolute index
+into the task's whole history. A length into the window saturates at 8 and then lags the
+sliding window for ever
+  left: Some(8)
+ right: Some(9)
+
+=== 1b: watermark assignment only, skip arithmetic left correct ===
+thread 'tests::a_task_past_the_history_window_still_animates_its_next_event' panicked at
+  crates/orc-app/src/lib.rs:7493:13:
+assertion `left == right` failed: board read 9: the watermark must be an absolute index
+into the task's whole history. A length into the window saturates at 8 and then lags the
+sliding window for ever
+  left: Some(8)
+ right: Some(9)
+```
+
+The original defect — the silent stall — is caught by the same walk from the
+other direction: mutation 1c drops the window offset from `skip` while leaving
+the watermark absolute, and the packet count goes to zero.
+
+The first version of this test reported `left: 0, right: 1` against `origin/main`
+and was correct about the stall. It was the *replay* it could not see.
 
 The daemon's half is pinned separately by
 `orc-daemon/src/lib.rs::tests::a_task_board_card_carries_the_whole_historys_length_not_the_windows`,
-which drives a real reviewed lifecycle through `orc_core::tasks` and asserts on
-the summary `ClientRequest::TaskBoard` really returns: `history.len() ==
-TASK_HISTORY_WINDOW`, `history_total == 9`, and the window's first entry is the
-one at absolute index `history_total - history.len()`. Nine is measured from the
-real API rather than asserted, and the test refuses to be meaningful if a
-lifecycle ever stops outrunning the window.
+which drives a real reviewed lifecycle through `orc_core::tasks` — in a real git
+repo, so a contracted task really isolates and really writes `isolated` — and
+asserts on the summary `ClientRequest::TaskBoard` really returns: `history.len()
+== TASK_HISTORY_WINDOW`, `history_total` equal to the whole history, and the
+window's first entry at absolute index `history_total - history.len()`.
+
+It now also pins the lifecycle **action by action**:
+
+```
+created, isolated, assigned, moved→running, delivery_confirmed,
+execution_succeeded, review_delivery_confirmed, review_execution_succeeded,
+moved→review, report_persisted, moved→done
+```
+
+Eleven, measured from the live API rather than asserted, and the test requires
+`>= TASK_HISTORY_WINDOW + 2` — i.e. two crossings — with the reason stated: the
+client's fixture cannot catch a watermark that is a length without them. If the
+real lifecycle ever shortens, this fails and the client fixture is told to
+follow rather than silently going soft.
 
 ### 2. Additive in both directions, and the protocol version does not move
 
@@ -253,6 +309,16 @@ it that was not `assignee_run`, which is what
 `record_review_delivery`'s original "without replacing the executor's run
 linkage" was protecting.
 
+**One defect in this test, found by A/B after review and fixed (see
+`findings.md`).** It first polled the *board* for `execution_succeeded` and then
+called `review` — and `review` gates on the dispatch *record*. `append_execution`
+writes the board **before** `write_dispatch`, so "the dispatch is terminal"
+implies "the board has been told" but not the converse: there is a real window
+where the board is ahead. The test raced it, 1 run in 10. It now waits with
+`orch::await_delegation`, which is what a real conductor calls there and what
+waits on the thing `review` actually reads. Branch and `origin/main` are both
+0 failures in 12 on the isolated binary afterwards.
+
 The aiming half is unit-tested next to the code that does it, because
 `note_task_events` is private:
 `a_reviewers_answer_crosses_the_reviewers_wire_and_not_the_executors` puts an
@@ -281,7 +347,9 @@ Fifteen deliberate mutations, fifteen caught.
 
 | Mutation | Caught by |
 |---|---|
-| 1. the watermark goes back to being a length | `a_task_past_the_history_window_still_animates_its_next_event` |
+| 1a. **both** changed lines reverted together | `a_task_past_the_history_window_still_animates_its_next_event` |
+| 1b. **only** the watermark assignment reverted, `skip` left correct | same — *survived the first round; found in review, see FIX 1* |
+| 1c. **only** the `skip` offset dropped, watermark left absolute | same |
 | 2. the daemon reports the window's length as the total | `a_task_board_card_carries_the_whole_historys_length_not_the_windows` |
 | 3. the `.max(history.len())` additive guard removed | `a_summary_with_no_total_degrades_to_the_old_behaviour_and_never_replays` |
 | 4. `history_total` loses `#[serde(default)]` | `the_new_task_summary_fields_are_additive_in_both_directions` |
@@ -297,9 +365,16 @@ Fifteen deliberate mutations, fifteen caught.
 | 14. the confirmed badge survives an orphaned worker | `a_delivery_receipt_does_not_take_the_confirmed_badge_off_when_the_worker_finishes` |
 | 15. an orphaned reviewer is called an executor | `the_orphan_event_is_written_once_per_dispatch_and_again_for_the_next_one` |
 
-**Two of these tests were added only because the first mutation round found the
-guarantee was held by nothing** — mutations 3 and 14 both survived until
-`a_summary_with_no_total_degrades_…` and the orphaned-badge case were written.
+**Three of these were found by breaking things rather than by writing them.**
+Mutations 3 and 14 survived the first round — the additive `.max()` guard and the
+confirmed badge on an orphaned worker were both held by nothing — and produced
+two new tests. Mutation **1b** survived the first round *and* the first fix, and
+was found in review, not here: the original mutation reverted both changed lines
+at once, which the test caught, so the independence of the two was never probed.
+**The lesson is narrower than "mutate more" and worth stating: when one fix
+changes two lines, mutate them separately.** A combined revert only proves the
+pair is load-bearing, not that each one is.
+
 That is the same class of gap #50's review found twice, and the reason the
 mutation round runs before the gates rather than after.
 
@@ -314,6 +389,32 @@ so the gate was never wrong; only a narrowed mutation run is. Written up in
 `findings.md`.
 
 ---
+
+## Flakes
+
+Two failures appeared during the review round and **neither was dismissed as a
+known flake**; separating them took an A/B per binary.
+
+- A full-workspace run failed `a_real_dispatch_writes_delivery_then_completion_and_the_gap_is_the_worker`
+  — a #50 test this branch does not modify — by 13 ms against its 1.5 s budget.
+  In isolation it ran 6/6 clean.
+- Running the `task_vocabulary` binary alone twelve times per tree is what
+  actually resolved it: `origin/main` 0/10, this branch 1/10, and the named
+  failure was **this branch's own AC7 test**, not the #50 one. That was a real
+  defect of mine — polling the board for a precondition expressed on the
+  dispatch record — and fixing it took both failures with it.
+
+After the fix, on the same machine:
+
+| experiment | branch | `origin/main` |
+|---|---|---|
+| `task_vocabulary` binary alone | 0 failures / 12 | 0 failures / 12 |
+| interleaved full workspace | 0 failures / 4 (348 passed) | 0 failures / 4 (337 passed) |
+
+The lesson worth keeping: **a load-sensitive failure in a test you did not touch
+is not evidence that the cause is not yours.** The first reading here — "the
+documented wall-clock flake family" — was wrong, and only the per-binary A/B
+showed it.
 
 ## What this branch does NOT do
 

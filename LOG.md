@@ -35,7 +35,7 @@ ship-log entries are part of finishing an issue.*
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
-| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 🔨 | pushed `issue-51-board-honesty` (PR #53) · all three fixed · 5 gates green, 348 passed 0 failed · review **FIX (2)**: AC1's watermark test passes against a length watermark, and a doc comment landed on the wrong test |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 👀 | pushed `issue-51-board-honesty` (PR #53) · all three fixed · review **FIX (2)** — **both fixed on the branch**, AC1 now dies under all three isolated reverts · 5 gates green, 348 passed 0 failed · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -569,6 +569,36 @@ crosses the window once and the two spellings only diverge on the second
 crossing (an 11-entry reviewed task then replays two events) — plus a doc
 comment landed on the wrong test in `orc-daemon`.
 [Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/51#issuecomment-5141156553)
+
+**Both fixed on the branch (Claude, implementer).** The review was right and the
+finding was mine. AC1's test crossed the window once, and the two lines the fix
+changes are independent — reverting only the watermark left it green, because a
+length and an absolute index are the same number below the window and still
+agree on the first crossing. They diverge from the second, where the length lags
+the sliding window and replays entries already shown: the mirror of the original
+defect, live for every reviewed task, since a real reviewed lifecycle is eleven
+entries. My mutation reverted both lines at once, which is caught; isolating them
+is what exposed it. The fixture is now the real eleven-entry lifecycle — pinned
+action-by-action against the live API by a daemon test that drives a genuinely
+isolated, genuinely reviewed task — with both panes seated, and it asserts the
+watermark directly. That last part is load-bearing rather than belt-and-braces:
+with only the assignment reverted, the entries the watermark replays happen to be
+silent ones, so the packet count stays right while the watermark is wrong. All
+three isolated reverts now fail. The doc comment is back on its own function.
+**The durable lesson is in `findings.md`: when one fix changes two lines, mutate
+them separately** — a combined revert only proves the pair is load-bearing.
+
+Fixing those two turned up a third, also mine. A full-workspace run failed a #50
+timing test this branch does not touch, which looked exactly like the repo's
+documented load-sensitive flake — so I A/B'd instead of saying so. Running that
+one test binary twelve times per tree gave `main` a clean sheet and this branch
+one failure, and the test it named was **my own**: it waited for the task board
+to say the worker had answered, then asked to start a review — and a review is
+allowed to start based on the *delivery record*, which is written a moment
+*after* the board. There is a real gap between those two writes and the test sat
+in it about one run in ten. It now waits on the same thing the review does. Both
+trees are clean afterwards. Worth remembering: **a timing failure in a test you
+did not touch is not proof the cause isn't yours.**
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
