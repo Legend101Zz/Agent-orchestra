@@ -34,7 +34,9 @@ ship-log entries are part of finishing an issue.*
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | STAGE as a live circuit: connect the brain to *n* workers, smooth mouse-resize, show messages moving | ✅ | merged (PR #42) · review FIX fixed in `d755714` before merge |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | Leftovers from the new look: honour NO_COLOR for the rainbow, make the no-hex test look in subfolders | ✅ | merged (PR #47) · review FIX (2) fixed in `768fadc` before merge |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (phase 1 of 3) | 🧪 | `issue-49-watchable-delegation` · review FIX (4) all fixed in `1989e2b` |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
+| [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | 🔨 **next** | — |
+| [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
@@ -421,7 +423,12 @@ status), push the branch, and stop — no code.
 
 ```bash
 export GH_TOKEN=<paste fresh token>
-git clone https://github.com/Legend101Zz/Agent-orchestra.git puppy-issue-<N> && cd puppy-issue-<N>
+# On the SSD, never the system disk — see AGENTS.md. Stop if it isn't mounted.
+[ -d "/Volumes/Mrigesh SSD/pi-orchestra/.git" ] || { echo "SSD not mounted — stop"; }
+git -C "/Volumes/Mrigesh SSD/pi-orchestra" fetch origin
+git -C "/Volumes/Mrigesh SSD/pi-orchestra" worktree add \
+    "/Volumes/Mrigesh SSD/pi-orchestra-worktrees/issue-<N>" -b issue-<N>-<slug> origin/main
+cd "/Volumes/Mrigesh SSD/pi-orchestra-worktrees/issue-<N>"
 code-puppy -i
 ```
 then inside code-puppy:
@@ -585,6 +592,21 @@ Evidence, including the two claims I had to walk back:
 > consecutive full-workspace runs: **337 passed, zero orc-app failures.** The
 > two `orc-cli` quota flakes that remain are pre-existing and reproduce on
 > `origin/main`. Five gates green on a forced re-lint. **Ready to merge.**
+>
+> **Merged 2026-07-31 (PR #50 as `32c5058`) — 🧪→✅, no findings outstanding.**
+> The first branch in this program to merge with its whole review discharged on
+> the branch rather than carried as debt. What is *not* discharged is what #49
+> never claimed: **phases 2 and 3 stay open on #49**, and the three defects the
+> branch found but could not fix are now [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51).
+>
+> ⚠️ **One of those three is live on `main` from this merge.** #51's defect 1 —
+> the daemon truncates a task's history to the last eight entries while the
+> animation watermark counts *into* that window — means a task past eight
+> events stops animating permanently. #50 adds the ninth event to a full
+> contracted lifecycle, so the `moved→done` that should fly the final
+> confirmation home is exactly the one that now falls off the cliff. Plain
+> delegations (7 events) are unaffected; contracted + reviewed ones are not.
+> **#51 before #49 phase 2.**
 
 ### 2026-07-30 — The rainbow now respects a colourless terminal, and the no-hex test looks everywhere, issue #39 (code-puppy)
 Two leftovers from the new look, both about the code meaning what it says. First:

@@ -2163,3 +2163,47 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
   paths. Deferred on scope, not impossibility.
 - **Next:** review, then phase 2 (incremental progress persistence) once
   Decision 1 has an answer.
+
+## Session — 2026-07-31 (Claude, reviewer): #49 phase 1 reviewed, fixed and merged; #52 docs
+
+- **Reviewed #49 phase 1 (PR #50) — FIX (4), all four fixed on the branch at
+  Mrigesh's direction, then merged as `32c5058`.** Gates re-verified on a
+  *forced* re-lint rather than the warm `target/` the branch arrived with;
+  paths, dependencies and dead code clean.
+- **Mutation battery: 15 broken guarantees, 13 caught** (the branch claimed
+  11/11; the extension held except where noted). The two survivors were the
+  same defect — acceptance check 4's wake path was held by nothing: deleting
+  `spawn_board_watch` from `run_initial`, *or* gutting the `BoardChanged` arm,
+  left the whole suite green with defect 4 fully restored. The AC4 tests drove
+  `spawn_change_watch` with a hand-passed path and event, so they kept passing
+  while nothing called it. Fixed by a named `FileWatch` table `run_initial`
+  spawns from plus a `reads_board(&UiEvent)` predicate consulted once before
+  the match; both mutations now die.
+- **A fourth finding, and the one that mattered: `cargo test --workspace`
+  failed 3 runs in 6 on the branch as pushed.** The "335, 0 failed" claim — and
+  the reviewer's own first three clean runs — were undersampled. Two *new*
+  `orc-app` flakes, both racing the time-animated ambient rail:
+  `the_packet_is_one_cell_and_draws_no_trail` diffed one control render against
+  twelve later ones while the `▓▒░` ramp swept between them (caught counting 6
+  changed cells instead of 1), and the message goldens shared one 180 ms anchor
+  across three renders. The second is a **cost of the smoothness fix**, not a
+  pre-existing flake: cell six holds for `[180, 210)`, and the pre-#49 cadence
+  absorbed the drift because the packet only moved every 60 ms — halving the
+  quantum halved the tolerance. A/B on the same machine: `origin/main` 0/6 for
+  `orc-app`, branch 3/6, branch+fix **0/8**. Fixed by decaying the rail before
+  the diff and taking the golden anchor per case.
+- **Two durable claims corrected rather than left standing:** the 8-entry
+  deferral said the fix "needs `orc-daemon`" — it does not, the watermark is
+  `orc-app`'s own `seen_history`; and `visual-identity.md` still led with the
+  "no hold of its own" departure-beat claim the branch had walked back
+  everywhere else.
+- **#52 merged (`e1b8e0a`), docs only:** every checkout, worktree and `target/`
+  now belongs on the external SSD, worktrees in
+  `pi-orchestra-worktrees/issue-<N>`. The rule that matters is the mount check
+  — an unmounted `/Volumes/Mrigesh SSD` is an ordinary directory on the system
+  disk, so "clone somewhere convenient" silently fills the wrong volume under a
+  path that looks correct. Prompted by this session creating a 2.4 GB worktree
+  under `/Users/comreton`, which Mrigesh had to delete for space.
+- **Next: #51 before #49 phase 2.** Its defect 1 is live on `main` as of #50 —
+  see the order paragraph in `task_plan.md`. Note #51's own "prefer a path on
+  the internal disk" note now contradicts `AGENTS.md`; flagged on the issue.
