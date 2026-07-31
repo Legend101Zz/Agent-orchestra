@@ -36,7 +36,7 @@ ship-log entries are part of finishing an issue.*
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | When you `delegate:` inside the TUI it must use the workers already on screen — and you must see it happen | ✅ | merged (PR #48) · review FIX (2) merged **unfixed** — see follow-up below |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phases 2–3 still open on #49 |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
-| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 👀 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | 🔨 | PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56) · `issue-49-phase2-incremental-output` · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)**: 5 gates green, 360 passed 0 failed ×3, but **6 of 11 review mutations survived** — the per-attempt retry guarantee is held by nothing, the progress-open warnings are discarded, and three durable record fields are unasserted · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -657,6 +657,15 @@ at the wrong moment (**#54**), and a worker's saved output is not actually
 capped for one of the four harnesses — measured at 25 times over the documented
 limit, with nothing saying it had been truncated (**#55**). Both filed with
 reproductions.
+
+**Review verdict: 🔨 FIX (5)** — 5 gates green, 360 passed 0 failed ×3, zero
+flakes; but 6 of my 11 mutations survived. The retry guarantee the branch
+headlines is held by nothing: `let ordinal = 1;` destroys a rate-limited
+attempt's bytes and the whole `orc-core` suite still passes. Also: the
+progress-open warnings are built and then discarded (`let _ =
+progress_warnings;`), two of the log's own documented properties are false, and
+three durable record fields are unheld.
+[Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5146190816)
 
 ### 2026-07-31 — The board now knows when a worker actually answers, issue #49 phase 1 (Claude)
 
