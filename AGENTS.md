@@ -34,6 +34,43 @@ names (`orc-core` etc.), `ORC_*` env vars, and `~/.orchestra` stay.
   integrations installed by `install.sh`.
 - Tests live next to each crate (`tests/`); fixtures under `tools/fixtures/`.
 
+## Where you are allowed to put files (checkouts, worktrees, build dirs)
+
+**Everything for this repo lives on the external SSD. Never write a checkout,
+a worktree, or a `target/` dir under `/Users/comreton` — the system disk has
+~35 GB free and one worktree with a debug + release build is 2–4 GB.**
+
+```
+/Volumes/Mrigesh SSD/pi-orchestra                  ← the checkout (main)
+/Volumes/Mrigesh SSD/pi-orchestra-worktrees/<slug> ← every worktree, one per issue
+```
+
+- Review or parallel work gets a worktree, and it goes in
+  `pi-orchestra-worktrees/` — named for its issue (`issue-49`), not `wt-*` at
+  the volume root:
+  ```bash
+  git -C "/Volumes/Mrigesh SSD/pi-orchestra" \
+      worktree add "/Volumes/Mrigesh SSD/pi-orchestra-worktrees/issue-<N>" issue-<N>-<slug>
+  ```
+- **Check the SSD is mounted before you touch anything, and stop if it is
+  not.** Do not silently fall back to `$HOME`, do not clone somewhere
+  "convenient", do not create the directory — a missing mount means the volume
+  is unplugged, and a checkout that appears at `/Volumes/Mrigesh SSD/…` with no
+  disk behind it lands on the system disk instead. Report back and wait:
+  ```bash
+  mountpoint=/Volumes/Mrigesh\ SSD
+  if [ ! -d "$mountpoint/pi-orchestra/.git" ]; then
+    echo "STOP: external SSD not mounted (no $mountpoint/pi-orchestra/.git). Ask before continuing."
+    exit 1
+  fi
+  ```
+- Note the **space in the path** — quote it everywhere. Unquoted, it fails in a
+  way that reads as "repo missing" rather than "bad quoting".
+- Delete a worktree when its issue merges: `git worktree remove <path>`. They
+  do not shrink on their own and each carries its own `target/`.
+- Scratch files, logs and one-off scripts go in the harness's own scratchpad
+  directory, never in the repo and never in `$HOME`.
+
 ## Non-negotiable gates (run from `rust/`, all must pass before pushing)
 
 ```bash
