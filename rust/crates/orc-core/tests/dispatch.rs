@@ -219,9 +219,36 @@ fn dispatch_through_a_fake_worker_is_confirmed_records_actor_and_pane_linkage() 
     assert!(record.is_confirmed());
     let linked = orc_core::tasks::read_task(&session_id, &task.id).expect("read linked task");
     assert_eq!(linked.assignee_run, record.pane_id);
+    // Two events, in order, meaning different things (issue #49). This used to
+    // assert that `delivery_confirmed` was the *last* word the board had about
+    // a finished dispatch — which was true, and was the bug: the board's final
+    // record of every delegation said "the worker process started".
+    // `await_terminal` above is what makes this deterministic rather than a
+    // race: the supervisor appends the completion event before it writes the
+    // terminal dispatch record.
+    let words = linked
+        .history
+        .iter()
+        .map(|history| history.action.as_str())
+        .collect::<Vec<_>>();
     assert_eq!(
-        linked.history.last().map(|history| history.action.as_str()),
-        Some("delivery_confirmed")
+        words
+            .iter()
+            .rev()
+            .take(2)
+            .rev()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["delivery_confirmed", "execution_succeeded"],
+        "the brief was taken, and then the worker answered: {words:?}"
+    );
+    let completion = linked.history.last().expect("completion event");
+    assert!(
+        completion
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("answered") && detail.contains("exit 0")),
+        "and the completion event says what happened: {completion:?}"
     );
     let _ = fs::remove_dir_all(home);
 }

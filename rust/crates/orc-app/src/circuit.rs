@@ -411,12 +411,22 @@ pub const fn rail_span(route: usize) -> Span {
     }
 }
 
-/// Milliseconds each in-flight frame holds. Deliberately faster than the
-/// ambient sweep's 110 ms: a dispatch should read as a snap, not as flow.
-pub const FLIGHT_FRAME_MS: u64 = 60;
-
-/// Cells the in-flight packet advances per frame.
-pub const FLIGHT_STEP: usize = 2;
+/// Milliseconds the in-flight packet takes to cross **one** cell.
+///
+/// The design sheet writes this speed as "~60 ms/frame, two cells/frame"
+/// (`docs/design/visual-identity.md`, "Message in flight"). That is the same
+/// 33⅓ cells per second this constant expresses, but read off a *frame
+/// counter*: the packet sat still for 60 ms and then jumped two cells, which
+/// is ~16 fps of visible motion however often the shell repainted, and is the
+/// whole of issue #49's "the line animation is not smooth".
+///
+/// The speed is deliberately unchanged — faster than the ambient sweep's
+/// 110 ms, so a dispatch still reads as a snap rather than as flow, and the
+/// committed goldens still catch the packet in the same cell. What changed is
+/// that [`flight`] divides the elapsed clock by this instead of multiplying a
+/// frame index, so the packet crosses one cell at a time and drawing more
+/// often genuinely samples finer.
+pub const FLIGHT_MS_PER_CELL: u64 = 30;
 
 /// How long the landing emote holds once the packet arrives.
 pub const EMOTE_HOLD: Duration = Duration::from_millis(1_200);
@@ -424,6 +434,24 @@ pub const EMOTE_HOLD: Duration = Duration::from_millis(1_200);
 /// The sheet's first beat: the row flashes reverse-video for one frame before
 /// the glyph settles.
 pub const EMOTE_FLASH: Duration = Duration::from_millis(90);
+
+/// How much of a route the *departure* beat holds for, in cells.
+///
+/// The mirror of the landing emote (issue #49, spec step 1: the brain hands
+/// off and you see it leave). Its length is `min(DEPART_CELLS, route) ×
+/// FLIGHT_MS_PER_CELL`, so it can never outlive the packet it announces: on a
+/// route shorter than this the packet lands first and the beat ends with it.
+///
+/// Be precise about what that does and does not buy, because the first version
+/// of this doc overclaimed. Every route the router actually plans in the wide
+/// layout is longer than twelve cells, so in practice the beat is a **constant
+/// 360 ms** — the wall-clock cost of crossing the sheet's own rail. It is not
+/// derived from anything the worker did, and it does not vary with the event.
+/// What "real state only" gets here is narrower and still worth having: the
+/// beat starts at a real event, it is bounded by real geometry rather than by
+/// a number picked to look right, and it cannot outlast the packet. The
+/// *duration* of a hand-off is not something STAGE claims to show.
+pub const DEPART_CELLS: usize = baton::CELLS;
 
 /// Which way a discrete message is travelling.
 ///
@@ -483,6 +511,63 @@ impl Outcome {
     }
 }
 
+/// Which beat of a message's life a pane is showing.
+///
+/// The app has one landing language (see "Signature moments" in the design
+/// sheet), so a departure is drawn with the same three beats as an arrival —
+/// one reverse-video flash frame, then a settled badge — rather than
+/// inventing a second vocabulary. What differs is the word and the glyph: a
+/// departure is named by the packet's own directional symbol, which is where
+/// the sheet already puts direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Beat {
+    /// A message is leaving this pane, travelling this way.
+    Leaving(Direction),
+    /// A message has arrived here.
+    Landed,
+}
+
+/// One pane's message beat this frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Emote {
+    /// Leaving, or landed.
+    pub beat: Beat,
+    /// What the message turned out to be. Colours both beats, so a return
+    /// that failed leaves the worker in the failure slot rather than
+    /// announcing itself in the confirmed one.
+    pub outcome: Outcome,
+    /// Still inside the sheet's single reverse-video flash frame.
+    pub flashing: bool,
+}
+
+impl Emote {
+    /// The glyph paired with the word, so colour is never load-bearing alone.
+    #[must_use]
+    pub const fn symbol(self, glyphs: Glyphs) -> &'static str {
+        match self.beat {
+            Beat::Leaving(direction) => packet(direction, glyphs),
+            Beat::Landed => glyphs.get(self.outcome.glyph()),
+        }
+    }
+
+    /// The beat's word. Departures are named in the present participle and
+    /// arrivals in the past, which is the difference a glance has to read.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self.beat {
+            Beat::Leaving(Direction::Outbound) => "HANDING OFF",
+            Beat::Leaving(Direction::Inbound) => "ANSWERING",
+            Beat::Landed => self.outcome.label(),
+        }
+    }
+
+    /// The slot that colours it — the outcome's own, never a new one.
+    #[must_use]
+    pub const fn slot(self) -> Slot {
+        self.outcome.slot()
+    }
+}
+
 /// Classify one task-history entry into the message vocabulary.
 ///
 /// Takes the action *and* the destination status, because completion is not an
@@ -495,7 +580,18 @@ impl Outcome {
 /// assumption — which is why the test that pins this now drives the real
 /// `orc-core` API (`tests/task_vocabulary.rs`).
 ///
-/// The full vocabulary `orc-core` writes is fifteen actions. Only traffic
+/// **`delivery_confirmed` is not a return.** Issue #49: it is written by
+/// `dispatch_supervisor::mark_started` from the `on_started` callback,
+/// immediately after `command.spawn()`, and its own detail string says
+/// "worker running". Classifying it `Inbound` meant the answer appeared to
+/// come back milliseconds after the brief left, for every dispatch, however
+/// long the worker actually took — the whole board's story about a delegation
+/// was over before the work began. It is now what it always was: the outbound
+/// journey *arriving*, confirmed, at the worker. The genuine return is
+/// `execution_succeeded`, appended by `persist_terminal` once the child has
+/// exited and both its pipes are drained.
+///
+/// The full vocabulary `orc-core` writes is nineteen actions. Only traffic
 /// between the conductor and a worker animates; the rest stay silent, and each
 /// silence is a decision rather than an omission:
 ///
@@ -515,14 +611,31 @@ pub fn message_for(action: &str, to: Option<&str>) -> Option<(Direction, Outcome
         // The brief being handed over. `reassigned` is the same event with a
         // different previous owner.
         ("assigned" | "reassigned", _) => Some((Direction::Outbound, Outcome::Dispatched)),
-        ("delivery_confirmed" | "review_delivery_confirmed", _) | ("moved", Some("done")) => {
+        // The same journey, landing: the worker took the brief and started.
+        // Deliberately animated as well as `assigned`, even though the two are
+        // usually microseconds apart on a first dispatch, because `assigned` is
+        // not always written. `orch::review` dispatches a reviewer without ever
+        // assigning, and `orch::delegate` skips `assign_task` for a task that
+        // is already `running` — a retry against the same worker. On both
+        // paths this is the *only* record that a brief left the conductor, so
+        // silencing it would lose the hand-off entirely. Where both do occur
+        // they read as sent-then-taken along one wire, in two colours, rather
+        // than as the two-packets-in-opposite-directions blip #49 reported.
+        ("delivery_confirmed" | "review_delivery_confirmed", _) => {
+            Some((Direction::Outbound, Outcome::Confirmed))
+        }
+        // The answer coming back. `execution_*` are the supervisor's own
+        // `ExecutionStatus` words, written at the moment the worker exited.
+        ("execution_succeeded" | "review_execution_succeeded", _) | ("moved", Some("done")) => {
             Some((Direction::Inbound, Outcome::Confirmed))
         }
         // `drop_task` and the isolation/merge failures record their own action
         // word rather than a `moved` transition — which is exactly the kind of
         // thing guessing at this table got wrong.
         (
-            "delivery_failed"
+            "execution_failed"
+            | "review_execution_failed"
+            | "delivery_failed"
             | "review_delivery_failed"
             | "dropped"
             | "merge_conflict"
@@ -549,7 +662,23 @@ pub enum Flight {
     Gone,
 }
 
+/// How long a packet takes to cross a route of `len` cells.
+///
+/// A pure function of the route, so the emote's clock starts when the packet
+/// really arrived rather than at a boundary chosen for looks: a two-cell route
+/// lands in 60 ms and a forty-cell one in 1.2 s.
+#[must_use]
+pub const fn travel_time(len: usize) -> Duration {
+    Duration::from_millis((len as u64).saturating_mul(FLIGHT_MS_PER_CELL))
+}
+
 /// Resolve a message's progress from the clock the caller owns.
+///
+/// Position is a continuous function of `since_raised` and nothing else, so
+/// the poll cadence is free: drawing twice as often samples the same travel
+/// twice as finely and cannot speed it up, slow it down, or move the packet at
+/// a given instant. That is the "no fake timers" property, and it is what
+/// makes the packet advance one cell at a time rather than in two-cell jumps.
 ///
 /// Under reduced motion there is no travel at all: the message is `Landed`
 /// from the first frame and simply holds, so the connector goes solid in its
@@ -566,12 +695,12 @@ pub fn flight(reduced_motion: bool, since_raised: Duration, len: usize) -> Fligh
             Flight::Gone
         };
     }
-    let step = (since_raised.as_millis() / u128::from(FLIGHT_FRAME_MS)) as usize * FLIGHT_STEP;
+    let step = usize::try_from(since_raised.as_millis() / u128::from(FLIGHT_MS_PER_CELL))
+        .unwrap_or(usize::MAX);
     if step < len {
         return Flight::Travelling(step);
     }
-    let travel =
-        Duration::from_millis((len.div_ceil(FLIGHT_STEP) as u64).saturating_mul(FLIGHT_FRAME_MS));
+    let travel = travel_time(len);
     if since_raised < travel.saturating_add(EMOTE_HOLD) {
         Flight::Landed {
             since: since_raised.saturating_sub(travel),
@@ -657,15 +786,125 @@ pub fn paint(state: baton::State, wire: Wire, index: usize, len: usize, glyphs: 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
     use ratatui::layout::Rect;
 
-    use super::{Circuit, Paint, Routing, Wire, paint, plan, rail_span};
+    use super::{
+        Circuit, EMOTE_HOLD, FLIGHT_MS_PER_CELL, Flight, Paint, Routing, Wire, flight, paint, plan,
+        rail_span, travel_time,
+    };
     use crate::baton;
     use crate::glyph::{GlyphTier, Glyphs};
     use crate::theme::Slot;
 
     const UNICODE: Glyphs = Glyphs::new(GlyphTier::Unicode);
     const ASCII: Glyphs = Glyphs::new(GlyphTier::Ascii);
+
+    /// Where a render loop polling every `interval_ms` would draw the packet,
+    /// as `(elapsed_ms, cell)` pairs for every frame it is still travelling.
+    ///
+    /// This is the whole of the acceptance check: two loops running at
+    /// different cadences over the same wall clock, compared against each
+    /// other rather than against a number someone chose.
+    fn sampled(interval_ms: u64, len: usize) -> Vec<(u64, usize)> {
+        (0..)
+            .map(|tick| tick * interval_ms)
+            .take_while(|elapsed| *elapsed <= travel_time(len).as_millis() as u64)
+            .filter_map(
+                |elapsed| match flight(false, Duration::from_millis(elapsed), len) {
+                    Flight::Travelling(step) => Some((elapsed, step)),
+                    Flight::Landed { .. } | Flight::Gone => None,
+                },
+            )
+            .collect()
+    }
+
+    #[test]
+    fn the_packet_crosses_one_cell_at_a_time_and_skips_none_of_them() {
+        // Issue #49 AC3: "halving the frame interval must not change where the
+        // packet is at time t".
+        //
+        // Half of that is structural and needs no test — and a test for it
+        // would be a tautology worth naming, because one was written here
+        // first. `flight` takes a `Duration` and nothing else, so its result
+        // cannot depend on a poll cadence for any implementation, including the
+        // one this issue replaced; sampling the same pure function on a 30 ms
+        // grid and a 15 ms grid and finding they agree proves only that the
+        // coarse grid is a subset of the fine one.
+        //
+        // The half that *did* fail is this one. Two cells per 60 ms frame means
+        // the packet is never drawn in an odd-numbered cell at all, however
+        // fast the loop polls — the chunkiness the issue reports is the
+        // quantisation, not the frame rate. Reverting `flight` to the shipped
+        // arithmetic fails here and nowhere else.
+        const LEN: usize = 40;
+        let fine = sampled(FLIGHT_MS_PER_CELL / 2, LEN);
+        for pair in fine.windows(2) {
+            assert!(
+                pair[1].1 <= pair[0].1 + 1,
+                "the packet jumped from cell {} to cell {} between {} ms and {} ms",
+                pair[0].1,
+                pair[1].1,
+                pair[0].0,
+                pair[1].0
+            );
+        }
+        let visited = fine.iter().map(|(_, cell)| *cell).collect::<BTreeSet<_>>();
+        assert_eq!(
+            visited,
+            (0..LEN).collect::<BTreeSet<_>>(),
+            "every cell of the route is somewhere the packet is actually drawn"
+        );
+    }
+
+    #[test]
+    fn the_sheets_travel_speed_is_unchanged() {
+        // Smoothing the cadence must not turn the sheet's "reads as a snap"
+        // into flow. The twelve-cell rail took `6 frames * 60 ms` before and
+        // takes `12 cells * 30 ms` now: the same 360 ms, which is why the
+        // committed goldens catch the packet in the same cell.
+        assert_eq!(travel_time(baton::CELLS), Duration::from_millis(360));
+        assert_eq!(
+            flight(false, Duration::from_millis(180), 40),
+            Flight::Travelling(6),
+            "the snapshot fixture's 180 ms is still six cells along"
+        );
+        // And the emote's clock starts when the packet really arrived.
+        assert_eq!(
+            flight(false, travel_time(12), 12),
+            Flight::Landed {
+                since: Duration::ZERO
+            }
+        );
+        assert_eq!(
+            flight(false, travel_time(12) + EMOTE_HOLD, 12),
+            Flight::Gone
+        );
+    }
+
+    #[test]
+    fn a_worker_that_finishes_fast_is_not_shown_a_slow_animation() {
+        // AC6, on the one boundary this module owns: no phase here has a
+        // duration chosen for looks. Travel is `len` cells of real route at a
+        // fixed speed, so a two-cell connector lands in 60 ms — the packet
+        // never stretches to fill a longer story than the wire tells.
+        assert_eq!(travel_time(2), Duration::from_millis(60));
+        assert_eq!(
+            flight(false, Duration::from_millis(60), 2),
+            Flight::Landed {
+                since: Duration::ZERO
+            },
+            "a short wire lands as soon as the packet has crossed it"
+        );
+        // The converse: nothing about elapsed time can make a packet land
+        // early on a long wire.
+        assert!(matches!(
+            flight(false, Duration::from_millis(60), 40),
+            Flight::Travelling(_)
+        ));
+    }
 
     /// The conductor and `count` workers in the wide layout `stage_areas`
     /// produces, so the routing is tested against real geometry.
