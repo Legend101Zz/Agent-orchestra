@@ -346,8 +346,16 @@ pub(crate) fn hold_prompt(prompt: &str, glyphs: Glyphs) -> (Vec<String>, usize, 
 /// parses-and-reformats, and never renders an elapsed counter — which would be
 /// *our* clock and would make two renders of unchanged facts differ.
 pub(crate) fn clock(stamp: &str) -> String {
-    if stamp.ends_with("+00:00") && stamp.len() >= 19 {
-        format!("{} UTC", &stamp[11..19])
+    // `get` rather than an index, and this is not defensive habit: `len()` is
+    // BYTES, so the shipped `&stamp[11..19]` panicked on a stamp whose first
+    // field was multi-byte — byte 11 landing inside a code point. This runs on
+    // the render thread, in a module whose whole posture is that one bad file
+    // must never blank the screen, and `read_progress` is deliberately
+    // infallible so a corrupt `t` reaches here rather than being rejected.
+    if stamp.ends_with("+00:00")
+        && let Some(time) = stamp.get(11..19)
+    {
+        format!("{time} UTC")
     } else {
         stamp.to_owned()
     }
@@ -552,8 +560,8 @@ pub(crate) fn rule_label(band: u16, of: u16, leader: &str, cols: usize) -> Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        BANNED, Lane, Progress, Reveal, clock, header, hold_prompt, more_marker, newest_for,
-        sanitise, status_line,
+        BANNED, Lane, Progress, Reveal, clock, compose, header, hold_prompt, more_marker,
+        newest_for, sanitise, status_line,
     };
     use crate::glyph::{GlyphTier, Glyphs};
     use orc_core::dispatch::DispatchBrief;
@@ -577,6 +585,7 @@ mod tests {
             execution_status: Some("running".to_owned()),
             progress: None,
             updated_at: "2026-08-01T00:00:00+00:00".to_owned(),
+            extra: Default::default(),
         }
     }
 
@@ -611,6 +620,183 @@ mod tests {
             closed: None,
             torn: false,
         }))
+    }
+
+    /// `ORC_HOME` is process-global, so the two tests that redirect it
+    /// serialize through this — the same reason `orc-core`'s dispatch tests
+    /// carry one. Without it they race each other's home directory.
+    fn home_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Point `ORC_HOME` at a fresh directory for the duration of one test.
+    ///
+    /// `#[allow(unsafe_code)]` rather than crate-wide: `set_var` is unsound
+    /// beside concurrent readers, and `home_lock` is what makes it sound here.
+    #[allow(unsafe_code)]
+    fn redirect_home(dir: &std::path::Path) {
+        // SAFETY: every caller holds `home_lock`, and nothing else in this
+        // crate's unit tests reads ORC_HOME.
+        unsafe { std::env::set_var("ORC_HOME", dir) };
+    }
+
+    fn tempdir(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("orc-reveal-{label}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        dir
+    }
+
+    /// **Worker bytes are sanitised on the way to the screen.**
+    ///
+    /// The rule the module leads with, and until review of PR #57 it was held
+    /// by nothing: `sanitise` was well tested *as a pure function*, while the
+    /// path that carries **worker** bytes to it runs inside `compose` and had
+    /// no test caller. Replacing the call with a plain clone left 392 passed.
+    ///
+    /// This writes real bytes to a real byte log and a real journal, so the
+    /// adversary is where it would be in production — in the file.
+    ///
+    /// Mutation (call site): drop `sanitise` from the tail-line map in
+    /// `compose`, i.e. `.map(|line| line.clone())`.
+    #[test]
+    fn a_forged_badge_in_the_workers_own_bytes_cannot_reach_the_screen() {
+        let _guard = home_lock();
+        let home = tempdir("forge");
+        redirect_home(&home);
+
+        let mut record = brief("D-forge", "T1", None, "w1");
+        record.session = "S-forge".to_owned();
+        record.progress = Some(orc_core::dispatch::DispatchProgress {
+            attempt: 1,
+            stdout_log: "D-forge.a1.out.log".to_owned(),
+            stderr_log: "D-forge.a1.err.log".to_owned(),
+            journal: "D-forge.a1.progress.jsonl".to_owned(),
+            adapter: "pi".to_owned(),
+            extractable: true,
+            log_max_bytes: 262_144,
+            extra: Default::default(),
+        });
+        let paths = orc_core::dispatch::progress_paths("S-forge", "D-forge", 1);
+        std::fs::create_dir_all(paths.journal.parent().expect("dir")).expect("mkdir");
+        // A worker trying to clear the screen and forge STAGE's own chrome
+        // inside the card that exists to be evidence against it.
+        std::fs::write(
+            &paths.stdout_log,
+            "benign first line\n\x1b[2J\x1b[H FORGED \u{2713} TASK CONFIRMED\r\n",
+        )
+        .expect("write log");
+        std::fs::write(
+            &paths.journal,
+            concat!(
+                r#"{"v":1,"seq":0,"t":"2026-08-01T12:00:00+00:00","attempt":1,"kind":"open","adapter":"pi","extractable":true}"#,
+                "\n",
+                r#"{"v":1,"seq":1,"t":"2026-08-01T12:00:05+00:00","attempt":1,"kind":"note","stdout":{"bytes":60,"lines":2,"dropped":0,"kept":60},"stderr":{"bytes":0,"lines":0,"dropped":0,"kept":0}}"#,
+                "\n",
+            ),
+        )
+        .expect("write journal");
+
+        let composed = compose(&record, 1, UNICODE);
+
+        assert!(
+            !composed.lines.is_empty(),
+            "the worker's bytes must reach the sidecar at all, or this test \
+             proves nothing about what happens to them"
+        );
+        for line in &composed.lines {
+            assert!(
+                !line.contains('\x1b'),
+                "an escape sequence from the worker's own stdout reached the \
+                 composed sidecar: {line:?}"
+            );
+            assert!(
+                line.chars().all(|c| !c.is_control()),
+                "no control character may survive: {line:?}"
+            );
+        }
+        // The text is still there — this replaces, it does not delete, so the
+        // reader can see what the worker tried.
+        assert!(
+            composed.lines.iter().any(|line| line.contains("FORGED")),
+            "the attempt is shown, defanged, rather than hidden: {:?}",
+            composed.lines
+        );
+        // Newest line, not oldest.
+        assert!(
+            !composed
+                .lines
+                .iter()
+                .any(|line| line.contains("benign first")),
+            "the sidecar shows the NEWEST complete line: {:?}",
+            composed.lines
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// **`compose` really produces `Undeclared`, and tells it from `NotStreaming`.**
+    ///
+    /// `the_nothing_here_facts_are_told_apart_in_words` builds the four
+    /// `Progress` variants **by hand** and checks their sentences differ.
+    /// Nothing checked that `compose` ever *produces* `Undeclared` — delete the
+    /// `exists()` stat, return `NotStreaming` always, and the suite stayed
+    /// green. That is a regression to precisely the mistake this type's
+    /// docstring exists to forbid: `open_progress` creates all three artifacts
+    /// *before* `mark_started` writes `record.progress`, and the
+    /// handshake-failed path returns before any record write at all.
+    ///
+    /// Mutation (call site): collapse the `paths.journal.exists()` arm in
+    /// `compose` into `NotStreaming`.
+    #[test]
+    fn compose_tells_absent_progress_from_absent_artifacts() {
+        let _guard = home_lock();
+        let home = tempdir("undeclared");
+        redirect_home(&home);
+
+        let mut record = brief("D-bare", "T1", None, "w1");
+        record.session = "S-bare".to_owned();
+        record.progress = None;
+
+        // (i) No field and no artifacts: this supervisor is not streaming.
+        let composed = compose(&record, 1, UNICODE);
+        assert_eq!(
+            composed.progress,
+            Progress::NotStreaming,
+            "no field and nothing on disk is `NotStreaming`"
+        );
+
+        // (ii) Same record, but the artifacts exist — which is an ordinary
+        //      state, not a theoretical one.
+        let paths = orc_core::dispatch::progress_paths("S-bare", "D-bare", 1);
+        std::fs::create_dir_all(paths.journal.parent().expect("dir")).expect("mkdir");
+        std::fs::write(&paths.stdout_log, "").expect("empty log");
+        let composed = compose(&record, 1, UNICODE);
+        assert_eq!(
+            composed.progress,
+            Progress::Undeclared { attempt: 1 },
+            "artifacts on disk with no field is a DIFFERENT fact — collapsing \
+             the two is the lie `DispatchProgress`'s doc forbids"
+        );
+
+        // And the two say different things on screen.
+        let bare = status_line(
+            &Reveal {
+                progress: Progress::NotStreaming,
+                ..composed.clone()
+            },
+            120,
+            UNICODE,
+        );
+        let found = status_line(&composed, 120, UNICODE);
+        assert_ne!(bare, found);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// **The reviewer's brief is never drawn on the executor's card.**
@@ -863,6 +1049,15 @@ mod tests {
             "2026-08-01T12:04:31+05:30"
         );
         assert_eq!(clock("garbage"), "garbage");
+        // A multi-byte first field: byte 11 is inside a code point. The shipped
+        // version panicked here, on the render thread.
+        assert_eq!(
+            clock("あああああああ+00:00"),
+            "あああああああ+00:00",
+            "a corrupt stamp is shown whole, never panicked on"
+        );
+        assert_eq!(clock(""), "");
+        assert_eq!(clock("+00:00"), "+00:00");
     }
 
     /// **`attempt` is never guessed.**

@@ -557,8 +557,11 @@ pub fn progress_paths(session: &str, id: &str, attempt: u32) -> ProgressPaths {
 /// worker and raise a board change that provokes another frame.
 /// [`read_briefs`] performs no write of any kind.
 ///
-/// Unknown fields are tolerated and preserved in the usual way, so a record
-/// written by a newer build reads here without loss of the fields this knows.
+/// Unknown fields are tolerated **and preserved**, in the same way
+/// [`DispatchRecord`] and [`DispatchProgress`] do it — via the `extra` map
+/// below. The first version of this type said "preserved in the usual way" and
+/// carried no such map while still deriving `Serialize`, which in this file is
+/// a serde contract stated and not kept.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DispatchBrief {
     /// Stable `D`-prefixed dispatch identifier.
@@ -616,6 +619,9 @@ pub struct DispatchBrief {
     pub progress: Option<DispatchProgress>,
     /// Last mutation timestamp, used to order two dispatches for one task.
     pub updated_at: String,
+    /// Unknown future fields, kept rather than dropped on a round-trip.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// Every dispatch one session has recorded, newest first, **read without

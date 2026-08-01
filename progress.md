@@ -2554,3 +2554,52 @@ body calling it "a new dependency" is stale.
 `log_max_bytes` form calls a worker that wrote 300 KB *quiet*).
 
 **Next:** review. #49 is discharged, so #14 (README + screenshots) is unblocked.
+
+## 2026-08-01 — Claude (implementer) — #49 phase 3: review FIX (6), all fixed
+
+Review of PR #57 / `110e826` ran **17 call-site mutations; 11 survived.** None
+was a wrong behaviour — the happy path and the wiring were correct. Every one was
+a guarantee the branch stated in prose and nothing held.
+
+**The seam had zero test callers.** `resolve_reveals` and `reveal::compose` — the
+only code that ever writes `state.reveals` — were never driven by anything.
+Every render test called `state.reveals.insert(..)` **by hand**. So deleting
+`stage.resolve_reveals(..)` from `absorb_board` left all 392 tests green with the
+feature completely inert: `⌃g i` refuses on every pane in every session.
+`absorb_board`'s own docstring diagnosed exactly this and nothing was built on it.
+
+Fourth consecutive occurrence of one pattern: #50 a test no implementation could
+fail, #51 one under-driving its own lifecycle, #56 one comparing two filenames
+instead of driving a retry, and this one populating by hand the map the feature
+exists to populate. The prompt named the pattern in advance and named phase 3 as
+the most exposed to it.
+
+**The fix that mattered was structural, and the reviewer found it by correcting
+themselves.** They wrote the missing test, verified it, and reported that it
+still did not kill the worst mutation — because it called `resolve_reveals`
+directly, the same one-level-short mistake. `absorb_board` hardcoded
+`read_briefs` and so could not be driven at all. Threading the reader through as
+a parameter — `read_board` passes the real one, a test passes a counting closure
+— is what lets a single `absorb_board` call kill both "the line is gone" and
+"the watermark guard is gone". The durable rule is in `findings.md`: when a
+function exists to be the seam a test grabs, what it calls must be injectable or
+the seam is decorative.
+
+**Also fixed:** the worker-bytes `sanitise` path, which had no test caller at all
+— `sanitise` was well covered *as a pure function* while replacing its call site
+inside `compose` left 392 green, so worker-controlled `\x1b` reached the composed
+sidecar. Now driven with a real forged badge written into a real byte log.
+`compose` proved to actually produce `Undeclared` rather than the variant merely
+being constructible by hand. The themed `Block` beside `Clear` held directly on a
+band cell's background. A test docstring that described a blit row-skip which is
+not in the code — and named dropping it as a required-failing mutation —
+corrected. `DispatchBrief` given the `#[serde(flatten)] extra` map it claimed to
+have while deriving `Serialize`. And `clock`'s `&stamp[11..19]`, guarded by a
+**byte** length, reproduced panicking on `あああああああ+00:00` on the render
+thread and fixed with `get`.
+
+**11/11 mutations now caught**, each re-applied to the fixed tree and observed to
+fail (142 passed / 1 failed every time), tree diffed clean after each. Five gates
+green, **395 passed / 0 failed**, `Cargo.lock` unchanged.
+
+**Next:** re-review.

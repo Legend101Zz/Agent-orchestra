@@ -2791,7 +2791,7 @@ fn read_board(commands: &mut BenchClient, shell: &mut ShellState) {
     };
     score.tasks = tasks;
     if let Some(stage) = shell.stage.as_mut() {
-        absorb_board(stage, &score.tasks);
+        absorb_board(stage, &score.tasks, orc_core::dispatch::read_briefs);
     }
 }
 
@@ -2799,12 +2799,24 @@ fn read_board(commands: &mut BenchClient, shell: &mut ShellState) {
 ///
 /// Extracted for the reason `reads_board` and `file_watches` were: wiring rots
 /// without anyone noticing, and a test needs something to hold. Deleting any
-/// one of these three lines leaves the client compiling and the suite green
-/// unless something pins the composition itself.
-fn absorb_board(stage: &mut StageState, tasks: &[TaskSummary]) {
+/// one of these four lines leaves the client compiling, so
+/// `the_board_populates_the_sidecars_once_per_watermark_move` drives *this*
+/// function rather than the methods under it.
+///
+/// **`read` is a parameter for that reason and no other.** `read_board` passes
+/// `orc_core::dispatch::read_briefs`; a test passes a counting closure. Review
+/// of PR #57 found that hardcoding it here left the sharpest mutation of the
+/// set — deleting the `resolve_reveals` line outright — surviving all 392
+/// tests, because a test could then only reach `resolve_reveals` by calling it
+/// directly, which is the same one-level-short mistake the mutation exposes.
+fn absorb_board(
+    stage: &mut StageState,
+    tasks: &[TaskSummary],
+    read: impl Fn(&str) -> Vec<orc_core::dispatch::DispatchBrief>,
+) {
     stage.confirmed_panes = confirmed_panes(tasks);
     stage.note_task_events(tasks);
-    stage.resolve_reveals(tasks, orc_core::dispatch::read_briefs);
+    stage.resolve_reveals(tasks, read);
     stage.retain_reveals();
 }
 
@@ -4844,6 +4856,7 @@ mod tests {
 
     use std::time::{Duration, Instant};
 
+    use super::absorb_board;
     use super::{
         AVATAR_FRAMES, Drag, HarnessDiscovery, HashMap, HomeData, HomeState, InFlight,
         LeaderAction, LeaderKey, MIN_PANE, NewSessionFlow, RawRouter, RepaintReasons,
@@ -5508,6 +5521,145 @@ mod tests {
     // These are the shapes the earlier bare-only fixtures failed to represent.
     const REAL_PROMPTS: [&str; 6] = ["", "\u{276f} ", "> ", "$ ", "% ", "\u{279c} "];
 
+    /// **A board read is what populates the sidecars, once per watermark move.**
+    ///
+    /// The seam PR #57 shipped without. Review found that deleting the
+    /// `resolve_reveals` line from `absorb_board` left all 392 tests green: the
+    /// map was never populated, `⌃g i` answered "has taken no brief in this
+    /// session" for every pane in every session, and nothing noticed. Every
+    /// render test put a `Reveal` into `state.reveals` **by hand**, so the only
+    /// code that ever writes that map was unheld end to end. That is the fourth
+    /// consecutive branch to assert against the component instead of the
+    /// wiring (#50, #51, #56), and it is why this drives `absorb_board` rather
+    /// than the methods under it.
+    ///
+    /// Call-site mutations that must fail it:
+    ///   1. delete `stage.resolve_reveals(..)` from `absorb_board`
+    ///   2. delete the `if !stale { return 0 }` watermark guard
+    ///   3. `Lane::Reviewer` → `Lane::Executor` for `reviewer_run`
+    ///   4. drop the `.skip(1)` that keeps the conductor out
+    ///   6. default `attempt` to `Some(1)` in `compose`
+    ///   8. drop `sanitise` from `hold_prompt`
+    ///  10. never `remove` a reveal whose brief has gone
+    #[test]
+    fn the_board_populates_the_sidecars_once_per_watermark_move() {
+        let brief = |id: &str, task: &str, pane: &str, purpose: Option<&str>, prompt: &str| {
+            orc_core::dispatch::DispatchBrief {
+                id: id.to_owned(),
+                session: "S-probe".to_owned(),
+                task: task.to_owned(),
+                prompt: prompt.to_owned(),
+                harness: "pi-m3".to_owned(),
+                cwd: Some("/tmp/wt".to_owned()),
+                pane_id: Some(pane.to_owned()),
+                run: None,
+                purpose: purpose.map(str::to_owned),
+                status: "confirmed".to_owned(),
+                execution_status: Some("running".to_owned()),
+                progress: None,
+                updated_at: "2026-08-01T00:00:00+00:00".to_owned(),
+                extra: Default::default(),
+            }
+        };
+        let briefs = vec![
+            brief("D-exec", "T1", "w1", None, "do \x1b[2J the thing"),
+            brief("D-rev", "T1", "w2", Some("review"), "review it"),
+            brief("D-brain", "T2", "c0", None, "not for the conductor"),
+        ];
+        let reads = std::cell::Cell::new(0_usize);
+        let read = &|_: &str| {
+            reads.set(reads.get() + 1);
+            briefs.clone()
+        };
+
+        let mut state = StageState::new(
+            vec![
+                conductor_pane(b"conductor\r\n"),
+                packed_worker("w1", 10, 40),
+                packed_worker("w2", 10, 40),
+            ],
+            ThemeName::Nocturne.into(),
+            GLYPHS,
+        );
+        state.panes[0].id = "c0".to_owned();
+        state.session_id = Some("S-probe".to_owned());
+
+        let mut exec = task_with("T1", "w1", &[("delivery_confirmed", None)]);
+        exec.reviewer_run = Some("w2".to_owned());
+        let tasks = vec![
+            exec.clone(),
+            task_with("T2", "c0", &[("delivery_confirmed", None)]),
+        ];
+
+        // 1. A board read populates, reading the dispatch directory exactly
+        //    once for the whole pass however many panes moved.
+        absorb_board(&mut state, &tasks, read);
+        assert_eq!(reads.get(), 1, "one read_dir for the whole pass");
+        assert!(
+            !state.reveals.is_empty(),
+            "the board read is what populates the sidecars — with this line \
+             gone the feature is inert and `⌃g i` refuses on every pane"
+        );
+        // 2. The reviewer's brief lands on the REVIEWER's pane, not the
+        //    executor's. Issue #51 defect 3, in a new place.
+        assert_eq!(state.reveals["w1"].dispatch, "D-exec");
+        assert_eq!(
+            state.reveals["w2"].dispatch, "D-rev",
+            "the lane was ignored and the reviewer's brief went to the executor"
+        );
+        // 3. The conductor is not given a brief by the board either.
+        assert!(
+            !state.reveals.contains_key("c0"),
+            "the conductor took a brief"
+        );
+        // 4. `attempt` is not guessed: this record declares none.
+        assert_eq!(state.reveals["w1"].attempt, None, "a1 was invented");
+        // 5. Control characters never survive the composition of the brief.
+        assert!(
+            !state.reveals["w1"]
+                .prompt
+                .iter()
+                .any(|line| line.contains('\x1b')),
+            "an escape sequence in the brief reached the composed sidecar"
+        );
+        assert!(
+            state.reveals["w1"].controls_replaced,
+            "the substitution must be announced, not made silently"
+        );
+
+        // 6. THE WATERMARK. `reads_board` is true for `Snapshot`, which fires
+        //    per PTY output tick with no debounce — so an unchanged board must
+        //    cost zero syscalls. Measured: 6.3 ms at 64 records with `stdout`
+        //    at its documented cap, 83.6 ms under #55, against a 16 ms tier.
+        absorb_board(&mut state, &tasks, read);
+        assert_eq!(
+            reads.get(),
+            1,
+            "the dispatch directory was read again on an unchanged board"
+        );
+        // 7. And it does re-read when the watermark moves.
+        let mut moved = exec;
+        moved.history_total = 2;
+        absorb_board(&mut state, &[moved], read);
+        assert_eq!(reads.get(), 2, "a moved watermark must re-resolve");
+
+        // 8. A brief that has gone is dropped rather than left showing a
+        //    delegation that is no longer on the board.
+        state.revealed = Some("w1".to_owned());
+        let empty = &|_: &str| Vec::new();
+        let mut gone = task_with("T1", "w1", &[("delivery_confirmed", None)]);
+        gone.history_total = 3;
+        absorb_board(&mut state, &[gone], empty);
+        assert!(
+            !state.reveals.contains_key("w1"),
+            "a reveal whose brief has disappeared must be removed"
+        );
+        assert!(
+            state.revealed.is_none(),
+            "and the open sidecar closed with it"
+        );
+    }
+
     /// **The hosted grid is never drawn under the sidecar.**
     ///
     /// The fixture packs the worker's whole grid with `#`, at exactly the size
@@ -5515,14 +5667,16 @@ mod tests {
     /// smaller grid would let the band survive by accident.
     ///
     /// This is the test the shipped `conductor_down` overlay does not have:
-    /// that one is drawn at `lib.rs:4399`, *before* the blit, and is erased by
-    /// the pane's own grid in the same frame. The band is drawn after the blit
-    /// AND the blit's row range starts at `band`, so a worker cell physically
-    /// cannot be written into a band row.
+    /// that one is drawn *before* the blit and is erased by the pane's own grid
+    /// in the same frame. The band is drawn **after** the blit, and that
+    /// ordering is the whole mechanism — worker cells *are* written into those
+    /// rows and then painted over. An earlier version of this doc also claimed
+    /// the blit skipped the band's rows; it does not, and never did on the
+    /// merged code.
     ///
     /// Call-site mutations that must fail it:
     ///   - move `render_reveal` above the blit, where `conductor_down` sits
-    ///   - restore `for row in 0..rows` (drop the row-skip)
+    ///   - delete the `Clear` from `render_reveal`
     #[test]
     fn the_hosted_grid_is_never_drawn_under_the_reveal() {
         let mut state = StageState::new(
@@ -5574,6 +5728,19 @@ mod tests {
             below.symbol(),
             "#",
             "the hosted grid resumes below the band"
+        );
+
+        // The themed fill beside `Clear`, held rather than merely argued for in
+        // a comment. `Clear` resets a cell to the TERMINAL's default, not to
+        // `overlay` — so without the `Block` the band is an unthemed hole
+        // punched in the card, which is exactly what the call site claims it
+        // prevents. Review of PR #57 found that claim unheld.
+        let banded = buffer.cell((inner.x + 1, inner.y)).expect("a band cell").bg;
+        assert_eq!(
+            banded,
+            state.theme.overlay(),
+            "the band must carry the theme's overlay fill, not the terminal's \
+             default — `Clear` alone leaves an unthemed hole"
         );
 
         // The band says what it is and what it costs.
