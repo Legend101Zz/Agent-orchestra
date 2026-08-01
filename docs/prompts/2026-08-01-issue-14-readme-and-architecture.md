@@ -98,9 +98,10 @@ truth for the render layer. Confirm that yourself before you touch anything:
    degradation tiers, the ~/.orchestra data model, the capability model, and
    how this project is tested.
 
-3. docs/ restructured per Decision 1, all 95 citations repointed, plus a
-   LICENSE. If the licence choice is not obvious, ASK on the issue — that is
-   not a technical decision and it is not yours to guess.
+3. docs/ restructured per Decision 1, all 95 citations repointed.
+
+LICENSE is already done (MIT, 1b93799) — it is off your list. Just state
+the licence in the README.
 
 ## The trap this issue is actually about
 
