@@ -407,7 +407,9 @@ disks.
 
 ## Prompts you run
 
-> **▶ Next up: #14 — README + screenshots for launch.** Every V1 feature is
+> **▶ Next up, copy-paste ready:**
+> [`docs/prompts/2026-08-01-issue-14-readme-and-architecture.md`](docs/prompts/2026-08-01-issue-14-readme-and-architecture.md)
+> — **#14, README + architecture docs.** Every V1 feature is
 > now in. #49 closed on 2026-08-01 with phase 3 (PR #57), so #14 is the last
 > original V1 item and all that stands between here and launch. The phase-3
 > prompt is retired at
