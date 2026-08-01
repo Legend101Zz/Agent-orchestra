@@ -37,7 +37,7 @@ ship-log entries are part of finishing an issue.*
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phase 2 merged too (PR #56); **phase 3 is the only one left on #49** |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
 | [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | ✅ | merged (PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56), `2dc35db`) · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · **merged without the one follow-up named in the re-review: the `capped` latch is still held by no test** — it guards the log's contiguous-prefix claim, the test is written and verified, and it should be picked up in phase 3 · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
-| [#49 phase 3](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | The brief sidecar: press `<leader> i` on a worker and see the brief that worker was actually sent, plus what it has really produced so far | 👀 | `issue-49-phase3-brief-overlay` · **closes #49**, so #14 is unblocked · 5 gates green, **392 passed 0 failed** ×3 (baseline 365) · **the issue's premise was false and is corrected**: `DispatchRecord.prompt` was reachable from the client by no path — not on `TaskSummary`, not on `DispatchSummary`, and `~/.orchestra/dispatches` is watched by nothing · new `DispatchBrief`/`read_briefs` reader that **cannot** reconcile (the existing readers kill worker pids and write the board) and has **no `stdout` field**, so #55's 400 KB is structurally unreachable · acceptance **9** (zoom: brief survives, wire is stated) and **10** answered · tachyonfx evaluated and **declined** on its timing model · carried-over `capped`-latch test landed, plus the unheld `note`-frame `stderr` counters · one pre-existing defect found and reported not fixed: the `conductor_down` overlay is drawn before the cell blit and erased by it in the same frame, covered by no test |
+| [#49 phase 3](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | The brief sidecar: press `<leader> i` on a worker and see the brief that worker was actually sent, plus what it has really produced so far | 🔨 | `issue-49-phase3-brief-overlay` · **closes #49**, so #14 is unblocked · 5 gates green, **392 passed 0 failed** ×3 (baseline 365) · **the issue's premise was false and is corrected**: `DispatchRecord.prompt` was reachable from the client by no path — not on `TaskSummary`, not on `DispatchSummary`, and `~/.orchestra/dispatches` is watched by nothing · new `DispatchBrief`/`read_briefs` reader that **cannot** reconcile (the existing readers kill worker pids and write the board) and has **no `stdout` field**, so #55's 400 KB is structurally unreachable · acceptance **9** (zoom: brief survives, wire is stated) and **10** answered · tachyonfx evaluated and **declined** on its timing model · carried-over `capped`-latch test landed, plus the unheld `note`-frame `stderr` counters · one pre-existing defect found and reported not fixed: the `conductor_down` overlay is drawn before the cell blit and erased by it in the same frame, covered by no test · review **FIX (6)**: 17 call-site mutations run, **11 survived** — the board → screen seam (`resolve_reveals` / `reveal::compose`) has zero test callers, so deleting the whole feature from `absorb_board` leaves 392 green; missing wiring test written and verified; plus unsanitised worker bytes, a docstring naming a blit row-skip that does not exist, and a `clock` panic on a non-ASCII stamp |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -673,6 +673,27 @@ tier whose whole answer is "no colour".
 
 Five gates green, 392 tests passing against a 365 baseline, three clean runs in
 a row. Every new test was broken on purpose first to check it could fail.
+
+**Review verdict: 🔨 FIX (6).** Five gates re-run cold in a separate worktree,
+392 passed / 0 failed confirmed, scope clean. Nothing on the branch is *wrong* —
+the happy path was driven and the wiring is correct — but **17 call-site
+mutations were run and 11 survived**, all on one seam: `resolve_reveals` and
+`reveal::compose` have zero test callers, so every render test puts a `Reveal`
+into `state.reveals` by hand. Deleting `stage.resolve_reveals(..)` from
+`absorb_board` leaves all 392 green with the feature entirely inert; so does
+deleting the watermark guard that is the whole cost argument, collapsing the
+`Undeclared`/`NotStreaming` distinction, defaulting `attempt` to 1, aiming the
+reviewer's brief at the executor's pane, and dropping `sanitise` from **both**
+the brief and the worker-bytes paths. The missing wiring test was written,
+verified to pass on `110e826`, and kills 5 of the 7. Also: the
+`the_hosted_grid_is_never_drawn_under_the_reveal` docstring describes a
+blit row-skip that is not in the code, `DispatchBrief` claims unknown fields are
+"preserved" without the `extra` map that would preserve them, and `clock` panics
+on a non-ASCII stamp (reproduced) on the render thread. The six caught mutations
+are each caught by the test whose docstring names them, and the `orc-core` half —
+especially the reconcile-contrast test — is the strongest work in the program.
+Fourth consecutive branch to assert against the component rather than the wiring.
+[Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5149992363)
 
 ### 2026-07-31 — You can now see what a worker has said before it finishes, issue #49 phase 2 (Claude)
 
