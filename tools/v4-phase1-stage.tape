@@ -1,4 +1,4 @@
-Output docs/v4-phase1-stage.gif
+Output docs/archive/media/v4-phase1-stage.gif
 
 Set Shell "zsh"
 Set FontSize 15

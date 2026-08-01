@@ -7,7 +7,7 @@
 //! each of its cells is, and how a fixed twelve-cell rail is laid onto a path
 //! whose length nobody chose in advance.
 //!
-//! Routing is specified in `docs/notes/2026-07-29-stage-circuit-topology.md`.
+//! Routing is specified in `docs/archive/notes/2026-07-29-stage-circuit-topology.md`.
 //! In short: one port on the conductor, a vertical trunk in the gutter, one
 //! horizontal spur per worker — the n8n shape — degrading to a trunk that hugs
 //! the conductor's edge when the gutter is narrow, and to a rail inlaid in each

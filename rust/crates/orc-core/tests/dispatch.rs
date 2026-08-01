@@ -1256,7 +1256,7 @@ fn the_supervisor_sidecar_is_not_read_as_a_dispatch() {
 /// so the overlay's price is on the record next to the board round-trip it has
 /// to be compared against.
 ///
-/// The reference points, from `docs/notes/2026-07-31-issue-49-phase2-evidence.md`:
+/// The reference points, from `docs/archive/notes/2026-07-31-issue-49-phase2-evidence.md`:
 /// one blocking `task_board` round-trip on the render thread is 221 us at 1 task
 /// in the session and 4267 us at 64; a whole STAGE frame is 1.83 ms debug and
 /// 0.23 ms release; the animating repaint tier is 16 ms.

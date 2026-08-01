@@ -11,7 +11,7 @@
 //! ## The rules this module exists to keep
 //!
 //! Every one of them is a way the feature could lie, and each is held by a test
-//! named in `docs/notes/2026-08-01-issue-49-phase3-evidence.md`.
+//! named in `docs/archive/notes/2026-08-01-issue-49-phase3-evidence.md`.
 //!
 //! - **Never show a character the worker has not produced.** Worker bytes reach
 //!   the screen only through [`orc_core::dispatch_progress::tail_lines`], which

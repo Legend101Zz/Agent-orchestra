@@ -1,9 +1,9 @@
 # Task Plan: V1 "Universal Delegation" program (2026-07-22)
 
 v4 "Bench" is complete (Phases 0–6 evidenced, `main` @ 018d5a1; see git
-history and `docs/notes/`). The product frame is now the V1 spec:
-`docs/superpowers/specs/2026-07-22-v1-universal-delegation-design.md`.
-Process: `docs/WORKFLOW.md` (issue → branch → review → merge; one issue at a
+history and `docs/archive/notes/`). The product frame is now the V1 spec:
+`docs/archive/superpowers/specs/2026-07-22-v1-universal-delegation-design.md`.
+Process: `WORKFLOW.md` (issue → branch → review → merge; one issue at a
 time). Implementer: code-puppy (Opus 4.8 long). Reviewer: Claude Code.
 
 ## Goal
@@ -40,15 +40,23 @@ record. (Issue numbers are filled in as issues are created.)
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (✅ **CLOSED 2026-08-01** — phase 1 PR #50, phase 2 PR #56, phase 3 PR #57 · **all three phases in, #14 is unblocked**) |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (✅ merged 2026-07-31, PR #53 — review FIX (2) → both fixed → re-review ACCEPT) |
-| [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
+| [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above (👀 **pushed 2026-08-01**, `issue-14-readme-architecture` — Decision 1 = archive, README rewritten, `docs/architecture/` added, `docs/` restructured, media re-recorded at `bed5166`; 5 gates green, 395/0; three defects filed as **#65**, not fixed) |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
 | [#30](https://github.com/Legend101Zz/Agent-orchestra/issues/30) | V1-14 Background the worker: confirm delivery not completion; extract the answer | #28 (✅ merged 2026-07-28, PR #31) |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
 #37, #38, #39, #45, #51 and all three phases of #49 are merged. Every V1
-feature is in. #14 (README + screenshots) is the last original V1 item and all
-that stands between here and launch.**
+feature is in. #14 (README + architecture docs) is the last original V1 item and
+all that stands between here and launch — it is now pushed and awaiting review.
+When it merges, V1 ships.**
+
+**`docs/` was restructured by #14 (2026-08-01).** Working artifacts moved to
+`docs/archive/` with an old→new path table inside it; `WORKFLOW.md` and
+`ANTI-SLOP.md` hoisted to the repo root beside `AGENTS.md`; `docs/design/visual-identity.md`
+and its subtree deliberately **not** moved, because seven Rust files cite that
+path as the live source of truth for the render layer. `tools/check-doc-links.sh`
+verifies every in-repo citation resolves and is the gate for that claim.
 
 **Open follow-ups, none of which block #14:** #55 (`DispatchRecord.stdout`
 unbounded for any adapter with an extractor), #58 (`DispatchBrief`'s `extra` map
@@ -133,7 +141,7 @@ own orphan event then cannot land. `spawn_guard::lock_slots` already solved this
 porting it is ~30 lines but it is the core locking primitive for every board
 writer and needs its own change. Also out of allowed paths: a
 `pio dispatch reconcile` operator verb, and `orch::status`'s read-then-list
-ordering. Evidence: `docs/notes/2026-07-31-issue-51-board-honesty.md`.
+ordering. Evidence: `docs/archive/notes/2026-07-31-issue-51-board-honesty.md`.
 
 **Originally, before it was picked up: #51 is not optional sequencing.** #49 phase 1 merged with its
 own review fully discharged, but it carried out three defects it was not
@@ -154,7 +162,7 @@ supervisor's drain threads now mirror each stream verbatim to an append-only
 per-attempt log beside the dispatch record, with a separate orchestrator-owned
 counters journal; neither is ever fsynced, and neither touches the task board or
 the dispatch record. Evidence:
-`docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
+`docs/archive/notes/2026-07-31-issue-49-phase2-evidence.md`.
 
 The measurement that decided it, and that the issue demanded: **one board write
 costs a STAGE client a blocking `task_board` round-trip on the render thread —
@@ -195,7 +203,7 @@ this state lands: `~/.orchestra/dispatches` is not in `file_watches()`, so
 phase 2 raises no wakes at all, and phase 3 must decide deliberately what it
 adds. **Phase 3 closes #49**, which unblocks #14 and V1. Copy-paste prompt lives
 in
-[`docs/prompts/2026-08-01-issue-49-phase3-next-session.md`](docs/prompts/2026-08-01-issue-49-phase3-next-session.md).
+[`docs/archive/prompts/2026-08-01-issue-49-phase3-retired.md`](docs/archive/prompts/2026-08-01-issue-49-phase3-retired.md).
 
 **#49 phase 1 pushed (2026-07-31, `issue-49-watchable-delegation`) — the board
 now records that a worker *answered*, and the animation is driven from that.**

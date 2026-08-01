@@ -2,7 +2,7 @@
 
 ## Session 1 — 2026-07-10
 - On v3-rust, clean, synced with origin. Planning files created.
-- Review complete: `docs/reviews/2026-07-11-v3-rust-review.md`, verdict fix-first, pushed.
+- Review complete: `docs/archive/reviews/2026-07-11-v3-rust-review.md`, verdict fix-first, pushed.
 
 ## Session 2 — 2026-07-11 (v4 planning)
 - Researched advisor tool, BridgeSpace (16-pane grid + kanban, Tauri/Rust),
@@ -56,7 +56,7 @@
   Real Claude Code 2.1.198 and Hermes 0.18.0 TUIs render with Unicode, color,
   alternate-screen state, resize/reflow, detach/reattach replay, and stable
   child PIDs. Full evidence is in
-  `docs/notes/2026-07-11-tui-spike.md`.
+  `docs/archive/notes/2026-07-11-tui-spike.md`.
 - Parser results: vt100 165.0 MiB/s (selected, replayable), termwiz 233.1
   MiB/s (rejected, no screen state), alacritty-terminal 238.5 MiB/s
   (replayable fallback). Rejected-parser dependencies are isolated from the
@@ -94,7 +94,7 @@
 - Remote `origin/v4-bench` is verified at `91624a0`; the worktree is clean
   except for the pre-existing untracked `findings.md`, which must be preserved.
 - Resume only with
-  `docs/prompts/2026-07-11-v4-phase2-next-session.md`. Finish, gate, commit,
+  `docs/archive/prompts/2026-07-11-v4-phase2-next-session.md`. Finish, gate, commit,
   and push Phase 2, then stop without beginning Phase 3.
 
 ## Session 4 — 2026-07-11 (v4 Phase 2)
@@ -135,7 +135,7 @@
 - The worktree was clean except for the preserved pre-existing untracked
   `findings.md`; all protected checksums matched their pre-phase values.
 - Resume only with
-  `docs/prompts/2026-07-11-v4-phase3-next-session.md`. Implement, gate,
+  `docs/archive/prompts/2026-07-11-v4-phase3-next-session.md`. Implement, gate,
   evidence, commit, and push Phase 3, then stop without beginning Phase 4.
 
 ## Session 5 — 2026-07-11 (v4 Phase 3)
@@ -246,8 +246,8 @@
 - Verified live in tmux: "/Volumes/Test?Vol" typed literally into the cwd
   field; RUNS legend renders; h exits RUNS to the animated HOME.
 - Re-ran a real session (claude + hermes + pi-m3), dispatched a bounded
-  hermes brief (DEMO_OK, confirmed), recorded docs/stage-live-dispatch.gif
-  (typing + focus hops + baton pulses) and docs/stage-live.png showing
+  hermes brief (DEMO_OK, confirmed), recorded docs/archive/media/stage-live-dispatch.gif
+  (typing + focus hops + baton pulses) and docs/archive/media/stage-live.png showing
   HERMES · TASK CONFIRMED. Replaced stage-workers.png in the README.
 
 ## Session 10 — 2026-07-12/13 (Phase 6: stability + first-run UX)
@@ -271,7 +271,7 @@
   expansion, session workspace, tabs, search, theme); documented exits
   reserved at the App dashboard only; view-aware honest legend fits 72
   cols; 500 ms ambient data-refresh tick fixes the frozen-screen symptom.
-  TestBackend + live tmux smokes (captures in docs/notes/).
+  TestBackend + live tmux smokes (captures in docs/archive/notes/).
 - 6C (e6bf1cd): wire gains harness available/dispatch_verified and session
   workers_live/workers_total/conductor (judged against hosted panes). HOME
   teaches brain/worker/detach with the configured leader chord and a BENCH
@@ -305,17 +305,17 @@
 - Actions now: set user registry app.leader_key to ctrl-b (verified live —
   STAGE legend shows ctrl-b and ctrl-b h returns HOME); stopped the stale
   daemon; fresh daemon on today's build verified healthy; wrote
-  docs/prompts/2026-07-12-v4-phase6-ux-bugfix-next-session.md covering
+  docs/archive/prompts/2026-07-12-v4-phase6-ux-bugfix-next-session.md covering
   daemon build handshake + orc daemon status/restart, honest client errors,
   RUNS interactivity/redraw, first-run HOME redesign, cwd-step fix, SCORE
   clipping, env scrubbing, and gates.
 
 ## Session — 2026-07-22 (Claude Code / Fable): V1 program setup
 - Pivoted plan of record from v4-Bench (complete) to V1 "Universal
-  Delegation": spec at docs/superpowers/specs/2026-07-22-v1-universal-delegation-design.md.
+  Delegation": spec at docs/archive/superpowers/specs/2026-07-22-v1-universal-delegation-design.md.
 - Imported visual identity spec (nocturne/ember/phosphor) into
   docs/design/visual-identity/ + distilled docs/design/visual-identity.md.
-- Established multi-agent workflow (docs/WORKFLOW.md): code-puppy implements
+- Established multi-agent workflow (WORKFLOW.md): code-puppy implements
   issues on branches, Claude reviews, Mrigesh tests + merges. Added root
   AGENTS.md, .agents/commands/work-issue.md, GitHub issue/PR templates.
 - Rewrote task_plan.md (issue map) and findings.md (durable decisions).
@@ -324,7 +324,7 @@
 
 ## Session — 2026-07-22 (Claude Code): issue #16 foundations research
 - Branch issue-16-research. Wrote the binding decision record
-  docs/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md:
+  docs/archive/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md:
   rmcp v2.2.0 (isolated tokio in new orc-mcp) for #8; probe-driven headless
   invocation templates (flags verified against local claude 2.1.217,
   codex 0.145.0, opencode 1.18.4, hermes 0.18.2, pi 0.80.7) for #4/#6;
@@ -361,7 +361,7 @@
   shim. uninstall.sh: removes the new links, removes our shims, restores the
   backup. Verified live in a throwaway HOME (backup + shim + forward + restore).
 - Docs/integrations: README, codex/AGENTS-block.md, skills/*, shell helpers
-  all say pio/piod now (KEPT tokens preserved). docs/guide.html left as-is:
+  all say pio/piod now (KEPT tokens preserved). docs/archive/guide.html left as-is:
   it is a dated historical artifact (“built 2026-07-10”, “Historical v3
   console reference”) and AGENTS.md says docs retain original labels for
   auditability; AC#2's gate scopes to help/README/skills only.
@@ -389,7 +389,7 @@
   green. Cargo.lock unchanged. Kept as a separate commit from the rename.
 
 ## Session — 2026-07-23 (Claude, reviewer): issue #17 review → ACCEPT → merged
-- Adversarial review of issue-17-rename-cli-pio (PR #19) per docs/WORKFLOW.md,
+- Adversarial review of issue-17-rename-cli-pio (PR #19) per WORKFLOW.md,
   run on the SSD checkout. All five gates re-run independently on MSRV Rust
   1.91.1: fmt / clippy (0 warnings, no allow-flags) / test 89-0 / doc /
   release build — all green (implementer had gated on 1.97, so both
@@ -1114,7 +1114,7 @@ hand back to the implementer.
   count == 1 and the three protected-config SHA-256s identical before==after;
   uninstall leaves protected config byte-identical and no dangling links. The
   Rust `install.rs` test (outside allowed paths) still passes unchanged.
-- AC3: `docs/notes/2026-07-26-standalone-trigger-hook-manual-test.md` documents
+- AC3: `docs/archive/notes/2026-07-26-standalone-trigger-hook-manual-test.md` documents
   registration + a reproducible non-interactive simulation (real captured
   output; the relayed `MiniMax quota:` line proves the hook invoked `pio`) + the
   live Claude Code procedure + `--selftest`.
@@ -1311,7 +1311,7 @@ hand back to the implementer.
   "#11 next", recording that #11 was sequenced after #30 on purpose because both
   rewrite `dispatch.rs`.
 - Earlier the same run (commit `fe0670d`, on `main`): recorded the checkout move
-  to `/Volumes/Mrigesh SSD/Agent-orchestra` in docs/WORKFLOW.md + findings.md.
+  to `/Volumes/Mrigesh SSD/Agent-orchestra` in WORKFLOW.md + findings.md.
   The move had silently dangled every symlink `install.sh` creates — the three
   Claude skills and the `UserPromptSubmit` hook — so the trigger grammar had
   stopped firing with no visible error. Repaired by re-running `./install.sh`
@@ -1352,8 +1352,8 @@ hand back to the implementer.
   `--provider minimax --model MiniMax-M3`, with no way to register another
   (e.g. `pi-claude`) short of hand-editing `~/.orchestra/harnesses.json`.
 - Opened issue #33, wrote a design spec
-  (`docs/superpowers/specs/2026-07-28-harness-registration-design.md`) and an
-  implementation plan (`docs/superpowers/plans/2026-07-28-harness-registration.md`)
+  (`docs/archive/superpowers/specs/2026-07-28-harness-registration-design.md`) and an
+  implementation plan (`docs/archive/superpowers/plans/2026-07-28-harness-registration.md`)
   via the brainstorming/writing-plans flow, both approved by Mrigesh before
   any code, then implemented on branch `issue-33-harness-registration` from
   fresh `main`.
@@ -1475,7 +1475,7 @@ hand back to the implementer.
 - Branch `issue-13-visual-identity-v1`. Implemented `docs/design/visual-identity.md`
   against its source of truth, the identity HTML (`_fillTokens`, `_fillGlyphs`,
   `_fillBaton` generators), inside the issue's allowed paths only:
-  `rust/crates/orc-app/`, `rust/crates/orc-core/` (theme/config types), `docs/notes/`.
+  `rust/crates/orc-app/`, `rust/crates/orc-core/` (theme/config types), `docs/archive/notes/`.
 - Three new modules in orc-app, each the single owner of its concern:
   `theme.rs` (17 semantic slots × 3 themes × 4 colour tiers, plus the grep gate),
   `glyph.rs` (16 concepts, Unicode + `nf-*` name + ASCII fallback),
@@ -1496,7 +1496,7 @@ hand back to the implementer.
   NO_COLOR test; deleting the reduced-motion branch from `baton::State::resolve`
   fails two tests.
 - Five judgement calls recorded in
-  `docs/notes/2026-07-29-issue-13-visual-identity-evidence.md`, the load-bearing
+  `docs/archive/notes/2026-07-29-issue-13-visual-identity-evidence.md`, the load-bearing
   ones being: nerd-font "detection" is honestly a UTF-8 locale probe (a terminal
   cannot be asked its font, and the register uses ordinary codepoints, not PUA
   icons — the `nf-*` names are recorded per entry for a future column); and the
@@ -1767,7 +1767,7 @@ hand back to the implementer.
   guard and printing the count, not by estimating it.
 - Six defects surfaced that the issue did not list; four of them were found by
   *reading the goldens or running the tests*, not by reasoning. Full list in
-  `docs/notes/2026-07-30-stage-circuit-evidence.md`. The two worth repeating:
+  `docs/archive/notes/2026-07-30-stage-circuit-evidence.md`. The two worth repeating:
   a mouse **release** re-armed the drag (SGR reports it as the same button code
   with an `m` suffix, and the press branch keyed on the code alone), and the
   layout debounce could not see a drag's own writes, so a move was never
@@ -1788,7 +1788,7 @@ hand back to the implementer.
 
 - Branched `issue-39-trigger-tier-grep-gate` from fresh `main` @ `b8a8d84`
   (after #38's PR #42 merged). Allowed paths: `rust/crates/orc-app/`,
-  `docs/notes/`.
+  `docs/archive/notes/`.
 - **The NO_COLOR decision was (a), collapse it — but per tier, not to nothing.**
   The issue's own second half ("a 16-colour terminal also receives truecolor
   SGR") is the argument: the complaint is not that a 16-colour terminal gets
@@ -1838,10 +1838,10 @@ hand back to the implementer.
   tree), workspace 304 passed. The known storage flake
   `delegate_confirms_while_running…` appeared once and passed on re-run; it is
   in `orc-cli`, which this branch does not touch.
-- Evidence: `docs/notes/2026-07-30-issue-39-evidence.md`.
+- Evidence: `docs/archive/notes/2026-07-30-issue-39-evidence.md`.
 - **Next: review of #39**, then #45 (which #46 added to the board while this
   branch was open), with #14 (README + screenshots) last. Note for
-  whoever picks that up: `docs/WORKFLOW.md`'s checkout note is stale — it says
+  whoever picks that up: `WORKFLOW.md`'s checkout note is stale — it says
   `/Volumes/Mrigesh SSD/pi-orchestra` "is NOT this repo", but that checkout is
   the one tracking `origin/main` today (`Agent-orchestra/` beside it is months
   behind, at the #12 era). Outside this issue's allowed paths, so left alone.
@@ -1925,7 +1925,7 @@ hand back to the implementer.
     what pi-orchestra paints. Whether `pane_color` should strip colour under
     `NO_COLOR` stays an open decision.
 - **Fixed the stale checkout note** the #39 implementer flagged and correctly
-  left alone as out-of-path. `docs/WORKFLOW.md` and `findings.md` both said
+  left alone as out-of-path. `WORKFLOW.md` and `findings.md` both said
   `/Volumes/Mrigesh SSD/pi-orchestra` "is NOT this repo"; it is, and it is the
   one tracking `origin/main`. `Agent-orchestra` beside it is parked on the
   unmerged `issue-12-single-harness-mode` branch. Both corrected, with the old
@@ -1947,7 +1947,7 @@ Branch `issue-45-seated-conductor` from `main` @ `17f0942`, in a worktree at
 `/Volumes/Mrigesh SSD/wt-issue-45` (the checkout is shared with concurrent
 sessions; `findings.md` records why HEAD moving under you is a real hazard).
 Pushed for review. Evidence:
-`docs/notes/2026-07-30-issue-45-seated-conductor.md`.
+`docs/archive/notes/2026-07-30-issue-45-seated-conductor.md`.
 
 - **The issue's diagnosis was right but incomplete.** It says both halves are
   already built and one injected line wires them apart. Three of the four links
@@ -2032,7 +2032,7 @@ Pushed for review. Evidence:
 ## 2026-07-31 — Claude (reviewer): #45 reviewed FIX, merged as PR #48
 
 Adversarial review of `issue-45-seated-conductor` at `43a411c`, per
-`docs/WORKFLOW.md`. Mrigesh merged it as `f135e47` while the verdict stood at
+`WORKFLOW.md`. Mrigesh merged it as `f135e47` while the verdict stood at
 FIX, so both findings are now open on `main`.
 
 - **Five gates re-run from `rust/`, unpiped with exit codes captured:** `fmt`
@@ -2355,7 +2355,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 ## Session — 2026-07-31 (Claude): #49 phase 2 — durable incremental supervisor output
 
 Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `0bc1255`.
-Defect 3 only. Evidence: `docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
+Defect 3 only. Evidence: `docs/archive/notes/2026-07-31-issue-49-phase2-evidence.md`.
 
 - **The defect, measured first.** A real worker emitting a line every 200 ms for
   6 s, sampled 9 times through the reader path a user has: `stdout` was `0` at
@@ -2421,7 +2421,7 @@ Defect 3 only. Evidence: `docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
 ## 2026-07-31 — Claude (reviewer): #49 phase 2 (PR #56) reviewed twice, merged
 
 Adversarial review of `issue-49-phase2-incremental-output` per
-`docs/WORKFLOW.md` prompt 2. Clean cold worktree, gates re-run rather than read.
+`WORKFLOW.md` prompt 2. Clean cold worktree, gates re-run rather than read.
 
 **Round 1 — FIX (5).** Five gates green, 360 passed 0 failed ×3, zero flakes.
 But of my eleven mutations **eight survived** (my summary line said six; the
@@ -2488,7 +2488,7 @@ Baseline re-measured on a clean worktree before touching anything: **365 passed,
 0 failed** — the number the prompt file names. Final: **392 passed, 0 failed**,
 three consecutive full-workspace runs, all five gates green.
 
-Evidence: `docs/notes/2026-08-01-issue-49-phase3-evidence.md`.
+Evidence: `docs/archive/notes/2026-08-01-issue-49-phase3-evidence.md`.
 
 **The issue's premise was false, and confirming it was the instruction.** #49's
 Decision 1 comment and the phase-3 prompt both say the overlay "needs no new
@@ -2671,3 +2671,95 @@ test's seam must have its dependency injectable, or the seam is decorative**, an
 **constructing an enum variant by hand does not test that anything produces it.**
 
 Post-merge: `LOG.md`, `task_plan.md` and this file updated on `main`.
+
+## 2026-08-01 — #14: README + architecture docs, and `docs/` restructured (Claude)
+
+Branch `issue-14-readme-architecture` off `origin/main` at `bed5166`, worktree
+`pi-orchestra-worktrees/issue-14-readme` on the SSD.
+
+**Decision 1 answered on the issue before anything was written: archive, to
+`docs/archive/`.** The issue's own recommendation, but the deciding argument was
+different from the one it gave and is worth keeping. The off-repo citations —
+merged PR bodies, review threads — are written as *plain backticked paths*, not
+`/blob/<sha>/` permalinks (checked with `gh pr view 57 --json body`). A permalink
+survives a move; a bare path does not, and a merged PR body is not something this
+branch can repoint. So those citations go stale under *either* option, and the
+asymmetry is what decides it: under delete the path resolves to nothing, under
+archive the file is still one directory deeper under an unchanged basename, so
+`grep`, `git ls-files` and GitHub's file finder all still reach it. The archive
+README therefore leads with an explicit old-path → new-path table.
+
+**The citation census was smaller than the issue budgeted, and in the safe
+direction.** 110 in-repo citations across 39 files, not 95 across 66 — but 70 of
+those are self-references inside subtrees that move together and repoint for
+free, and **all 26 `docs/design/` citations are to `visual-identity`, which does
+not move**. The real burden was **40 citations across 13 files**, six of them in
+Rust (the issue said five; `dispatch_progress.rs` carries two) plus one in
+`tools/run_phase2_soak.sh` that is not a comment but a path the script *writes
+to*.
+
+**Verified against the code rather than the old README**, which is what the issue
+was actually about. Findings beyond the two it named:
+
+- The keys table was missing **four** entries, not two: `⌃g t` and `⌃g i` as the
+  issue said, plus `⌃g tab` (an alias for next pane) and `⌃g =` (an alias for
+  grow). All read off `RawRouter::route` at `orc-app/src/lib.rs:1381-1408`.
+- The shell-helpers line was missing `bench-dispatch`, one of three functions in
+  `shell/orchestra.zsh`.
+- **The issue's own per-crate line counts are wrong.** They sum to 72,734 against
+  the issue's own workspace total of 48,892, and no counting method I tried
+  reproduces them; they also invert the two largest crates. A plain `.rs` count
+  reproduces 48,892 exactly, so the real numbers are used and the method is
+  printed in `docs/architecture/crate-map.md` so anyone can re-run it.
+- `install.sh` writes its shell block to `~/.zshrc` and nowhere else, so the
+  README now says plainly that zsh is what the installer supports — and gives
+  bash users the one line, having verified the helpers really are
+  bash-compatible (`bash -n` plus all three functions defining and running).
+
+**Three defects found and filed, not fixed** (this issue changes no behaviour).
+All three are one root cause — #17's rename left three user-facing places behind
+— and they are now **#65**. One is functional rather than cosmetic: the client
+resolves its daemon by the retired name (`orc-app/src/main.rs:66-72`), so the
+README's own "build without installing" path silently starts the *installed*
+daemon and refuses on the build handshake, or on a clean machine cannot start one
+at all. Found by trying to record the hero, which is the sort of thing only
+actually running the documented path turns up. The README now says so instead of
+claiming the path works.
+
+**Recordings are new and current**, captured at `bed5166` with new tapes
+(`tools/hero-nocturne.tape`, `tools/stage-phosphor.tape`, driven by
+`tools/record.sh`; the v4-era tapes could not produce current media). Hero in
+nocturne, a phosphor variant, and a genuine **monochrome** capture under
+`NO_COLOR`, because that tier is an acceptance concern rather than a nicety.
+`⏻ CONDUCTOR DOWN` is deliberately not captured — #59, it has never been visible.
+
+Two judgement calls in the captures, both recorded in the tapes themselves: the
+conductor is **codex rather than claude**, because Claude Code's start-up panel
+renders the signed-in account's name, email and organisation until the
+conversation has content and cannot be dismissed non-interactively — the first
+capture published somebody's email address, which is not a thing to ship in a
+README. And the `delegate:` frame is **typed but not submitted**: the affordance
+is what the frame is for, and pressing Enter would spend real provider quota on
+output nobody chose.
+
+**The pipeline was run end to end rather than described.** A real contracted,
+isolated delegation to hermes: `delegate` returned in **0.13 s** with
+`status: confirmed` + `execution_status: running`, the worker ran **12 s**, and
+`await` reported `succeeded` / `exit_code: 0`. On disk afterwards: the isolated
+worktree, `…a1.out.log` containing exactly `PONG` and nothing else, and
+`…a1.progress.jsonl` carrying `open`/`note`/`close` with exact counters — the two
+artifacts with the two different authorities that `dispatch_progress.rs` claims,
+demonstrated rather than quoted.
+
+**A gate caught me, and it was right to.** `readme_skills_and_integrations_have_no_user_facing_orc`
+failed deterministically because the README named the retired commands in order
+to *document* them. The gate cannot tell "documenting the old name" from
+"teaching it", and weakening it to fit my prose would have been the wrong trade —
+so the retired names came out of the README and the detail lives in #65 and the
+architecture docs, which the gate does not scan.
+
+Five gates green. **395 passed / 0 failed**, matching the stated baseline. The
+#60 flake fired and was A/B'd rather than excused: **branch 3 failures / 7
+full-workspace runs, `origin/main` 2 / 5**, same test, and 8/8 clean in isolation
+on the branch. `Cargo.lock` and `Cargo.toml` untouched; every Rust change is a
+comment.

@@ -136,7 +136,7 @@ to the baton alone.)*
 how many workers there are — one rail at mid-height stops meaning anything past
 one worker. The routing spec (elbows → bus → single rail, with its honest
 degradations at and below 80×24) lives in
-`docs/notes/2026-07-29-stage-circuit-topology.md`; it is new design rather than
+`docs/archive/notes/2026-07-29-stage-circuit-topology.md`; it is new design rather than
 a transcription of the identity HTML, which has no multi-worker topology at
 all, so it is written up for review before being promoted into this sheet.
 

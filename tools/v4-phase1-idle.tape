@@ -1,4 +1,4 @@
-Output docs/v4-phase1-idle.gif
+Output docs/archive/media/v4-phase1-idle.gif
 
 Set Shell "zsh"
 Set FontSize 15
