@@ -29,11 +29,24 @@ echo "==> recording at commit $COMMIT"
 
 SHIM="/tmp/pio-record-shim"
 
+# Kill only the daemon serving the scratch home.
+#
+# The pattern deliberately does NOT name the binary. The client spawns its
+# daemon through the `orcd` shim below, and a symlinked shim keeps the name it
+# was invoked by — `ps` shows `orcd --home … --socket …`, not `piod …`. So a
+# pattern containing `piod` matches nothing, which is how an earlier version of
+# this script leaked an orphan daemon per tape. Matching on `--home $STAGE_HOME`
+# is both name-independent (it will keep working when #65 renames the lookup)
+# and tightly scoped: no other process on the machine carries that path, so this
+# can never reach the daemon serving the real ~/.orchestra.
+kill_scratch_daemon() {
+  pkill -f -- "--home $STAGE_HOME" 2>/dev/null || true
+}
+
 reset_state() {
-  # A fresh daemon per tape: piod persists across runs and would otherwise
-  # serve panes from a previous recording. Matched on the scratch socket so
-  # this can never touch a daemon serving the real ~/.orchestra.
-  pkill -f "piod --home $STAGE_HOME" 2>/dev/null || true
+  # A fresh daemon per tape: the daemon persists across runs and would otherwise
+  # serve panes from a previous recording.
+  kill_scratch_daemon
   sleep 1
   rm -rf "$STAGE_HOME" "$STAGE_CWD"
   mkdir -p "$STAGE_HOME" "$STAGE_CWD"
@@ -59,7 +72,7 @@ record() {
   local tape="$1"
   echo "==> $tape"
   reset_state
-  mkdir -p "$ROOT/docs/media"
+  mkdir -p "$ROOT/docs/media" "$ROOT/rust/target/vhs"
   # VHS 0.11 cannot parse absolute paths in Output/Screenshot, so the tapes use
   # repo-relative paths and vhs runs from the repo root.
   ( cd "$ROOT" && PIO_BIN="$BIN" vhs "tools/$tape.tape" )
@@ -72,6 +85,6 @@ else
   record stage-phosphor
 fi
 
-pkill -f "piod --socket $STAGE_HOME/orcd.sock" 2>/dev/null || true
+kill_scratch_daemon
 echo
 echo "==> done. Recorded at $COMMIT. Output in docs/media/."

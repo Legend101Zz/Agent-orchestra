@@ -31,8 +31,12 @@ by search (`git ls-files | grep <basename>`, or GitHub's `t` file finder).
 
 **One thing did not move.** [`docs/design/visual-identity.md`](../design/visual-identity.md)
 and its `visual-identity/` subtree are *live* — they are the source of truth for
-the render layer, cited by name from seven Rust source files. They are not
-archived and must not be.
+the render layer: **seven Rust source files cite that path**, over eight lines
+(`orc-app/src/theme.rs` carries two). They are not archived and must not be.
+
+*A ninth mention exists and is deliberately not counted: `orc-pty/src/trigger.rs:52`
+names the identity register in prose without citing the path, so a move cannot
+break it. The number that matters here is path citations, not mentions.*
 
 ## What is in here
 

@@ -114,7 +114,8 @@ edits `~/.pi/agent/settings.json`, `~/.claude/settings.json`, or
 verify it. Take them yourself first if you want to be certain:
 
 ```bash
-shasum -a 256 ~/.pi/agent/settings.json ~/.claude/settings.json ~/.codex/config.toml
+shasum -a 256 ~/.pi/agent/settings.json ~/.claude/settings.json \
+              ~/.codex/config.toml ~/.local/bin/pio
 ./install.sh
 # compare against the "protected-config checksums" block it prints
 ```
@@ -218,12 +219,21 @@ capability — two different questions, and it shows both.
 
 Press **`n`** and walk three steps:
 
-1. **Choose a brain** — the conductor pane. `j`/`k` to move, `enter` to accept.
-2. **Review the worker pool** — sensible workers are preselected; `space`
-   toggles. Unavailable tools are never auto-selected.
-3. **Choose a working directory** — prefilled with where you launched from.
-   `tab` completes a path segment, `ctrl-u` clears the line, and a path that is
-   not a directory is refused *before* launch rather than after.
+**1. Choose a brain** — the conductor pane. `j`/`k` to move, `enter` to accept.
+
+![Step 1 — choosing the conductor](docs/media/flow-brain.png)
+
+**2. Review the worker pool** — sensible workers are preselected; `space`
+toggles. Unavailable tools are never auto-selected.
+
+![Step 2 — the worker pool](docs/media/flow-workers.png)
+
+**3. Choose a working directory** — prefilled with where you launched from.
+`tab` completes a path segment, `ctrl-u` clears the line, and a path that is not
+a directory is refused *before* launch rather than after. The confirmation line
+names the brain and the workers you are about to start.
+
+![Step 3 — the working directory](docs/media/flow-cwd.png)
 
 On `enter` the session launches and STAGE opens with every pane running.
 
@@ -419,6 +429,11 @@ degrades in layers — truecolor, 256, 16, and **monochrome**, where there is no
 colour at all:
 
 ![HOME with NO_COLOR — every state still readable](docs/media/home-monochrome.png)
+
+And the busiest screen, with the same colour removed — the conductor, the bench,
+the circuit between them and the whole footer legend, all carried by shape:
+
+![STAGE with NO_COLOR](docs/media/stage-monochrome.png)
 
 Nothing above depends on colour to be legible. Every state pairs with a glyph
 (`✓` confirmed, `◔` queued, `◑` running, `✕` failed, `●`/`○` on-PATH), so the

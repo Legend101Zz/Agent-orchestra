@@ -154,13 +154,15 @@ more than once, including a case where the A/B proved the failure *was* the
 branch's fault after it looked exactly like the documented flake.
 
 Measured for this branch (issue #14, docs and comments only): the test failed
-2 of 4 full-workspace runs on the branch and 2 of 5 on `origin/main`, 8 of 8 in
+5 of 10 full-workspace runs on the branch and 2 of 5 on `origin/main`, 8 of 8 in
 isolation on the branch, and both trees reach 395 passed / 0 failed on a clean
-run.
+run. The branch changes no executable code, so the spread between those two
+rates is machine load, not the diff — which is the reason the rule is *A/B*
+rather than *count once*.
 
 ## What a reviewer is expected to do
 
-From `docs/../WORKFLOW.md` and `ANTI-SLOP.md`, and it is enforced socially rather
+From [`WORKFLOW.md`](../../WORKFLOW.md) and [`ANTI-SLOP.md`](../../ANTI-SLOP.md), and it is enforced socially rather
 than by tooling:
 
 - Re-run every acceptance check yourself; never trust the implementer's pasted

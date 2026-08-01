@@ -6,7 +6,7 @@ Eight crates, four binaries, 48,892 lines of Rust.
 
 ```mermaid
 flowchart BT
-    core["<b>orc-core</b><br/>24 modules · no orc-* deps"]
+    core["<b>orc-core</b><br/>26 modules · no orc-* deps"]
     proto["<b>orc-proto</b><br/>the wire format"]
     pty["<b>orc-pty</b><br/>PTY + vt100"]
     tui["<b>orc-tui</b><br/>RUNS ledger"]
@@ -70,7 +70,7 @@ nothing except own things.
 
 ### `orc-core` — the domain, and the only crate that decides anything
 
-24 modules. The largest by far, and the one to read first.
+26 modules. The largest by far, and the one to read first.
 
 | Module | Lines | What it owns |
 |---|---:|---|
@@ -98,6 +98,11 @@ nothing except own things.
 | `model.rs` | 166 | Config, defaults. |
 | `harness_models.rs` | 155 | Model profiles per harness. |
 | `inbox.rs` | 101 | Per-run message inbox. |
+| `notification.rs` | 88 | Desktop/terminal notification policy. |
+| `search.rs` | 71 | Fuzzy matching for the ledger's search box. |
+
+Re-derive the module list with `ls rust/crates/orc-core/src/*.rs` (27 files, of
+which `lib.rs` is the crate root that only declares the other 26).
 
 The rule that keeps this crate honest: **it never renders and never talks to a
 socket.** It returns data. Everything about how that data looks is somebody

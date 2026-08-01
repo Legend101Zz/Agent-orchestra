@@ -10,7 +10,11 @@
 # an acceptance concern rather than a nicety, so it is recorded rather than
 # asserted.
 
-Output docs/media/stage-phosphor.gif
+# VHS requires an Output, but this tape's deliverables are its stills — an
+# animated phosphor GIF is 1.1 MB that the README does not show, and media
+# nobody reads is just weight in the clone. So the reel goes to the gitignored
+# build tree and only the screenshots are committed.
+Output rust/target/vhs/stage-phosphor.gif
 
 Set Shell "bash"
 Set FontSize 14
@@ -42,7 +46,7 @@ Sleep 1200ms
 Ctrl+g
 Type "t"
 Sleep 1500ms
-Screenshot docs/media/home-phosphor.png
+Screenshot rust/target/vhs/home-phosphor.png
 
 # Same launch flow, same codex conductor (see hero-nocturne.tape).
 Type "n"
