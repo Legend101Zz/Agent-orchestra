@@ -811,3 +811,46 @@ No test or golden covers it — the STAGE fixture sets `state: None`, and the
 `CONDUCTOR DOWN` assertion in the suite is HOME's shelf line from a different
 code path. Also pre-existing: `clip_ellipsis` pushes a hard `…` on the ASCII
 tier; reveal code uses the glyph register instead and routes around it.
+
+## 2026-08-01 — issue #49 phase 3, review round: the seam must be a parameter
+
+**Threading the reader through `absorb_board` is what makes the feature's own
+wiring testable, and hardcoding it is what hid the sharpest defect.** Review of
+PR #57 ran seventeen call-site mutations; eleven survived, and the worst was
+deleting the `resolve_reveals` line from `absorb_board` — after which all 392
+tests passed while the feature was completely inert. The reviewer wrote the
+missing test, and then corrected themselves: it did not kill that mutation
+either, because it called `resolve_reveals` directly. `absorb_board` hardcoded
+`orc_core::dispatch::read_briefs`, so it could not be driven at all.
+
+The rule this leaves: **when a function exists to be the seam a test grabs, the
+thing it calls must be injectable, or the seam is decorative.** `read_board`
+passes the real reader; a test passes a counting closure; one call now kills both
+"the line is gone" and "the guard is gone".
+
+**A pure function being well tested says nothing about the path that reaches
+it.** `sanitise` had six assertions and full coverage of its own behaviour, and
+replacing its call site inside `compose` with a plain clone left the whole suite
+green — so worker-controlled `\x1b` reached the composed sidecar with 392 tests
+passing. The adversarial claim in a module's docstring has to be driven through
+the module's real entry point, with the adversary in a real file.
+
+**Constructing an enum variant by hand does not test that anything produces
+it.** `the_nothing_here_facts_are_told_apart_in_words` built all four `Progress`
+variants directly and checked their sentences differed. Deleting the `exists()`
+stat from `compose`, so `Undeclared` could never be produced at all, changed
+nothing. The distinction that variant exists to preserve is exactly the one every
+design proposal got wrong.
+
+**`len()` is bytes and `[a..b]` on a `str` panics off a char boundary.**
+`clock`'s `&stamp[11..19]`, guarded by `len() >= 19`, panicked on
+`あああああああ+00:00` — on the render thread, in a module whose posture is that
+one torn file must never blank the screen, and where `read_progress` is
+deliberately infallible for precisely that reason. `get(11..19)` with a fallback.
+
+**A test's "mutations that must fail it" list is binding, so it must describe
+the code that exists.** `the_hosted_grid_is_never_drawn_under_the_reveal`
+claimed the blit skipped the band's rows and named restoring `0..rows` as a
+required-failing mutation. The row-skip had been deliberately removed and the PR
+body said so — leaving a docstring that contradicted the code, the PR, and
+itself, and named a no-op as binding. Corrected rather than softened.

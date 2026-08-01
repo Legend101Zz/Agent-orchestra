@@ -419,3 +419,109 @@ assertion that turns the cost claim into a value rather than a paragraph.
   session) and nothing prunes `~/.orchestra/dispatches`. The invalidation guard
   makes the read rare and §6 bounds 64 records, but the accumulation of a real
   long-lived session has not been measured. Named here rather than papered over.
+
+---
+
+## 11. Review round: FIX (6), eleven surviving mutations, all fixed
+
+The reviewer ran seventeen call-site mutations and **eleven survived**. Not one
+was a wrong behaviour — the happy path and the wiring were correct. Every one
+was a guarantee this branch states in prose and nothing held.
+
+**The pattern, and it is the fourth consecutive occurrence.** #50 shipped a test
+no implementation could fail, #51 one that under-drove its own lifecycle, #56
+one comparing two filenames instead of driving a retry — and this branch
+populated **by hand** the map the feature exists to populate. Every render test
+did `state.reveals.insert(...)` directly, so `resolve_reveals` and
+`reveal::compose` had zero test callers between them.
+
+The sharpest one: **delete `stage.resolve_reveals(..)` from `absorb_board` and
+all 392 tests still passed.** The map is never populated, `⌃g i` answers "has
+taken no brief in this session" on every pane in every session, and nothing
+notices. `absorb_board`'s own docstring diagnosed this exactly — *"a test needs
+something to hold… leaves the suite green unless something pins the composition
+itself"* — and nothing was built on it.
+
+### The reviewer's correction to their own test, and why it mattered
+
+They wrote the missing test, verified it on `110e826`, and it killed 5 of 7 —
+but **not** mutation 1, because it called `resolve_reveals` directly, which is
+the same one-level-short mistake being reported. `absorb_board` hardcoded
+`orc_core::dispatch::read_briefs`, so it could not be driven at all.
+
+Fixed by threading the reader through as a parameter: `read_board` passes
+`orc_core::dispatch::read_briefs`, a test passes a counting closure. One call to
+`absorb_board` now kills mutations 1 and 2 together. That is the whole reason the
+parameter exists and the doc comment says so.
+
+### The battery, re-run against the fix — 11/11 caught
+
+| # | mutation (all at the call site) | now caught by |
+|---|---|---|
+| 1 | delete `resolve_reveals` from `absorb_board` | `the_board_populates_the_sidecars_once_per_watermark_move` |
+| 2 | delete the `if !stale { return 0 }` watermark guard | same |
+| 3 | `Lane::Reviewer` → `Lane::Executor` for `reviewer_run` | same |
+| 4 | drop the `.skip(1)` keeping the conductor out | same |
+| 5 | collapse `Undeclared` into `NotStreaming` in `compose` | `compose_tells_absent_progress_from_absent_artifacts` |
+| 6 | default `attempt` to `Some(1)` in `compose` | `the_board_populates_the_sidecars…` |
+| 7 | drop `sanitise` from the **worker-bytes** path | `a_forged_badge_in_the_workers_own_bytes_cannot_reach_the_screen` |
+| 8 | drop `sanitise` from `hold_prompt` | `the_board_populates_the_sidecars…` |
+| 9 | show the **oldest** tail line instead of the newest | `a_forged_badge…` |
+| 10 | never `remove` a reveal whose brief is gone | `the_board_populates_the_sidecars…` |
+| 11 | delete the themed `Block` beside `Clear` | `the_hosted_grid_is_never_drawn_under_the_reveal` |
+
+Each was re-applied to the fixed tree and observed to fail: **142 passed / 1
+failed** in every case, and the tree diffed clean against a backup after each.
+
+Mutation 7 is the one that mattered most in kind. `sanitise` was well tested —
+*as a pure function*. The path carrying **worker** bytes to it runs inside
+`compose` and had no test caller, so replacing the call with a plain clone left
+392 green. The new test writes `\x1b[2J\x1b[H FORGED ✓ TASK CONFIRMED` into a
+real byte log beside a real journal, composes, and asserts no `\x1b` and no
+control character survives — while the text `FORGED` *does*, because this
+replaces rather than deletes and the reader should see what the worker tried.
+
+Mutation 11 was the reviewer's other structural point: the call site argued
+`Clear` and the themed `Block` were *both* needed with a distinct reason each,
+and only `Clear` was held. The `Block`'s stated consequence — an unthemed hole
+punched in the card, because `Clear` resets to the **terminal's** default rather
+than to `overlay` — is now asserted directly on a band cell's background.
+
+### Three smaller findings, all real
+
+- **A test docstring described a mechanism that is not in the code.**
+  `the_hosted_grid_is_never_drawn_under_the_reveal` claimed "the blit's row
+  range starts at `band`" and named dropping the row-skip as a required-failing
+  mutation. There is no row-skip — it was removed deliberately (§9) and the PR
+  body says so. So the doc contradicted both the code and the PR, and named a
+  no-op mutation as binding. Corrected: the ordering is the whole mechanism,
+  worker cells *are* written into those rows and then painted over, and the
+  second named mutation is now deleting `Clear`.
+- **`DispatchBrief` claimed unknown fields were "preserved in the usual way"**
+  while carrying no `#[serde(flatten)] extra` and still deriving `Serialize` —
+  a serde contract stated and not kept, in a file where both neighbouring types
+  carry that map. The field is added rather than the claim softened.
+- **`clock` panicked on a non-ASCII durable stamp**, on the render thread.
+  `&stamp[11..19]` is guarded by `len() >= 19`, which is **bytes**. Reproduced:
+
+  ```
+  byte index 11 is not a char boundary; it is inside 'あ' (bytes 9..12)
+  of `あああああああ+00:00`
+  ```
+
+  Only reachable from a well-formed journal with a corrupt `t`, so it is remote
+  — but `read_progress` is deliberately infallible precisely so a torn sidecar
+  cannot blank the screen, and this would have undone that. `stamp.get(11..19)`
+  with a fallback to the whole string, pinned by the multi-byte case.
+
+### Gates after the fix
+
+```
+cargo fmt --all -- --check                                   exit 0
+cargo clippy --workspace --all-targets -- -D warnings        exit 0
+cargo test --workspace                                       395 passed, 0 failed
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps    exit 0
+cargo build --release --locked                               exit 0, Cargo.lock unchanged
+```
+
+392 → 395: three new tests, and the `absorb_board` signature change.
