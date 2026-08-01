@@ -1,6 +1,6 @@
 # Issue #51 — three places the board and the screen disagree
 
-Branch `issue-51-board-honesty`, off `origin/main` @ `e82d894`. All three
+Branch `issue-51-board-honesty`, off `origin/main` @ `24eba67`. All three
 defects in one branch, as the issue requires: they share a cause — the daemon's
 `TaskSummary` is too thin to carry what the client needs, and nothing owned
 telling the board that a supervisor died.

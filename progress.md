@@ -1697,7 +1697,7 @@ hand back to the implementer.
 
 - Adversarial review of `issue-37-theme-persistence` against #37's contract, then
   a re-review of the fix round. Verdicts **🔨 FIX (2 items)** → **🧪 ACCEPT**.
-  Mrigesh merged as PR #41 (`2425481`); issue closed.
+  Mrigesh merged as PR #41 (`ccea19d`); issue closed.
 - Round 1: all five gates reproduced green (267 tests, 0 failed) and all seven
   ACs re-verified against a live `piod` on a scratch `ORC_HOME`, not from the
   pasted evidence — including the ones most likely to hide a hole: `set_theme`
@@ -1712,7 +1712,7 @@ hand back to the implementer.
   gap (M7 reads, M14 receives) without covering the send.
 - Second item: PR #41 did not merge (`CONFLICTING`, `progress.md` vs PR #40).
   Discharged mid-review — code-puppy had already made the merge locally as
-  `ad96e41` and pushed it while the verdict was being written.
+  `662a5e2` and pushed it while the verdict was being written.
 - Round 2 verified both fixes by re-running the mutations rather than reading the
   claims: the original no-op now fails all three new seam tests, and the other
   three in the implementer's table are each caught by the test that owns them.
@@ -1732,7 +1732,7 @@ hand back to the implementer.
 
 ## Session — 2026-07-29/30 (implementer, #38 STAGE as a live circuit)
 
-- Branched `issue-38-stage-circuit` from fresh `main` @ `4eb784c`, after #37
+- Branched `issue-38-stage-circuit` from fresh `main` @ `358b625`, after #37
   merged, to avoid TUI conflicts. Five commits.
 - **First commit was the #13 carry-over, as the issue's comment required.** The
   baton froze mid-sweep because of *when* `run_shell_loop` repainted, not the
@@ -1786,7 +1786,7 @@ hand back to the implementer.
 
 ## Session — 2026-07-30 (implementer, #39 visual-identity carry-over from #13)
 
-- Branched `issue-39-trigger-tier-grep-gate` from fresh `main` @ `1406840`
+- Branched `issue-39-trigger-tier-grep-gate` from fresh `main` @ `b8a8d84`
   (after #38's PR #42 merged). Allowed paths: `rust/crates/orc-app/`,
   `docs/notes/`.
 - **The NO_COLOR decision was (a), collapse it — but per tier, not to nothing.**
@@ -1895,7 +1895,7 @@ hand back to the implementer.
 
 ## Session — 2026-07-30 (reviewer, #39 merged: post-merge verification + doc sync)
 
-- Mrigesh merged PR #47 (`1be106e`) without waiting on the re-review of the fix
+- Mrigesh merged PR #47 (`7444447`) without waiting on the re-review of the fix
   round, so the re-review was run against `main` after the fact instead of the
   branch before it. **Verdict it would have been: ACCEPT.** Recorded that way in
   `LOG.md` rather than as a clean 🧪→✅, because the order matters to anyone
@@ -1904,7 +1904,7 @@ hand back to the implementer.
   `cargo test --workspace` 0 failures (`orc-app` lib **101 passed**, matching the
   fix round's claimed 99 → 101), `RUSTDOCFLAGS="-D warnings" cargo doc` 0,
   `cargo build --release --locked` 0. No flake on this run.
-- Both blocking findings confirmed closed in `768fadc`, by reading the code not
+- Both blocking findings confirmed closed in `03115d6`, by reading the code not
   the claim: the module doc and `Theme::resolve` now scope their claims to what
   the theme map emits and name `pane_color` as the one colour outside it, and
   the gate compares `relative == Path::new(THEME_MAP)`.
@@ -1943,7 +1943,7 @@ hand back to the implementer.
 
 ## 2026-07-30 — Claude (implementer) — #45: a seated conductor dispatches to its own panes
 
-Branch `issue-45-seated-conductor` from `main` @ `887651f`, in a worktree at
+Branch `issue-45-seated-conductor` from `main` @ `17f0942`, in a worktree at
 `/Volumes/Mrigesh SSD/wt-issue-45` (the checkout is shared with concurrent
 sessions; `findings.md` records why HEAD moving under you is a real hazard).
 Pushed for review. Evidence:
@@ -2031,8 +2031,8 @@ Pushed for review. Evidence:
 
 ## 2026-07-31 — Claude (reviewer): #45 reviewed FIX, merged as PR #48
 
-Adversarial review of `issue-45-seated-conductor` at `da0d4e7`, per
-`docs/WORKFLOW.md`. Mrigesh merged it as `490487e` while the verdict stood at
+Adversarial review of `issue-45-seated-conductor` at `43a411c`, per
+`docs/WORKFLOW.md`. Mrigesh merged it as `f135e47` while the verdict stood at
 FIX, so both findings are now open on `main`.
 
 - **Five gates re-run from `rust/`, unpiped with exit codes captured:** `fmt`
@@ -2081,7 +2081,7 @@ FIX, so both findings are now open on `main`.
 
 ## 2026-07-31 — #49 phase 1 pushed: a delegation you can watch (Claude Code)
 
-Branch `issue-49-watchable-delegation` off `origin/main` @ `47a4b33`, worked in
+Branch `issue-49-watchable-delegation` off `origin/main` @ `e13b336`, worked in
 a `git worktree` on the internal disk (the checkout is shared with other agent
 sessions, and the external-SSD volume is the variable the documented wall-clock
 flakes turn on). **Phase 1 only** — defects 1, 4 and 5 plus the departure beat.
@@ -2167,7 +2167,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 ## Session — 2026-07-31 (Claude, reviewer): #49 phase 1 reviewed, fixed and merged; #52 docs
 
 - **Reviewed #49 phase 1 (PR #50) — FIX (4), all four fixed on the branch at
-  Mrigesh's direction, then merged as `32c5058`.** Gates re-verified on a
+  Mrigesh's direction, then merged as `636afb6`.** Gates re-verified on a
   *forced* re-lint rather than the warm `target/` the branch arrived with;
   paths, dependencies and dead code clean.
 - **Mutation battery: 15 broken guarantees, 13 caught** (the branch claimed
@@ -2197,7 +2197,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
   `orc-app`'s own `seen_history`; and `visual-identity.md` still led with the
   "no hold of its own" departure-beat claim the branch had walked back
   everywhere else.
-- **#52 merged (`e1b8e0a`), docs only:** every checkout, worktree and `target/`
+- **#52 merged (`63b69db`), docs only:** every checkout, worktree and `target/`
   now belongs on the external SSD, worktrees in
   `pi-orchestra-worktrees/issue-<N>`. The rule that matters is the mount check
   — an unmounted `/Volumes/Mrigesh SSD` is an ordinary directory on the system
@@ -2212,7 +2212,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 
 - **All three defects fixed in one branch**, as the issue requires. They shared a
   cause: `TaskSummary` was too thin to carry what the client needs, and nothing
-  owned telling the board that a supervisor died. Off `origin/main` @ `e82d894`,
+  owned telling the board that a supervisor died. Off `origin/main` @ `24eba67`,
   in a worktree at `pi-orchestra-worktrees/issue-51` on the SSD.
 - **Defect 1 (the eight-event cliff) was reproduced before it was fixed.** The
   probe drives a full contracted-and-reviewed lifecycle *past* the window — a
@@ -2326,7 +2326,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
   reviewed lifecycle is eleven entries, so the mirror of the original defect —
   silent double-animation instead of a silent stall — was live for every
   reviewed task with nothing to catch it.
-- **Round 2 (`4ae609b`): ACCEPT.** Both fixed, test-only — every hunk inside a
+- **Round 2 (`fbcbb69`): ACCEPT.** Both fixed, test-only — every hunk inside a
   `#[cfg(test)]` module, no production code moved, count unchanged at 348. The
   fix is stronger than the one proposed: it asserts the **watermark itself** at
   every board read rather than the packet count, which matters because on this
@@ -2354,7 +2354,7 @@ Phases 2 and 3 deliberately not started; Decision 1 is the product owner's.
 
 ## Session — 2026-07-31 (Claude): #49 phase 2 — durable incremental supervisor output
 
-Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `e3a91a5`.
+Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `0bc1255`.
 Defect 3 only. Evidence: `docs/notes/2026-07-31-issue-49-phase2-evidence.md`.
 
 - **The defect, measured first.** A real worker emitting a line every 200 ms for
@@ -2453,7 +2453,7 @@ it had propagated into the fix commit and the evidence note).
 5. **Dead code** — `read_progress`'s guarded `Err` arm was identical to its
    unguarded one; `progress_lengths` was public with zero callers.
 
-**Round 2 — ACCEPT (`b7f6954`).** All five fixed and each mutation re-run and
+**Round 2 — ACCEPT (`0aed94a`).** All five fixed and each mutation re-run and
 caught by the test written for it; the frozen-ordinal mutation now fails two.
 3a and 3b were fixed **in the code, not softened in the doc**. 365 passed.
 
@@ -2466,11 +2466,11 @@ dispatch tests skipped the rate went *up* (2/5), so the added test load is not
 the mechanism either. Not attributable. The assertion deserves its own issue —
 it should measure the delivery gap from the worker's own start, not a constant.
 
-**Merged as `2dc35db` with one follow-up outstanding:** the `capped` latch has
+**Merged as `cf1db85` with one follow-up outstanding:** the `capped` latch has
 no test. Removing it lets a declined over-long line be followed by a shorter one
 that fits, leaving the log with a hole — the one thing "byte N is byte N
 forever" forbids, and with variable-length lines it is the normal case at the
-cap. Test written and verified (passes on `b7f6954`, fails with the latch
+cap. Test written and verified (passes on `0aed94a`, fails with the latch
 removed). Carried into phase 3, which is the first code that reads the log.
 
 **Third occurrence of one pattern:** #50 shipped a test that could not fail, #51
@@ -2483,7 +2483,7 @@ for it.
 
 ## 2026-08-01 — Claude (implementer) — #49 phase 3: the brief sidecar
 
-Branch `issue-49-phase3-brief-overlay` off `origin/main` @ `c4871b4`.
+Branch `issue-49-phase3-brief-overlay` off `origin/main` @ `77b2f27`.
 Baseline re-measured on a clean worktree before touching anything: **365 passed,
 0 failed** — the number the prompt file names. Final: **392 passed, 0 failed**,
 three consecutive full-workspace runs, all five gates green.
@@ -2557,7 +2557,7 @@ body calling it "a new dependency" is stale.
 
 ## 2026-08-01 — Claude (implementer) — #49 phase 3: review FIX (6), all fixed
 
-Review of PR #57 / `110e826` ran **17 call-site mutations; 11 survived.** None
+Review of PR #57 / `4c1d913` ran **17 call-site mutations; 11 survived.** None
 was a wrong behaviour — the happy path and the wiring were correct. Every one was
 a guarantee the branch stated in prose and nothing held.
 
@@ -2608,7 +2608,7 @@ green, **395 passed / 0 failed**, `Cargo.lock` unchanged.
 
 **#49 is closed. All three phases in. #14 is the only original V1 item left.**
 
-Reviewed PR #57 (`110e826`) twice, in a detached worktree on the SSD with a cold
+Reviewed PR #57 (`4c1d913`) twice, in a detached worktree on the SSD with a cold
 `target/`, never in the implementer's tree.
 
 **Round 1 — FIX (6).** Five gates re-run cold: fmt, clippy (27.7 s, so it really
@@ -2640,7 +2640,7 @@ code; `DispatchBrief` claimed unknown fields were "preserved" without the map
 that would preserve them; and `clock` panicked on a non-ASCII stamp — reproduced,
 `byte index 11 is not a char boundary` — on the render thread.
 
-**Round 2 — ACCEPT.** All six fixed in `52852b4`. I re-ran every one of the
+**Round 2 — ACCEPT.** All six fixed in `1c56f11`. I re-ran every one of the
 eleven survivors and broke two of the fixes again as regression checks:
 **thirteen mutations, thirteen caught**, each by the test whose docstring names
 it. 395 passed / 0 failed, three consecutive runs, five gates green. The seam fix

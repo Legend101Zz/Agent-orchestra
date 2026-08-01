@@ -1,6 +1,6 @@
 # #38 evidence — STAGE as a live circuit
 
-Branch `issue-38-stage-circuit`, five commits off `main` @ `4eb784c`.
+Branch `issue-38-stage-circuit`, five commits off `main` @ `358b625`.
 Routing design: `2026-07-29-stage-circuit-topology.md`.
 
 ## Gates
@@ -28,7 +28,7 @@ touches exactly one crate — `orc-app` — and both flakes are elsewhere.
    | | passed |
    |---|---|
    | `issue-38-stage-circuit` | 9/10 |
-   | `origin/main` @ `4eb784c` (worktree, same volume) | 9/10 |
+   | `origin/main` @ `358b625` (worktree, same volume) | 9/10 |
 
    Identical, so pre-existing. It is a **fourth** member of the bounded-probe
    flake family `task_plan.md` records, and was not named there; added.

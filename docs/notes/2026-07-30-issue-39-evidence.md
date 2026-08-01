@@ -1,6 +1,6 @@
 # Issue #39 — visual-identity carry-over from #13: evidence
 
-Branch `issue-39-trigger-tier-grep-gate`, from `main` @ `1406840`.
+Branch `issue-39-trigger-tier-grep-gate`, from `main` @ `b8a8d84`.
 Two findings, one decision, five gates. Everything below was run, not reasoned.
 
 ---
@@ -230,13 +230,13 @@ inferred from the diff), plus its 4 integration tests. One `cargo test
 (already filed in `task_plan.md`, re-observed on #38); it passed on re-run and
 is in a crate this branch does not touch.
 
-### Re-gated after rebasing onto `9431f32`
+### Re-gated after rebasing onto `1a5d42c`
 
 `docs/post-38-merge` merged as PR #46 while this branch was open, so the branch
 was rebased onto the new `main`. The only conflict was three adjacent
 status-board rows in LOG.md: `main`'s `#38` (now ✅) and its new `#45` row were
 kept, and only the `#39` row is this branch's. `main` changed **no code** between
-`1406840` and `9431f32`, and the nine non-LOG files are byte-identical to the
+`b8a8d84` and `1a5d42c`, and the nine non-LOG files are byte-identical to the
 tree gated above — verified with `git diff <pre-rebase> -- . ':(exclude)LOG.md'`
 returning empty.
 

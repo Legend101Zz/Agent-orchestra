@@ -2,9 +2,9 @@
 
 One session. The block below the line is copy-paste ready.
 
-State: `main` @ `2dc35db`. **#49 phase 2 merged as PR #56** (review FIX (5) →
-all fixed in `881fb37` → re-review ACCEPT), #51 as PR #53, #50 (#49 phase 1) as
-`32c5058`, #52 (SSD rule) as `e1b8e0a`. Sessions 1 (#51) and 2 (phase 2) have
+State: `main` @ `cf1db85`. **#49 phase 2 merged as PR #56** (review FIX (5) →
+all fixed in `3206006` → re-review ACCEPT), #51 as PR #53, #50 (#49 phase 1) as
+`636afb6`, #52 (SSD rule) as `63b69db`. Sessions 1 (#51) and 2 (phase 2) have
 been removed from this file per the maintenance rule at the bottom.
 
 **Phase 3 is the last one, and it closes #49** — which unblocks #14 (README +
@@ -21,7 +21,7 @@ It is what stops a line declined for not fitting under `PROGRESS_LOG_MAX_BYTES`
 being followed by a *shorter* line that does fit — which leaves the log with a
 **hole**, the one thing "byte N is byte N forever" forbids, and with
 variable-length lines that is the ordinary case at the cap. Remove the latch and
-the whole suite passes. The test exists and is verified (it passes on `b7f6954`
+the whole suite passes. The test exists and is verified (it passes on `0aed94a`
 and fails with the latch removed); it is pasted in the re-review comment on #49.
 **Land it in phase 3**, because phase 3 is the first code that *reads* the log
 and therefore the first that a hole would lie to.

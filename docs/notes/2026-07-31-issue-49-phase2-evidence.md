@@ -1,6 +1,6 @@
 # Issue #49 phase 2 — partial output that is durable before the worker exits
 
-Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `e3a91a5`.
+Branch `issue-49-phase2-incremental-output`, off `origin/main` @ `0bc1255`.
 Defect 3 only. Phase 3 (the reveal) is untouched and stays scoped separately.
 
 Everything below was run on this machine, not reasoned about. Where a number

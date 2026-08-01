@@ -150,12 +150,12 @@ Re-run on equal footing — the same commit checked out to `/tmp`:
 external SSD : background_dispatch  ~4.5-4.8s, 1 failure in 5
 internal disk: background_dispatch  3.28-3.49s, 0 failures in 8
 internal disk: main @ 8b47bf1       3.39-3.65s, 0 failures in 8
-internal disk: full workspace       267 passed, 0 failed  (x3, commit 2112865)
-internal disk: full workspace       267 passed, 0 failed  (x4, merge ad96e41)
+internal disk: full workspace       267 passed, 0 failed  (x3, commit d4e80cd)
+internal disk: full workspace       267 passed, 0 failed  (x4, merge 662a5e2)
 ```
 
 **And the decisive one: unmodified `main` flakes the same way on this storage.**
-A `main` worktree built on the SSD (`094e475`, no changes from this branch) fails
+A `main` worktree built on the SSD (`1709350`, no changes from this branch) fails
 `quota_guard::cli_dispatch_at_cap_is_queued_then_drains_and_the_cap_setter_persists`
 — one of the exact tests the branch failed on — in 1 of 6 full-workspace runs.
 The earlier "main passed 6/6" was on internal disk, which is what made the branch

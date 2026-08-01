@@ -57,7 +57,7 @@ knowingly), #59 (the `CONDUCTOR DOWN` overlay has never been visible), #60 (the
 1.5 s wall-clock assertion that has cost three review rounds an A/B), #61
 (`clip_ellipsis` bypasses the glyph register on the ASCII tier).
 
-**#49 phase 3 — the brief sidecar (merged 2026-08-01, PR #57, `d685525`) — and #49 is now closed.** `<leader> i` opens a
+**#49 phase 3 — the brief sidecar (merged 2026-08-01, PR #57, `ecf0015`) — and #49 is now closed.** `<leader> i` opens a
 band on a worker's card showing the brief that worker was actually sent, plus
 the exact counters and newest complete line of what it has produced. Acceptance
 checks 9 (zoom) and 10 are both answered explicitly, which is what closes #49.
@@ -73,7 +73,7 @@ Review returned **FIX (6)**: seventeen call-site mutations were run and **eleven
 survived**, all on one seam — `resolve_reveals` and `reveal::compose` had zero
 test callers, because every render test populated `state.reveals` by hand. The
 sharpest was deleting the whole feature from `absorb_board`, which left 392
-tests green with `⌃g i` refusing on every pane. All six were fixed in `52852b4`
+tests green with `⌃g i` refusing on every pane. All six were fixed in `1c56f11`
 and the re-review was **ACCEPT**: all eleven mutations re-run and caught, plus
 two regression checks, 13 for 13.
 
@@ -92,7 +92,7 @@ Three pre-existing defects also found and filed rather than folded in: #59, #60,
 #61.
 
 **#51 is merged (2026-07-31, PR #53) — all three defects, one branch.** Review
-returned FIX (2); both were fixed in `4ae609b` and the re-review was ACCEPT.
+returned FIX (2); both were fixed in `fbcbb69` and the re-review was ACCEPT.
 Defect 1's cliff is closed at the seam rather than at
 the client: `TaskSummary` gains `history_total`, the watermark becomes an
 absolute index, and `orc_proto::TASK_HISTORY_WINDOW` is the named constant whose
@@ -118,7 +118,7 @@ the branch's own set had missed:** reverting the watermark assignment *alone*,
 leaving the `skip` arithmetic correct, left the acceptance-check test green,
 because a length and an absolute index agree until the *second* crossing of the
 window. The combined revert was caught; only isolating the two lines exposed it.
-Fixed in `4ae609b` by asserting the watermark directly at every board read and
+Fixed in `fbcbb69` by asserting the watermark directly at every board read and
 driving the real eleven-entry reviewed lifecycle — plus two defects found while
 fixing it, a daemon test that under-drove the lifecycle it claimed to measure
 and an AC7 test that raced #50's board-before-record ordering one run in ten.
@@ -147,9 +147,9 @@ contracted-and-reviewed ones do not. **Run #51 before #49 phase 2** — phase 2
 builds more animation on top of a watermark that has already stopped moving.
 *(Done: #51 merged as PR #53, so phase 2 is unblocked and the watermark moves.)*
 
-**#49 phase 2 MERGED (2026-07-31, PR #56 as `2dc35db`) — a worker's partial
+**#49 phase 2 MERGED (2026-07-31, PR #56 as `cf1db85`) — a worker's partial
 output is durable while it is still working.** Defect 3. Review **FIX (5)** →
-all fixed in `881fb37` → re-review **ACCEPT**. The
+all fixed in `3206006` → re-review **ACCEPT**. The
 supervisor's drain threads now mirror each stream verbatim to an append-only
 per-attempt log beside the dispatch record, with a separate orchestrator-owned
 counters journal; neither is ever fsynced, and neither touches the task board or
@@ -177,7 +177,7 @@ adapter has no extractor).
 shorter one that fits — which would leave the log with a *hole*, the one thing
 "byte N is byte N forever" forbids. It is correct in the code and **held by no
 test**; removing it passes the whole suite. The test is written and verified
-(passes on `b7f6954`, fails with the latch removed) and is named in the
+(passes on `0aed94a`, fails with the latch removed) and is named in the
 re-review. Phase 3 is the natural place to land it, because phase 3 is the first
 code that *reads* the log and therefore the first that a hole would lie to.
 
@@ -266,7 +266,7 @@ family rather than registry key, so two model profiles of one CLI may alternate
 implementer/reviewer roles but the report stays `self_review` — never
 manufactured independence.
 
-**#45 merged (2026-07-31, PR #48 as `490487e`) — reviewed FIX, merged with both
+**#45 merged (2026-07-31, PR #48 as `f135e47`) — reviewed FIX, merged with both
 findings open.** The headline was independently verified against the real
 `orch::delegate` (no second session; the only harness-matching seated pane
 selected without `--pane`; the board and both animation events landing on it),
@@ -333,7 +333,7 @@ Two unfiled follow-ups from #37's review, both worth their own issue:
   HOME, SCORE and RUNS — leaves `orc-app` at 69 passed, 0 failed; so does
   dropping the STAGE `LeaderAction::Theme` arm. The tests drive `route_leader` /
   `route_runs_key` / `cycle_theme` directly, one level beneath the dispatch that
-  decides whether they are reached. Both lines came in with `2112865`, and the
+  decides whether they are reached. Both lines came in with `d4e80cd`, and the
   altitude matches the rest of the crate, so this is a codebase-wide property
   rather than a #37 defect — it was deliberately not made a third fix round
   (ANTI-SLOP rule 4). One `handle_raw_event`-level test that presses real bytes

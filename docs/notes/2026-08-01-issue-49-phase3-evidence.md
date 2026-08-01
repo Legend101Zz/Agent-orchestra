@@ -1,6 +1,6 @@
 # Issue #49 phase 3 — the in-pane reveal
 
-Branch `issue-49-phase3-brief-overlay`, off `origin/main` @ `c4871b4`.
+Branch `issue-49-phase3-brief-overlay`, off `origin/main` @ `77b2f27`.
 Phase 3 is the last of the three and it closes #49.
 
 Everything below was run on this machine. Where a number decided a design
@@ -12,7 +12,7 @@ around silently.
 
 ## 1. Baseline, before anything was touched
 
-`cargo test --workspace` on a clean worktree at `c4871b4`:
+`cargo test --workspace` on a clean worktree at `77b2f27`:
 
 ```
 passed=365 failed=0
@@ -444,7 +444,7 @@ itself"* — and nothing was built on it.
 
 ### The reviewer's correction to their own test, and why it mattered
 
-They wrote the missing test, verified it on `110e826`, and it killed 5 of 7 —
+They wrote the missing test, verified it on `4c1d913`, and it killed 5 of 7 —
 but **not** mutation 1, because it called `resolve_reveals` directly, which is
 the same one-level-short mistake being reported. `absorb_board` hardcoded
 `orc_core::dispatch::read_briefs`, so it could not be driven at all.

@@ -1,6 +1,6 @@
 # Issue #49 phase 1 — a delegation you can watch
 
-Branch `issue-49-watchable-delegation`, off `origin/main` @ `47a4b33`.
+Branch `issue-49-watchable-delegation`, off `origin/main` @ `e13b336`.
 Everything below was run, not reasoned about. Phase 1 only: defects 1, 4 and 5
 plus the departure beat. Phases 2 and 3 are deliberately untouched — see
 "What this does not do".

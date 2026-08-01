@@ -1,6 +1,6 @@
 # Issue #45 — a conductor seated in the TUI dispatches to its own panes: evidence
 
-Branch `issue-45-seated-conductor`, from `main` @ `887651f`.
+Branch `issue-45-seated-conductor`, from `main` @ `17f0942`.
 Twelve acceptance checks, five gates. Everything below was run, not reasoned.
 
 ---
@@ -423,7 +423,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps     0 warnings
 cargo build --release --locked                                Finished
 ```
 
-Baseline on `main` @ `887651f` was green before any change.
+Baseline on `main` @ `17f0942` was green before any change.
 
 **One flake seen and attributed, not waved away.** An early full-workspace run
 hit `background_dispatch.rs::delegate_confirms_while_running_and_cap_one_queues_until_real_exit`
