@@ -1,7 +1,7 @@
 # 🎼 pi-orchestra V1 — Mrigesh's log
 
 *The one file the human reads. Status board + the exact prompt to run next +
-plain-English ship log. Your responsibilities: [docs/ANTI-SLOP.md](docs/ANTI-SLOP.md).
+plain-English ship log. Your responsibilities: [ANTI-SLOP.md](ANTI-SLOP.md).
 Agents: update this file as instructed in AGENTS.md — status column and
 ship-log entries are part of finishing an issue.*
 
@@ -39,7 +39,7 @@ ship-log entries are part of finishing an issue.*
 | [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | ✅ | merged (PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56), `cf1db85`) · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `3206006` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · **merged without the one follow-up named in the re-review: the `capped` latch is still held by no test** — it guards the log's contiguous-prefix claim, the test is written and verified, and it should be picked up in phase 3 · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
 | [#49 phase 3](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | The brief sidecar: press `<leader> i` on a worker and see the brief that worker was actually sent, plus what it has really produced so far | ✅ | merged (PR [#57](https://github.com/Legend101Zz/Agent-orchestra/pull/57), `ecf0015`) · **closed #49**, so #14 is unblocked · 5 gates green, **392 passed 0 failed** ×3 (baseline 365) · **the issue's premise was false and is corrected**: `DispatchRecord.prompt` was reachable from the client by no path — not on `TaskSummary`, not on `DispatchSummary`, and `~/.orchestra/dispatches` is watched by nothing · new `DispatchBrief`/`read_briefs` reader that **cannot** reconcile (the existing readers kill worker pids and write the board) and has **no `stdout` field**, so #55's 400 KB is structurally unreachable · acceptance **9** (zoom: brief survives, wire is stated) and **10** answered · tachyonfx evaluated and **declined** on its timing model · carried-over `capped`-latch test landed, plus the unheld `note`-frame `stderr` counters · one pre-existing defect found and reported not fixed: the `conductor_down` overlay is drawn before the cell blit and erased by it in the same frame, covered by no test · review **FIX (6)** → **all six fixed**: 17 call-site mutations run, **11 survived**, now **11/11 caught**. The seam (`resolve_reveals` / `reveal::compose`) had zero test callers — every render test populated `state.reveals` **by hand** — so deleting the whole feature from `absorb_board` left 392 green with `⌃g i` refusing on every pane. Fixed by threading the reader through `absorb_board` as a parameter, which is what lets one call kill both that and the watermark guard (the reviewer's own test could not, and they said so). Plus: the worker-bytes `sanitise` path driven with a real forged badge in a real byte log; `compose` proved to actually produce `Undeclared`; the false row-skip docstring corrected; the themed `Block` beside `Clear` now held; `DispatchBrief` given the `extra` map it claimed to have; and the `clock` panic on a non-ASCII stamp reproduced and fixed. **395 passed 0 failed** ×3, five gates green, `Cargo.lock` unchanged · re-review **ACCEPT** (13/13 mutations caught, counting two regression checks) · **merged with one item unfixed, and it is the reviewer's own error: the `#[serde(flatten)] extra` added for finding 5 puts #55's 409,600-byte `stdout` back within reach of `DispatchBrief` — `extra["stdout"]`, measured — eleven lines below the docstring calling that guarantee "structural, not a rule someone has to remember". `DispatchBrief` is never serialized, so the map preserves nothing. Filed as #58.** |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
-| [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
+| [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | 👀 | PR [#66](https://github.com/Legend101Zz/Agent-orchestra/pull/66), `issue-14-readme-architecture` · Decision 1 answered on the issue (archive); README rewritten, `docs/architecture/` added, `docs/` restructured, new recordings at `bed5166` · 5 gates green, 395 passed 0 failed · three defects found and filed as **#65**, not fixed · **review FIX (5) → all addressed in `034141c`**: the link gate exited 1 on a clean clone (reproduced and fixed hermetically), both `record.sh` pkill patterns were dead so every tape leaked a daemon, 1.8 MB of committed media nobody saw, `orc-core` is 26 modules not 24; one finding pushed back with evidence — `visual-identity` is cited by 7 files over 8 lines, the 8th names it in prose without a path |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
 
 **#45 pushed (2026-07-30, `issue-45-seated-conductor`) — the `delegate:` you
@@ -109,7 +109,7 @@ demo is yours to do at test time. Everything underneath it is proven against
 the real code rather than a stand-in — no second session, the right seated
 worker chosen without being told which, the board pointing at that pane, and
 both animation events derived from a real dispatch. Five gates green, 318
-tests. Evidence: `docs/notes/2026-07-30-issue-45-seated-conductor.md`.
+tests. Evidence: `docs/archive/notes/2026-07-30-issue-45-seated-conductor.md`.
 
 > **Reviewed 2026-07-31 — FIX (👀→🔨).** Headline verified independently through
 > the real `orch::delegate`: no second session, the only harness-matching seated
@@ -408,12 +408,12 @@ disks.
 ## Prompts you run
 
 > **▶ Next up, copy-paste ready:**
-> [`docs/prompts/2026-08-01-issue-14-readme-and-architecture.md`](docs/prompts/2026-08-01-issue-14-readme-and-architecture.md)
+> [`docs/archive/prompts/2026-08-01-issue-14-readme-and-architecture.md`](docs/archive/prompts/2026-08-01-issue-14-readme-and-architecture.md)
 > — **#14, README + architecture docs.** Every V1 feature is
 > now in. #49 closed on 2026-08-01 with phase 3 (PR #57), so #14 is the last
 > original V1 item and all that stands between here and launch. The phase-3
 > prompt is retired at
-> [`docs/prompts/2026-08-01-issue-49-phase3-retired.md`](docs/prompts/2026-08-01-issue-49-phase3-retired.md);
+> [`docs/archive/prompts/2026-08-01-issue-49-phase3-retired.md`](docs/archive/prompts/2026-08-01-issue-49-phase3-retired.md);
 > its preamble (worktree-on-the-SSD, mount check, mutation-check rule, flake A/B
 > rule) is the part to copy into the next session's prompt. Four follow-ups were
 > filed out of #49's review rounds (#58–#61) and none of them block #14. The
@@ -455,8 +455,8 @@ then inside code-puppy:
 
 ```
 You are the adversarial reviewer for pi-orchestra (run from the repo
-checkout — see docs/WORKFLOW.md for where it lives), per
-docs/WORKFLOW.md. Review branch issue-<N>-* against the task contract in
+checkout — see WORKFLOW.md for where it lives), per
+WORKFLOW.md. Review branch issue-<N>-* against the task contract in
 GitHub issue #<N>:
 1. git fetch, check out the branch, run all five gates from AGENTS.md.
 2. For EVERY acceptance check, run it yourself and try to make it fail —
@@ -488,13 +488,13 @@ fix list from your previous review comment on issue #<N>, re-run the gates,
 and confirm nothing new broke or crept in (git diff against the previously
 reviewed commit). Verdict ACCEPT or FIX on the issue; update LOG.md status.
 If this is already the second fix round and it still fails: STOP and
-recommend re-scoping the issue instead (docs/ANTI-SLOP.md rule 4).
+recommend re-scoping the issue instead (ANTI-SLOP.md rule 4).
 ```
 
 ### 5. After YOUR local test passes → merge
 
 ```bash
-cd "$PIO_REPO" && git fetch origin   # see docs/WORKFLOW.md for the checkout path
+cd "$PIO_REPO" && git fetch origin   # see WORKFLOW.md for the checkout path
 git checkout issue-<N>-<slug> && ./install.sh   # try the feature yourself
 git checkout main && git merge --no-ff issue-<N>-<slug> && git push
 ```
@@ -506,6 +506,65 @@ Then tick the box on epic [#15](https://github.com/Legend101Zz/Agent-orchestra/i
 2-4 sentences — what can pi-orchestra do now that it couldn't before, what
 you did NOT do, and what this unblocks. Claude reviewers append a one-line
 verdict under the entry.*
+
+### 2026-08-01 — The repo can now be read by someone who has never seen it, issue #14 (Claude)
+
+The short version: **the README described a program that no longer exists, and
+`docs/` was not documentation.** Both are fixed, and the fixing turned up three
+real bugs.
+
+Every stale line in the old README was true when it was written. It said there
+were two themes; there are three, and the one it never mentioned is the default.
+Its key list was missing four entries. Its screenshots were from 12 July and
+showed a UI that predates the whole visual identity, the STAGE circuit, the
+seated conductor and all three phases of watchable delegation. So every claim in
+the new one was checked against the code rather than against the old text — and
+that is how the extra two missing keys and the missing third shell helper turned
+up, neither of which the issue knew about.
+
+**`docs/` used to open on 57 working files and 17 loose images.** It now opens on
+four directories: the architecture docs, the design sheet, current media, and an
+archive. Nothing was deleted. The archive keeps every evidence note the ship log
+cites, because a citation you cannot follow is a citation nobody follows — and it
+opens with a table saying exactly where each old path went, since the citations
+in merged pull requests are plain text that cannot be edited and would otherwise
+dead-end.
+
+**`docs/architecture/` is the new part**, seven pages with diagrams that GitHub
+draws itself. The centrepiece is the one picture that was missing: what actually
+happens between typing `delegate:` and an answer coming back — the brief going
+out, the separate process that owns the worker, the files it writes while it
+works, and what happens when that process is killed. That has been the hardest
+thing in this codebase to understand from the source since it was written.
+
+**Three bugs, found by doing rather than reading, filed as #65 and deliberately
+not fixed here.** The rename from the old command name to `pio` never finished:
+the welcome screen a new user reads still names the old daemon, two error
+messages still tell you to run a command that no longer exists, and — the one
+that matters — the program looks for its own daemon under the old name. That
+last one means the "build it without installing" instructions in the README have
+never worked: on a machine that has installed pi-orchestra before it quietly
+starts the *old installed* daemon and then refuses to talk to it, and on a fresh
+machine it cannot start one at all. The README now says so rather than repeating
+the instruction. Two of those were invisible to the existing check because two
+tests assert the old wording.
+
+**The recordings are real and current**, made at this commit, including one with
+colour switched off entirely — that tier is a promise this project makes and
+showing it is the honest thing. The delegation shown is typed but not sent, on
+purpose: the point is what lights up, and sending it would spend real money on an
+answer nobody chose. The conductor on screen is Codex rather than Claude Code
+because Claude Code's opening panel prints the account holder's email, and that
+is not something to publish.
+
+**And the pipeline was run, not described.** A real isolated delegation: the
+hand-off came back in 0.13 seconds while the worker kept going for twelve, then
+reported success — with the worker's own words in one file and our counters in
+another, which is the separation the design has always claimed and this is the
+first time it has been shown end to end in the docs.
+
+What I did NOT do: change any behaviour. Every Rust edit in this branch is a
+comment repointing a moved path. Five gates green, 395 tests, same as before.
 
 ### 2026-07-31 — The board stops lying in three places, issue #51 (Claude)
 
@@ -826,7 +885,7 @@ deleted rather than tested, because a field that cannot vary is not data.
 could not fail (#50, #51, here). The common shape is now explicit in the notes:
 each time, the test asserted against a helper standing in for the path under
 test. Also took the reviewer's process suggestion — `AGENTS.md` and
-`docs/WORKFLOW.md` now say outright that an allowed-path list fences code and
+`WORKFLOW.md` now say outright that an allowed-path list fences code and
 never the four process files, so the next session is not made to choose between
 two rules.
 
@@ -912,7 +971,7 @@ reason is written down where the next person will read it.
 Five gates green, 335 tests, 0 failed. Every guarantee was broken on purpose
 first to prove its test bites — eleven deliberate breaks, eleven caught.
 Evidence, including the two claims I had to walk back:
-`docs/notes/2026-07-31-issue-49-watchable-delegation.md`.
+`docs/archive/notes/2026-07-31-issue-49-watchable-delegation.md`.
 
 > **Reviewed 2026-07-31 — 👀→🔨, FIX (3).** Gates re-verified (forced re-lint,
 > 3× clean runs at 335/0); 15 mutations run, 13 caught. The code is right; the
@@ -1267,7 +1326,7 @@ files all speak the new name now, and the built binaries were verified end to en
 (`pio version`, `piod --help`, and a full install/uninstall in a scratch folder).
 I did NOT rename the internal code folders, the `~/.orchestra` data directory, or
 the `ORC_*` settings (those stay for compatibility), and I left one dated
-historical guide (`docs/guide.html`) untouched on purpose. On this machine's
+historical guide (`docs/archive/guide.html`) untouched on purpose. On this machine's
 freshly installed Rust 1.97 the clippy gate first tripped on three pre-existing
 warnings in files the rename did not touch (the repo targets Rust 1.91, where
 they stay quiet); with your OK I cleaned up all three in this same PR, so now
@@ -1278,7 +1337,7 @@ work (#3, #5, #9, #13) without every branch colliding on the rename.
 
 ### 2026-07-22 — Foundations research, issue #16 (Claude Code)
 Every big technical choice for V1 is now decided and written down in one
-place (`docs/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md`),
+place (`docs/archive/superpowers/specs/2026-07-22-v1-crate-and-prior-art-decisions.md`),
 so the build issues don't each re-argue them: official MCP SDK for the new
 server, plain `git` commands for worktrees, `backon` for retries, `schemars`
 for schemas, `insta` for UI snapshots. The exact commands to drive Claude,

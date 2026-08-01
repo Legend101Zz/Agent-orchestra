@@ -11,9 +11,9 @@ names (`orc-core` etc.), `ORC_*` env vars, and `~/.orchestra` stay.
 
 ## Read first, in this order
 
-1. `docs/WORKFLOW.md` — the issue → branch → review → merge loop. Follow it.
+1. `WORKFLOW.md` — the issue → branch → review → merge loop. Follow it.
 2. `task_plan.md` — current program status and issue map.
-3. `docs/superpowers/specs/2026-07-22-v1-universal-delegation-design.md` —
+3. `docs/archive/superpowers/specs/2026-07-22-v1-universal-delegation-design.md` —
    the V1 product spec (positioning, concepts, roadmap).
 4. `docs/design/visual-identity.md` — for ANY TUI/visual work: semantic color
    slots (nocturne/ember/phosphor), glyph register, baton spec. Widget code
@@ -89,7 +89,7 @@ cargo build --release --locked
 - **An issue's allowed-path list is a scope fence for *code*. It never gags the
   process files.** `progress.md`, `LOG.md`, `task_plan.md` and `findings.md`
   live at the repo root and are always in scope, because this file and
-  `docs/WORKFLOW.md` require updating them on every issue — the first two
+  `WORKFLOW.md` require updating them on every issue — the first two
   unconditionally, `task_plan.md` as item 2 of the reading list, `findings.md`
   as the home for durable decisions. Write an issue's allowed paths as if those
   four were listed, and do not make a session choose between two rules.

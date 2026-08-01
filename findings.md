@@ -2,7 +2,7 @@
 
 Older findings: the v3-rust review findings that previously lived here are
 resolved (v4 Phases 0–6) and preserved in git history and
-`docs/reviews/2026-07-11-v3-rust-review.md`.
+`docs/archive/reviews/2026-07-11-v3-rust-review.md`.
 
 ## 2026-07-22 — V1 program setup
 
@@ -98,7 +98,7 @@ when it was written and is not any more. Verified today: `pi-orchestra` tracks
 `origin/main` and holds the merge of PR #47; `Agent-orchestra` is parked on the
 unmerged `issue-12-single-harness-mode` branch, roughly the #12 era. Both have
 the same remote (`Legend101Zz/Agent-orchestra`), which is what makes the mix-up
-easy. `docs/WORKFLOW.md` carried the same stale line and is corrected too.
+easy. `WORKFLOW.md` carried the same stale line and is corrected too.
 
 **The installed links are split across the two checkouts, and nobody meant
 that.** Measured 2026-07-30:
@@ -854,3 +854,69 @@ claimed the blit skipped the band's rows and named restoring `0..rows` as a
 required-failing mutation. The row-skip had been deliberately removed and the PR
 body said so — leaving a docstring that contradicted the code, the PR, and
 itself, and named a no-op as binding. Corrected rather than softened.
+
+## 2026-08-01 — #14: archiving vs deleting, and what decides it
+
+**Decision: `docs/archive/`, not deletion.** The reasoning that actually settles
+it is not "deleting breaks the evidence trail" — deleting and archiving break the
+*off-repo* trail equally — but an asymmetry in how the off-repo citations are
+written.
+
+The five internal directories are cited from merged PR bodies and review threads
+as **plain backticked paths, not `/blob/<sha>/` permalinks**:
+
+```
+$ gh pr view 57 --json body -q .body | grep -oE '`?docs/[a-z]+/[^ `)]*'
+`docs/notes/2026-08-01-issue-49-phase3-evidence.md
+```
+
+A permalink survives any move. A bare path is resolved by a human navigating the
+tree, and a merged PR body cannot be repointed by a later branch. So:
+
+- **delete** → the path resolves to nothing, and `git log` is the only recourse
+- **archive** → the path resolves to nothing *at that location*, but the file is
+  one directory deeper under an unchanged basename, so `grep`, `git ls-files` and
+  GitHub's `t` finder all still reach it
+
+Archive is the option that degrades gracefully for the citations that cannot be
+fixed. That is why `docs/archive/README.md` leads with an explicit old→new table
+rather than merely saying "not maintained": arriving from a 2026-07 PR body is
+the case it exists to serve.
+
+**A frozen archive legitimately contains dangling citations.** Some archived
+notes cite tooling deleted with the Python implementation. Those are historical
+statements about what existed when written; rewriting them would falsify the
+record. `tools/check-doc-links.sh` therefore splits the two cases: a citation
+*from* `docs/archive/` *to* something outside it that no longer exists is
+reported as historical and does not fail; a citation *within* the archive must
+still resolve, which is what keeps the archive usable rather than merely present.
+
+## 2026-08-01 — #14: verify against the code, including the issue's own numbers
+
+The issue was written to warn against trusting the old README. Worth recording
+that **the issue itself carried a wrong claim of exactly that kind**: its
+per-crate line counts sum to 72,734 against its own stated workspace total of
+48,892, and they invert the two largest crates. A plain `.rs` line count
+reproduces 48,892 exactly.
+
+So `docs/architecture/crate-map.md` publishes the counting command next to the
+table. A number nobody can re-derive is the next stale claim.
+
+Generalised: **a task contract is a source of claims too.** Check its figures the
+same way you check the artefact's.
+
+## 2026-08-01 — #14: a naming gate that cannot tell documenting from teaching
+
+`readme_skills_and_integrations_have_no_user_facing_orc` scans `README.md` (and
+the skills/codex/shell integration files) for bare pre-#17 command names. It
+fired on the new README, correctly: the README named those commands in order to
+*document* the incomplete rename filed as #65.
+
+The gate cannot distinguish "documenting the retired name" from "teaching the
+retired name", and **extending `KEPT_TOKENS` to accommodate prose would have
+weakened the only thing preventing the rename from drifting back.** The retired
+names came out of the README instead; the reproduction and the workaround live in
+#65 and in `docs/architecture/`, neither of which the gate scans.
+
+The general rule: when a gate fires on documentation *about* the thing it guards,
+move the documentation, not the gate.

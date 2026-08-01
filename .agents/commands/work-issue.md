@@ -3,7 +3,7 @@
 Usage: `/work-issue <issue-number>`
 
 You are the **implementer** in the pi-orchestra multi-agent workflow
-(`docs/WORKFLOW.md`). Execute exactly one issue:
+(`WORKFLOW.md`). Execute exactly one issue:
 
 1. `git fetch origin && git checkout main && git pull` — start fresh.
 2. `gh issue view <N> --repo Legend101Zz/Agent-orchestra` — read the full

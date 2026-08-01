@@ -4,7 +4,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DURATION="${1:-7200}"
-OUT="${2:-$ROOT/docs/notes/phase2-soak-data}"
+# Fresh soak output is generated evidence, so it must not default into
+# `docs/archive/`, which is a frozen record (issue #14). `rust/target/` is
+# gitignored, so a soak no longer dirties the tree either.
+OUT="${2:-$ROOT/rust/target/soak-data}"
 if [ "$DURATION" -lt 7200 ] && [ "${ORC_SOAK_TEST:-0}" != 1 ]; then
   echo "refusing to label ${DURATION}s as the required hours-long soak" >&2
   exit 2

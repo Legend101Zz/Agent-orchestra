@@ -10,7 +10,7 @@
 //! identical, 777 B, for the whole run.
 //!
 //! Every test here names the guarantee it holds and was checked by breaking
-//! that guarantee on purpose — see `docs/notes/2026-07-31-issue-49-phase2-evidence.md`
+//! that guarantee on purpose — see `docs/archive/notes/2026-07-31-issue-49-phase2-evidence.md`
 //! for the mutation table.
 
 use std::fs;
@@ -756,7 +756,7 @@ fn the_progress_field_is_additive_in_both_directions() {
 ///
 /// Follows the precedent of `orc-app`'s
 /// `six_workers_all_producing_still_repaint_inside_one_frame`: the measurement
-/// is printed and recorded in `docs/notes/`, and the assertion is a loose
+/// is printed and recorded in `docs/archive/notes/`, and the assertion is a loose
 /// ceiling rather than a tight budget, because this repo already has
 /// storage-dependent wall-clock flakes and a tight bound here would be another.
 ///

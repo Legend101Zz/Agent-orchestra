@@ -8916,7 +8916,7 @@ mod tests {
         // The ceiling is deliberately loose — this repo already has three
         // storage-dependent wall-clock flakes on an external-SSD checkout, and
         // a tight budget here would be a fourth. The measurement, not the
-        // bound, is the evidence; it is printed and recorded in docs/notes/.
+        // bound, is the evidence; it is printed and recorded in docs/archive/notes/.
         const FRAMES: u32 = 200;
         let mut state = StageState::new(bench(6), ThemeName::Nocturne.into(), GLYPHS);
         for index in 1..7 {
