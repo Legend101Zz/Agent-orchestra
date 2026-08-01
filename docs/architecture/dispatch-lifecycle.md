@@ -11,15 +11,16 @@ Read [the two axes](#the-two-axes) first if you read nothing else.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant B as ◆ conductor<br/>(in its pane)
+    participant B as ◆ conductor (in its pane)
     participant C as pio orch delegate
-    participant G as spawn_guard<br/>(durable leases)
-    participant S as detached supervisor<br/>(pio _dispatch_exec)
-    participant W as worker process<br/>(headless, own cwd)
-    participant D as ~/.orchestra<br/>(records + board)
+    participant G as spawn_guard (durable leases)
+    participant S as detached supervisor
+    participant W as worker process (headless)
+    participant D as ~/.orchestra (records + board)
     participant T as STAGE
+    participant R as any process listing dispatches
 
-    B->>C: delegate: "bounded brief"
+    B->>C: delegate, with a bounded brief
     C->>D: read session, task, registry
     Note over C,D: refuses unless the task exists,<br/>is running, and has an assignee
     C->>C: resolve invocation from probed capability
@@ -27,42 +28,41 @@ sequenceDiagram
 
     alt no slot free
         C->>D: record delivery = queued
-        Note over C,D: no worker spawned; drained later by<br/>`pio dispatch drain` when a slot frees
+        Note over C,D: no worker is spawned.<br/>pio dispatch drain runs it when a slot frees
     else slot acquired
         C->>D: write supervisor spec
         C->>S: re-exec, transfer lease ownership
         S->>W: spawn worker (own process group)
         S->>D: delivery = confirmed, execution = starting
-        D-->>T: board changed → ▶ HANDING OFF
+        D-->>T: board changed, so HANDING OFF
         Note over C: delegate RETURNS HERE (~69 ms)<br/>the conductor is free again
 
-        S->>W: read stdout/stderr on separate threads
+        S->>W: read stdout and stderr on separate threads
         loop while the worker runs
-            W-->>S: bytes (only on read_until(b'\n'))
-            S->>D: append to .aN.out.log / .aN.err.log
-            S->>D: append counters to .aN.progress.jsonl
+            W-->>S: bytes, only on a newline
+            S->>D: append to the aN.out.log and aN.err.log byte logs
+            S->>D: append counters to aN.progress.jsonl
         end
 
         alt worker exits 0
-            S->>D: execution = succeeded + extracted answer + usage
-        else rate-limited (non-zero exit + 429 signal)
+            S->>D: execution = succeeded, plus answer and usage
+        else rate-limited (non-zero exit and a 429 signal)
             S->>S: jittered backoff, retry as attempt N+1
-            Note over S,D: attempt N's bytes are kept —<br/>each attempt owns its own log files
-        else worker exits non-zero / times out
+            Note over S,D: attempt N's bytes are kept:<br/>each attempt owns its own log files
+        else worker exits non-zero or times out
             S->>D: execution = failed (kind, exit code, detail)
         end
         S->>D: record execution on the task board
-        D-->>T: board changed → ◀ ANSWERING, ✓ / ✕ emote
+        D-->>T: board changed, so ANSWERING and the landing emote
     end
 
     opt supervisor killed (OOM, reboot, kill -9)
         Note over S: dies without writing anything terminal
-        participant R as any process listing dispatches
-        R->>D: list_dispatches / read_dispatch
+        R->>D: list_dispatches or read_dispatch
         R->>W: terminate the worker's process group
         R->>G: release only this dispatch's leases
-        R->>D: board event + execution = orphaned
-        D-->>T: the job stops reading as "running for ever"
+        R->>D: board event, execution = orphaned
+        D-->>T: the job stops reading as running for ever
     end
 ```
 
