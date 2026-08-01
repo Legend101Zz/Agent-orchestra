@@ -201,8 +201,15 @@ impl ProgressLog {
     /// the cap and keeps the log's one claim ("these are the worker's bytes")
     /// unqualified.
     ///
-    /// A reader tells a capped log from a quiet one by `kept` against
-    /// `log_max_bytes` on the record, not by the file's length.
+    /// A reader tells a capped log from a quiet one by **`kept` against
+    /// `bytes`**, not by the file's length and not by `kept` against
+    /// `log_max_bytes`. The `log_max_bytes` form was the first version of this
+    /// sentence and it is wrong at exactly the boundary it exists for: a single
+    /// line larger than the whole cap is declined in full, so a worker that
+    /// emitted 300 KB as one line leaves `kept == 0`, which is nowhere near
+    /// `log_max_bytes` and reads as *quiet*. `kept < bytes` says "the
+    /// supervisor observed more than this log holds" in every capped case,
+    /// including that one.
     ///
     /// Errors are dropped deliberately. This runs on the thread whose job is to
     /// keep the pipe empty; #28 was a deadlock caused by that thread not
@@ -418,6 +425,182 @@ pub struct ProgressView {
     /// Whether a torn trailing line was discarded — a SIGKILL mid-`write_all`
     /// on an append-only file can leave one.
     pub torn_tail: bool,
+}
+
+/// The newest whole lines of one attempt's byte log, bounded (issue #49 phase 3).
+///
+/// A reveal has a handful of rows to fill and the log has up to
+/// [`crate::dispatch::PROGRESS_LOG_MAX_BYTES`] (256 KiB) to offer, so reading it
+/// whole to show its last four lines would be 256 KiB of I/O per repaint. This
+/// seeks instead: at most `limit` bytes are read however large the file is.
+///
+/// **Every byte returned is a byte the worker wrote, and every line returned is
+/// a line the worker finished.** Both ends of the window need repair, and for
+/// different reasons:
+///
+/// - The **start** is found by discarding everything up to and including the
+///   first `\n` in the window. That is what makes the result whole lines rather
+///   than a byte slice, and it is also what makes it valid UTF-8 without
+///   depending on a lossy conversion: a code point cannot straddle a `\n`.
+/// - The **end** needs repair too, which is easy to get wrong. `ProgressLog`'s
+///   *cap* never writes a partial line — a line that does not fit is declined
+///   in full and the log latches. But `drain_to_eof`
+///   (`dispatch_supervisor.rs:356-378`) calls `log.append` on whatever
+///   `read_until(b'\n')` returns, and at EOF that is the unterminated
+///   remainder. So a worker that exits mid-line **does** leave a log whose last
+///   line has no terminator.
+///
+///   That fragment is dropped. Not because the bytes are untrustworthy — they
+///   are the worker's — but because showing it would contradict the counters
+///   shown beside it: `StreamCounters::lines` counts terminators, which is what
+///   `an_unterminated_final_chunk_is_not_counted_as_a_line` pins, and a reveal
+///   that displays four lines next to a journal saying three is a reveal that
+///   has started lying. It is also the block-buffered-worker case the module
+///   note is about: "no complete line observed" is the only claim available,
+///   and a fragment is not a complete line.
+///
+/// Returns `None` if the file does not exist. An empty `Vec` means the file
+/// exists and holds nothing yet — which is
+/// [`crate::dispatch::DispatchProgress`]'s "we looked and there was nothing
+/// yet", and a caller must not render it as the worker being quiet. A window
+/// that lands mid-first-line of a log with no newline at all yields an empty
+/// `Vec` too, and that is correct: no *complete* line has been observed.
+///
+/// The bytes are decoded with `from_utf8_lossy` only as a last resort against a
+/// torn write; on a well-formed log it is a borrow and costs nothing.
+pub fn tail_lines(path: &Path, limit: u64) -> Option<Vec<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    let window = limit.min(len);
+    // `len - window` is the only seek, so a 256 KiB log costs one `seek` and
+    // one `read` of `window` bytes rather than a full read.
+    file.seek(SeekFrom::Start(len - window)).ok()?;
+    let mut bytes = vec![0_u8; usize::try_from(window).ok()?];
+    let read = file.read(&mut bytes).ok()?;
+    bytes.truncate(read);
+    // Whole lines only. When the window starts at byte 0 there is nothing to
+    // discard; otherwise the first line is a fragment of one already shown or
+    // already past, and a fragment is exactly what this must never return.
+    let from_line_start = if window == len {
+        &bytes[..]
+    } else {
+        match bytes.iter().position(|byte| *byte == b'\n') {
+            Some(newline) => &bytes[newline + 1..],
+            None => &[],
+        }
+    };
+    // Drop an unterminated tail. `str::lines` yields it as though it were a
+    // line, which is the whole of the bug this guards: at EOF `drain_to_eof`
+    // appends whatever `read_until` returned, terminator or not.
+    let complete = match from_line_start.iter().rposition(|byte| *byte == b'\n') {
+        Some(last_newline) => &from_line_start[..=last_newline],
+        None => &[],
+    };
+    Some(
+        String::from_utf8_lossy(complete)
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// What a reader can say about one attempt without claiming anything the
+/// supervisor did not observe (issue #49 phase 3).
+///
+/// Derived from a [`ProgressView`], but the derivation is the point: two of the
+/// three fields cannot be read off the newest frame, and getting either wrong
+/// produces a sentence about the *worker* out of a fact about our *polling*.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProgressFacts {
+    /// Cumulative stdout counters as of the newest frame carrying them.
+    pub stdout: StreamCounters,
+    /// Cumulative stderr counters as of the newest frame carrying them.
+    pub stderr: StreamCounters,
+    /// When a **complete stdout line** was last observed to appear.
+    ///
+    /// **Not the newest frame's `t`.** The journal is stamped whenever *any*
+    /// counter moves, and `note` compares the whole `(stdout, stderr)` pair —
+    /// so a worker writing only to stderr re-stamps the journal without
+    /// producing a single stdout line. Reading `frames.last().t` would then
+    /// make "newest line at 12:04:31" advance while stdout had been still for
+    /// minutes, which is a claim about the worker made out of a fact about
+    /// stderr.
+    ///
+    /// This is the timestamp of the newest frame whose `stdout.lines` strictly
+    /// exceeded its predecessor's. `None` when no frame in the journal shows a
+    /// line appearing — in which case a reader must fall back to the `open`
+    /// frame's time and say "since the worker started", never invent one.
+    pub newest_stdout_line_at: Option<String>,
+    /// When the attempt was opened, for that fallback.
+    pub opened_at: Option<String>,
+    /// Why the attempt ended, if it has.
+    pub closed: Option<String>,
+    /// Whether any line in the journal failed to parse.
+    pub torn: bool,
+}
+
+impl ProgressFacts {
+    /// Whether the log holds less than the supervisor observed.
+    ///
+    /// **The honest capped discriminator, and the reason it is `kept < bytes`
+    /// rather than `kept` against `log_max_bytes`:** a single line larger than
+    /// the whole cap is declined in full, so a worker that emitted 300 KB as
+    /// one line leaves `kept == 0` — nowhere near the cap, and indistinguishable
+    /// from quiet under the other rule. It is also why the file's own length
+    /// answers nothing.
+    #[must_use]
+    pub const fn capped(&self) -> bool {
+        self.stdout.kept < self.stdout.bytes
+    }
+
+    /// The cap bit before a single line ever fit, so the log is empty and the
+    /// worker was not.
+    #[must_use]
+    pub const fn capped_before_first_line(&self) -> bool {
+        self.stdout.kept == 0 && self.stdout.bytes > 0
+    }
+}
+
+/// Reduce a journal to what a reader may state.
+///
+/// Pure, so the derivation above is testable without a worker.
+#[must_use]
+pub fn facts(view: &ProgressView) -> ProgressFacts {
+    let mut facts = ProgressFacts {
+        torn: view.torn_tail,
+        ..ProgressFacts::default()
+    };
+    // The baseline is zero lines, before any frame carries counters at all.
+    // That matters: the first `note` frame is usually where lines go 0 -> 1,
+    // and a "have I seen counters yet" guard would skip exactly that frame and
+    // report `None` for a worker whose only line arrived promptly.
+    let mut previous_lines = 0_u64;
+    for frame in &view.frames {
+        if frame.kind == "open" {
+            facts.opened_at = Some(frame.t.clone());
+        }
+        if frame.kind == "close" {
+            facts.closed.clone_from(&frame.reason);
+        }
+        if let Some(stdout) = frame.stdout {
+            // Strictly greater: `>=` would re-stamp on every frame once any
+            // line existed, which is the same lie by a different route.
+            if stdout.lines > previous_lines {
+                facts.newest_stdout_line_at = Some(frame.t.clone());
+            }
+            previous_lines = stdout.lines;
+            facts.stdout = stdout;
+        }
+        if let Some(stderr) = frame.stderr {
+            facts.stderr = stderr;
+        }
+    }
+    facts
 }
 
 /// Read one attempt's journal, tolerantly.

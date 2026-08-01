@@ -37,6 +37,7 @@ ship-log entries are part of finishing an issue.*
 | [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A delegation you can *watch*: the board must say when the answer actually arrives, and the packet must move smoothly (**phase 1 of 3**) | ✅ | merged (PR #50) · review FIX (4) all fixed before merge · phase 2 merged too (PR #56); **phase 3 is the only one left on #49** |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | Three places the board and the screen disagree — the 8-event cliff, a killed supervisor, the reviewer's wire | ✅ | merged (PR #53) · review **FIX (2)** → both fixed in `4ae609b` → re-review **ACCEPT** · 5 gates green, 348 passed 0 failed ×3, 13/13 mutations caught · one pre-existing defect found and reported, not fixed (`.board.lock` has no stale reclaim — needs its own issue **before** #49 phase 2) |
 | [#49 phase 2](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | A worker's partial output is durable while it is still working, instead of appearing all at once when it finishes | ✅ | merged (PR [#56](https://github.com/Legend101Zz/Agent-orchestra/pull/56), `2dc35db`) · defect 3 only; phase 3 (the reveal) untouched · review **FIX (5)** → **all fixed** in `881fb37` (eight mutations survived, not six — reviewer miscount, corrected below): the retry guarantee is now driven through a real 429-then-succeed retry, the progress-open warnings reach `record.warnings`, the clipped-line and line-count claims were false and are fixed in the code, `attempts` deleted as unvaryable, `extractable`/`log_max_bytes` asserted against what enforces them · **22/22 mutations caught, 365 passed** · re-review **ACCEPT**: all six re-run mutations caught, flake A/B'd to `origin/main` at the same rate (2/7 vs 2/9 full-workspace) · **merged without the one follow-up named in the re-review: the `capped` latch is still held by no test** — it guards the log's contiguous-prefix claim, the test is written and verified, and it should be picked up in phase 3 · two pre-existing defects found and reported, not fixed: **#54** (`.board.lock` has no stale reclaim) and **#55** (`stdout` unbounded for any adapter with an extractor — measured 25x over the cap) |
+| [#49 phase 3](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | The brief sidecar: press `<leader> i` on a worker and see the brief that worker was actually sent, plus what it has really produced so far | 🧪 | `issue-49-phase3-brief-overlay` · **closes #49**, so #14 is unblocked · 5 gates green, **392 passed 0 failed** ×3 (baseline 365) · **the issue's premise was false and is corrected**: `DispatchRecord.prompt` was reachable from the client by no path — not on `TaskSummary`, not on `DispatchSummary`, and `~/.orchestra/dispatches` is watched by nothing · new `DispatchBrief`/`read_briefs` reader that **cannot** reconcile (the existing readers kill worker pids and write the board) and has **no `stdout` field**, so #55's 400 KB is structurally unreachable · acceptance **9** (zoom: brief survives, wire is stated) and **10** answered · tachyonfx evaluated and **declined** on its timing model · carried-over `capped`-latch test landed, plus the unheld `note`-frame `stderr` counters · one pre-existing defect found and reported not fixed: the `conductor_down` overlay is drawn before the cell blit and erased by it in the same frame, covered by no test · review **FIX (6)** → **all six fixed**: 17 call-site mutations run, **11 survived**, now **11/11 caught**. The seam (`resolve_reveals` / `reveal::compose`) had zero test callers — every render test populated `state.reveals` **by hand** — so deleting the whole feature from `absorb_board` left 392 green with `⌃g i` refusing on every pane. Fixed by threading the reader through `absorb_board` as a parameter, which is what lets one call kill both that and the watermark guard (the reviewer's own test could not, and they said so). Plus: the worker-bytes `sanitise` path driven with a real forged badge in a real byte log; `compose` proved to actually produce `Undeclared`; the false row-skip docstring corrected; the themed `Block` beside `Clear` now held; `DispatchBrief` given the `extra` map it claimed to have; and the `clock` panic on a non-ASCII stamp reproduced and fixed. **395 passed 0 failed**, five gates green, `Cargo.lock` unchanged |
 | [#52](https://github.com/Legend101Zz/Agent-orchestra/pull/52) | Keep every checkout, worktree and `target/` on the external SSD; stop if it isn't mounted | ✅ | merged (PR #52) · docs only |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | New README + screenshots for launch | ⬜ *last* | — |
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Any known harness (like opencode) becomes usable automatically; register new model profiles of pi | ✅ | merged (PR #34) |
@@ -613,6 +614,138 @@ green while the watermark was wrong. The two self-found defects — the daemon
 test under-driving the lifecycle it claimed to measure, and the AC7 test racing
 #50's board-before-record ordering — were the better catch of the round.
 [Full re-review.](https://github.com/Legend101Zz/Agent-orchestra/issues/51#issuecomment-5142275011)
+
+### 2026-08-01 — Review round on the brief sidecar: the tests were testing the wrong end (Claude)
+
+The review found six things and the important one is worth stating plainly:
+**you could delete the feature and every test still passed.**
+
+Not "a test was weak" — the line in `absorb_board` that fills the sidecars with
+data could be deleted outright, `⌃g i` would answer "has taken no brief in this
+session" on every pane in every session, and all 392 tests stayed green. Every
+test I wrote put the data in **by hand** and then checked it drew correctly. The
+code that actually goes and fetches it had no test touching it at all.
+
+That is the fourth branch in a row with the same shape — a test that checks the
+part instead of the plumbing. The prompt for this session named the pattern in
+advance and said phase 3 was the most exposed to it. It was right, and I did it
+anyway.
+
+There is a nice detail in how it got caught. The reviewer wrote the missing test,
+ran it, and then corrected themselves: it *still* did not catch the worst
+mutation, because it called the fetching function directly — the same
+one-level-short mistake they were reporting. The real fix was to make
+`absorb_board` take the reader as an argument, so a test can hand it a counting
+stub and drive the whole path. One call now catches both "the line is gone" and
+"the cost guard is gone".
+
+Five more, all real: worker output was reaching the screen without being stripped
+of escape sequences (the one adversarial claim on the branch, and it was
+unguarded); the code that tells "not streaming" from "streaming but hasn't said
+so" could be deleted with nothing noticing; a test's own docstring described a
+mechanism that is not in the code; a type claimed to preserve unknown fields
+without the map that does it; and the clock formatter crashed on a timestamp
+starting with non-Latin characters — on the drawing thread, in the one module
+built so that a corrupt file can never blank the screen.
+
+All six fixed, 11 of 11 mutations now caught, 395 tests passing.
+
+### 2026-08-01 — You can now see the brief a worker was actually handed, issue #49 phase 3 (Claude)
+
+The short version: **when you delegate, the work does not happen in the CLI you
+are looking at.** A separate process runs it, headless, usually in a different
+directory. Somebody filed #45 because they watched their seated Hermes sit there
+doing nothing and concluded, reasonably, that the delegation had failed. It had
+not — it had gone somewhere they could not see.
+
+Press `⌃g i` on a worker pane now and a band opens at the top of its card
+showing the brief that worker was *really* sent, which dispatch it belongs to,
+which directory it ran in, and — the point — the words **"sidecar worker, not
+this pane's CLI"**. Press it again and it closes. Nothing is resized, nothing is
+lost: the CLI's own output is underneath and comes straight back.
+
+Underneath the brief it shows what the worker has genuinely produced so far: how
+many complete lines, how many bytes, the newest line verbatim, and when a line
+last actually arrived. It is careful about that last one in a way that took real
+work. The journal gets re-stamped whenever *any* counter moves, so a worker
+writing only to its error stream would have made "newest line at 12:09" tick
+forward while its output had been still for minutes. It now tracks when a
+**line** moved, not when anything moved.
+
+It also refuses to guess. There are four different ways for there to be nothing
+to show — the supervisor is not streaming; it is streaming but has not said so
+yet; it named files that are not there; it looked and there was nothing — and
+they get four different sentences instead of one shrug. Words like "thinking",
+"quiet" and "no output" are banned outright and a test enforces it, because we
+genuinely cannot know: a Python worker that buffers its output delivers
+*nothing* until it exits, and the same worker run with `-u` delivers in 18
+milliseconds. What we can honestly say is "no complete line observed since T".
+
+**Two things worth your attention.**
+
+First, the issue told this session that the overlay "needs no new plumbing" —
+that the watcher built in phase 1 already wakes the client when the brief
+becomes durable. The prompt file told the session to confirm that rather than
+assume it, and it was wrong. The client does wake, but what it receives has no
+brief in it, and there was no path from the TUI to the brief at all. That
+changed the shape of the work, so it went on the issue before any code was
+written rather than turning up in the diff.
+
+Second, a defect that is **not** from this branch and is deliberately left
+alone: the "CONDUCTOR DOWN" box that is supposed to appear on a dead brain's
+pane is drawn and then immediately painted over by the pane's own contents, in
+the same frame. It has never worked, and no test or screenshot covers it. It is
+a small ordering fix in a file this branch is already in, but it belongs to a
+different issue — say the word and it becomes its own commit.
+
+Also decided, with evidence rather than taste: **tachyonfx is not adopted.** It
+was already a dependency, so this cost nothing to decline. Its animation clock
+advances by "time since last frame", and ours deliberately changes speed — so
+anything looping would end up in a different place depending on how busy the
+machine was, which is precisely the "no fake timers" rule #49 exists to enforce.
+On a no-colour terminal it would also have interpolated toward black on the one
+tier whose whole answer is "no colour".
+
+Five gates green, 392 tests passing against a 365 baseline, three clean runs in
+a row. Every new test was broken on purpose first to check it could fail.
+
+**Review verdict: 🔨 FIX (6).** Five gates re-run cold in a separate worktree,
+392 passed / 0 failed confirmed, scope clean. Nothing on the branch is *wrong* —
+the happy path was driven and the wiring is correct — but **17 call-site
+mutations were run and 11 survived**, all on one seam: `resolve_reveals` and
+`reveal::compose` have zero test callers, so every render test puts a `Reveal`
+into `state.reveals` by hand. Deleting `stage.resolve_reveals(..)` from
+`absorb_board` leaves all 392 green with the feature entirely inert; so does
+deleting the watermark guard that is the whole cost argument, collapsing the
+`Undeclared`/`NotStreaming` distinction, defaulting `attempt` to 1, aiming the
+reviewer's brief at the executor's pane, and dropping `sanitise` from **both**
+the brief and the worker-bytes paths. The missing wiring test was written,
+verified to pass on `110e826`, and kills 5 of the 7. Also: the
+`the_hosted_grid_is_never_drawn_under_the_reveal` docstring describes a
+blit row-skip that is not in the code, `DispatchBrief` claims unknown fields are
+"preserved" without the `extra` map that would preserve them, and `clock` panics
+on a non-ASCII stamp (reproduced) on the render thread. The six caught mutations
+are each caught by the test whose docstring names them, and the `orc-core` half —
+especially the reconcile-contrast test — is the strongest work in the program.
+Fourth consecutive branch to assert against the component rather than the wiring.
+[Full review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5149992363)
+
+**Re-review verdict: 🧪 ACCEPT.** All six findings fixed. Five gates re-run cold
+in a separate worktree, **395 passed / 0 failed ×3**. All eleven surviving
+mutations re-run and **all eleven now caught**, each by the test whose docstring
+names it, plus two regression mutations (`Clear`, and restoring the `clock`
+byte-index) also caught — 13 for 13. The seam fix went where it had to: `read` is
+now a parameter of `absorb_board`, which is what makes deleting the
+`resolve_reveals` line killable at all — the reviewer's own test could not kill
+it. One new item, and it came out of the reviewer's own finding 5: adding
+`#[serde(flatten)] extra` to `DispatchBrief` puts #55's 409,600-byte `stdout`
+back within reach (`extra["stdout"]`, measured), eleven lines below the docstring
+that says a struct with no `stdout` field makes that "structural, not a rule
+someone has to remember". `DispatchBrief` is never serialized, so the map
+preserves nothing — it should be reverted and the paragraph changed to say
+unknown fields are *ignored*. Two lines and a paragraph; nothing else holds the
+branch.
+[Full re-review.](https://github.com/Legend101Zz/Agent-orchestra/issues/49#issuecomment-5150102542)
 
 ### 2026-07-31 — You can now see what a worker has said before it finishes, issue #49 phase 2 (Claude)
 

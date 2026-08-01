@@ -253,6 +253,15 @@ pub enum DispatchFailureKind {
 /// and is the point of creating the files at spawn: the supervisor looked and
 /// there was nothing yet. Those are different facts and the durable record
 /// keeps them apart.
+///
+/// One qualification, because taken literally the paragraph above misleads in
+/// exactly one case: a single line larger than the whole cap is declined in
+/// full, so a worker that wrote 300 KB as one line leaves `kept == 0` and a
+/// zero-length log for ever. "Present and zero-length" is then true of a
+/// supervisor that looked and saw nothing *and* of one that saw 300 KB it could
+/// not mirror. **The discriminator is `kept < bytes` from the journal, not the
+/// file's length** — `ProgressLog::append`'s own doc carries the same
+/// correction.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DispatchProgress {
     /// 1-based ordinal of the attempt these paths belong to.
@@ -521,6 +530,143 @@ pub fn progress_paths(session: &str, id: &str, attempt: u32) -> ProgressPaths {
         stderr_log: dir.join(format!("{id}.a{attempt}.err.log")),
         journal: dir.join(format!("{id}.a{attempt}.progress.jsonl")),
     }
+}
+
+/// One dispatch as a *reader* sees it (issue #49 phase 3).
+///
+/// The durable facts a client needs to show a delegation it did not perform —
+/// and deliberately **not** the captured output.
+///
+/// ## Why this is not just [`DispatchRecord`]
+///
+/// Two reasons, and both are safety rather than economy.
+///
+/// **It cannot be handed `stdout`.** [`DispatchRecord::stdout`] is unbounded for
+/// any adapter that has an extractor: `Captured::result` prefers the uncapped
+/// `answer` over the windowed `raw`, so [`MAX_CAPTURED_BYTES`] is bypassed
+/// whenever one fires — measured at 409,600 bytes with no truncation marker
+/// (issue #55, open and unfixed). A reveal that deserializes a struct with no
+/// `stdout` field can never fall back to it, however the calling code is later
+/// edited. The guarantee is structural, not a rule someone has to remember.
+///
+/// **It is read without reconciling.** [`read_dispatch`] and
+/// [`list_dispatches`] both run `reconcile_record`, which terminates the
+/// worker's process group, releases spawn-guard slots, appends to the task
+/// board and rewrites the record. Those are correct for a *command*; they are
+/// catastrophic for a *renderer*, which would make drawing a frame kill a
+/// worker and raise a board change that provokes another frame.
+/// [`read_briefs`] performs no write of any kind.
+///
+/// Unknown fields are tolerated **and preserved**, in the same way
+/// [`DispatchRecord`] and [`DispatchProgress`] do it — via the `extra` map
+/// below. The first version of this type said "preserved in the usual way" and
+/// carried no such map while still deriving `Serialize`, which in this file is
+/// a serde contract stated and not kept.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DispatchBrief {
+    /// Stable `D`-prefixed dispatch identifier.
+    pub id: String,
+    /// Owning Bench session identifier.
+    pub session: String,
+    /// The task this brief was delivered for.
+    pub task: String,
+    /// **The brief that was actually delivered.**
+    ///
+    /// Persisted at dispatch time (`new_record`), before the worker is spawned,
+    /// and never rewritten. This is the field the overlay exists to show, and
+    /// it must be shown rather than reconstructed: `orch::delegate` defaults it
+    /// to `contract::render_brief(&task)` but an explicit non-empty prompt
+    /// overrides it, so a client rebuilding the brief from board data would
+    /// agree most of the time and differ silently the rest — and `TaskSummary`
+    /// carries only `title`, so it could not reproduce even the default.
+    ///
+    /// Bounded at [`MAX_CAPTURED_BYTES`] by `deliver`, which refuses a larger
+    /// one outright, so a reader has a 16 KiB ceiling by construction.
+    pub prompt: String,
+    /// Harness registry key the dispatch was delivered to.
+    pub harness: String,
+    /// The directory the worker actually ran in.
+    ///
+    /// The isolated task's worktree, else the session cwd. Carried because it
+    /// is the single most convincing artefact against the belief that produced
+    /// issue #45: a *different* process worked in a *different* directory, and
+    /// naming it is harder to argue with than any wording.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Linked pane identifier, when one was recorded.
+    #[serde(default)]
+    pub pane_id: Option<String>,
+    /// Linked run or worker identifier, when one was supplied.
+    #[serde(default)]
+    pub run: Option<String>,
+    /// Absent means executor work; `review` means an independent review.
+    #[serde(default)]
+    pub purpose: Option<String>,
+    /// Delivery state: pending, queued, confirmed receipt, or failure.
+    pub status: String,
+    /// Worker execution state after delivery.
+    #[serde(default)]
+    pub execution_status: Option<String>,
+    /// Live progress artifacts for the newest attempt.
+    ///
+    /// **Absent does not mean "no bytes exist."** It means this supervisor is
+    /// not streaming — see [`DispatchProgress`]. The handshake-failed path
+    /// returns before any record write while `open_progress` has already
+    /// created all three artifacts, so files on disk with this field absent are
+    /// an ordinary case rather than a theoretical one. A reader that wants the
+    /// bytes derives the paths with [`progress_paths`].
+    #[serde(default)]
+    pub progress: Option<DispatchProgress>,
+    /// Last mutation timestamp, used to order two dispatches for one task.
+    pub updated_at: String,
+    /// Unknown future fields, kept rather than dropped on a round-trip.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Every dispatch one session has recorded, newest first, **read without
+/// reconciling anything and without writing anything** (issue #49 phase 3).
+///
+/// The reader half of [`list_dispatches`], for callers that render rather than
+/// command. See [`DispatchBrief`] for why the two are separate types rather
+/// than one type and a flag.
+///
+/// Shaped after [`crate::report::list_reports`], which is the existing
+/// precedent for `orc-app` reading `~/.orchestra` directly: `read_dir`, filter
+/// on extension, parse, skip anything unreadable. A torn or half-written record
+/// is skipped rather than propagated, for the reason
+/// [`crate::dispatch_progress::read_progress`] gives — a renderer that can
+/// error on one bad file is a renderer that can blank the screen because of one
+/// bad file.
+///
+/// Cost is one `read_dir` plus one `read` and one parse per `.json` entry in the
+/// session's dispatch directory. It is bounded by the number of dispatches in
+/// the session, not by worker output, and it must not be called per frame.
+#[must_use]
+pub fn read_briefs(session: &str) -> Vec<DispatchBrief> {
+    if session.trim().is_empty() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(dispatch_dir(session)) else {
+        return Vec::new();
+    };
+    let mut briefs = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        // `{id}.supervisor.json` also ends in `.json` and does not carry these
+        // required fields, so it fails to parse and is skipped on the line
+        // below rather than needing a name test here.
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|path| fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<DispatchBrief>(&bytes).ok())
+        .collect::<Vec<_>>();
+    briefs.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    briefs
 }
 
 fn dispatch_id_is_valid(id: &str) -> bool {

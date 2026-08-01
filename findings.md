@@ -716,3 +716,141 @@ torn-trailing-line contract.
 `read_progress` never returns `Err` for a malformed journal, precisely because
 the losing proposal showed what a strict one costs the moment anything on the
 listing path uses it.
+
+## 2026-08-01 — issue #49 phase 3: reaching a brief from the client
+
+**`DispatchRecord.prompt` was reachable from `orc-app` by no path, and the issue
+said otherwise.** #49's Decision 1 comment and the phase-3 prompt both asserted
+that phase 1's watcher already wakes the client on the write that makes the
+prompt durable, so the overlay "needs no new plumbing". Confirmed false, four
+ways: the prompt becomes durable in `~/.orchestra/dispatches`, which no
+`file_watches()` entry covers; the wake that does fire is one hop later via
+`~/.orchestra/tasks`; `TaskSummary` has no prompt and no dispatch id and
+`DispatchSummary` has no prompt either; and `orc-app` imports nothing from
+`orc_core::dispatch`. Putting it on the wire needs `orc-daemon` — both
+projections live there — which is outside the fence, so a client-side read was
+the only option inside it. Precedent: `orc-app` already calls
+`orc_core::report::list_reports`.
+
+**`read_dispatch` and `list_dispatches` are writes, and a renderer must not call
+them.** Both run `reconcile_record`, which terminates the worker's process group,
+releases spawn-guard slots, appends `execution_orphaned` to the task board and
+rewrites the record. From the render thread that makes *drawing a frame* kill a
+worker and raise a `BoardChanged` that provokes another frame.
+`read_dispatch_unreconciled` is `pub(crate)`. Hence `read_briefs`, whose
+contrast with `list_dispatches` over the *same* orphanable record is the
+assertion in `reading_a_dispatch_for_the_screen_never_reconciles_and_never_writes`.
+
+**Declining to deserialize a field does not avoid its cost.** `DispatchBrief` has
+no `stdout` field, so the reveal structurally cannot be handed #55's unbounded
+capture — but serde still scans the string to skip it. Measured, `read_briefs`
+at 64 records: **3.6 ms** with no `stdout`, **6.3 ms** at the documented 16 KiB
+cap, **83.6 ms** at the 400 KiB #55 really produced — against a 16 ms animating
+tier. So #55 taxes even a reader that refuses it, and the reveal is gated on the
+board's `history_total` watermark rather than run per board read.
+
+**`reads_board` is true for `Snapshot`, which fires at PTY rate.** Anything hung
+off `read_board` is paid per PTY output tick, not at the board's ~2 writes/sec.
+Any future work on that path needs its own invalidation key; `resolve_reveals`
+returns its read count so a test can assert `1` then `0`.
+
+**"Since T" must be when a *line* moved, not when any counter moved.**
+`ProgressJournal::note` compares the whole `(stdout, stderr)` pair, so a worker
+writing only to stderr re-stamps the journal. Deriving "newest line at" from
+`frames.last().t` turns a fact about stderr into a claim about stdout.
+`dispatch_progress::facts` walks for a strict increase in `stdout.lines`.
+
+**The byte log CAN end mid-line, and only the cap is exempt.**
+`ProgressLog::append` declines an over-long line in full, so the *cap* never
+clips — but `drain_to_eof` calls `append` on whatever `read_until(b'\n')`
+returned, and at EOF that is the unterminated remainder. A worker that exits
+mid-line leaves a log whose last line has no terminator. `tail_lines` drops it:
+`StreamCounters::lines` counts terminators, so showing it would put three lines
+on screen beside a journal reporting two. Pinned by a real dispatch in
+`a_worker_that_exits_mid_line_leaves_an_unterminated_log_and_the_reader_says_two`.
+
+**`record.progress == None` does not mean "no bytes".** `open_progress` creates
+all three artifacts *before* `mark_started` writes the field, and the
+handshake-failed path returns before any record write. So artifacts routinely
+exist with the field absent, and "not streaming" needs the field **and** a
+`stat` of the derived paths — which is why `progress_paths` is public and total.
+
+**"Delivered to this pane" would have been a lie.** `deliver` auto-selects a
+seated worker pane, so `record.pane_id` is usually `Some` on STAGE — but the
+supervisor spawns a separate child process and nothing in `orc-core` writes to a
+pane. A clause reading "delivered to this pane" would have manufactured #45
+inside the feature built to fix it. The header's clause is unconditional and has
+no second form: `sidecar worker, not this pane's CLI`.
+
+**Decision — the blit does not skip the band's rows.** The design of record had
+`render_pane` both skip the band in the cell blit and draw the sidecar after it,
+arguing the skip made the guarantee structural. `render_reveal` opens with
+`Clear` plus a styled fill over the whole band rect, so with the skip and
+without it every cell is identical and the whole suite stays green either way. A
+mechanism no test can distinguish is the shape of defect this program has paid
+for three times, so it was removed: one mechanism (draw after the blit), one test
+that holds it. The `Clear` itself is load-bearing and was found by that test —
+`Block::style` sets a cell's style and leaves its **symbol**, so a fill alone let
+a worker glyph show through wherever a composed line was shorter than the pane.
+
+**tachyonfx: declined, on its timing model.** No absolute-`Instant` API exists in
+the crate; every entry point takes a per-frame delta. Looping effects
+(`fx::repeat(Forever)`, `ping_pong`) compute the overflow crossing a cycle
+boundary and discard it, so the period is a function of poll cadence — and ours
+is deliberately variable. `ColorSpace::lerp_rgb` always returns `Color::Rgb`, and
+`Color::Reset` (what every slot resolves to on the monochrome tier) maps to
+`(0,0,0)`, so a fade on the one tier that promises no colour would get a colour
+ramp toward black. It is already a workspace dependency, so this is declined on
+merit rather than cost; #49's body calling it "a new dependency" is stale.
+
+**Pre-existing, reported, not fixed: the `conductor_down` overlay never reaches
+the screen.** `render_pane` draws it at `lib.rs:4399` and the cell blit at
+`:4425` overwrites it in the same frame, because `resize_to_cards` sizes the
+hosted grid to exactly `inner` and the blit writes `" "` even for empty cells.
+No test or golden covers it — the STAGE fixture sets `state: None`, and the
+`CONDUCTOR DOWN` assertion in the suite is HOME's shelf line from a different
+code path. Also pre-existing: `clip_ellipsis` pushes a hard `…` on the ASCII
+tier; reveal code uses the glyph register instead and routes around it.
+
+## 2026-08-01 — issue #49 phase 3, review round: the seam must be a parameter
+
+**Threading the reader through `absorb_board` is what makes the feature's own
+wiring testable, and hardcoding it is what hid the sharpest defect.** Review of
+PR #57 ran seventeen call-site mutations; eleven survived, and the worst was
+deleting the `resolve_reveals` line from `absorb_board` — after which all 392
+tests passed while the feature was completely inert. The reviewer wrote the
+missing test, and then corrected themselves: it did not kill that mutation
+either, because it called `resolve_reveals` directly. `absorb_board` hardcoded
+`orc_core::dispatch::read_briefs`, so it could not be driven at all.
+
+The rule this leaves: **when a function exists to be the seam a test grabs, the
+thing it calls must be injectable, or the seam is decorative.** `read_board`
+passes the real reader; a test passes a counting closure; one call now kills both
+"the line is gone" and "the guard is gone".
+
+**A pure function being well tested says nothing about the path that reaches
+it.** `sanitise` had six assertions and full coverage of its own behaviour, and
+replacing its call site inside `compose` with a plain clone left the whole suite
+green — so worker-controlled `\x1b` reached the composed sidecar with 392 tests
+passing. The adversarial claim in a module's docstring has to be driven through
+the module's real entry point, with the adversary in a real file.
+
+**Constructing an enum variant by hand does not test that anything produces
+it.** `the_nothing_here_facts_are_told_apart_in_words` built all four `Progress`
+variants directly and checked their sentences differed. Deleting the `exists()`
+stat from `compose`, so `Undeclared` could never be produced at all, changed
+nothing. The distinction that variant exists to preserve is exactly the one every
+design proposal got wrong.
+
+**`len()` is bytes and `[a..b]` on a `str` panics off a char boundary.**
+`clock`'s `&stamp[11..19]`, guarded by `len() >= 19`, panicked on
+`あああああああ+00:00` — on the render thread, in a module whose posture is that
+one torn file must never blank the screen, and where `read_progress` is
+deliberately infallible for precisely that reason. `get(11..19)` with a fallback.
+
+**A test's "mutations that must fail it" list is binding, so it must describe
+the code that exists.** `the_hosted_grid_is_never_drawn_under_the_reveal`
+claimed the blit skipped the band's rows and named restoring `0..rows` as a
+required-failing mutation. The row-skip had been deliberately removed and the PR
+body said so — leaving a docstring that contradicted the code, the PR, and
+itself, and named a no-op as binding. Corrected rather than softened.

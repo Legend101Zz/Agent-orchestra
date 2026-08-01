@@ -50,6 +50,16 @@ pub enum Glyph {
     RecoveryHint,
     /// A worker throughput sparkline.
     Sparkline,
+    /// The rail down the left of the brief sidecar's band (issue #49 phase 3).
+    RevealRail,
+    /// The brief sidecar is open on this pane.
+    RevealOpen,
+    /// More of the brief exists below what is shown.
+    RevealMore,
+    /// The byte log holds more above the window that was read.
+    RevealClip,
+    /// Something was elided to fit.
+    Elide,
 }
 
 /// One register row.
@@ -74,7 +84,7 @@ const fn entry(unicode: &'static str, nerd: &'static str, ascii: &'static str) -
 impl Glyph {
     /// Every registered concept, so a new state cannot be added without a
     /// glyph and an ASCII fallback.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 21] = [
         Self::Conductor,
         Self::WorkerSeated,
         Self::WorkerIdle,
@@ -91,6 +101,11 @@ impl Glyph {
         Self::Unavailable,
         Self::RecoveryHint,
         Self::Sparkline,
+        Self::RevealRail,
+        Self::RevealOpen,
+        Self::RevealMore,
+        Self::RevealClip,
+        Self::Elide,
     ];
 
     const fn entry(self) -> Entry {
@@ -108,6 +123,16 @@ impl Glyph {
             Self::Detached => entry("⊘", "nf-md-lan_disconnect", "~/~"),
             Self::DurableSession => entry("⏻", "nf-md-content_save_move", "[S]"),
             Self::Available => entry("●", "nf-fa-check_circle", "+"),
+            Self::RevealRail => entry("▌", "block elements (native)", "|"),
+            Self::RevealOpen => entry("▤", "nf-md-text_box_outline", "[B]"),
+            Self::RevealMore => entry("⏷", "nf-md-chevron_down", "v"),
+            Self::RevealClip => entry("⏶", "nf-md-chevron_up", "^"),
+            // Registered rather than written as a bare literal so reveal code
+            // has nothing to mojibake on a non-UTF-8 terminal. `clip_ellipsis`
+            // (lib.rs:1586) still pushes a hard `…` on the ASCII tier; that is
+            // a pre-existing defect, reported not fixed here, and reveal code
+            // does not call it.
+            Self::Elide => entry("…", "nf-md-dots_horizontal", "..."),
             Self::Unavailable => entry("○", "nf-fa-circle_o", "-"),
             Self::RecoveryHint => entry("↺", "nf-md-restore", "R"),
             Self::Sparkline => entry("▁▂▃▅▇", "block elements (native)", ".:|"),

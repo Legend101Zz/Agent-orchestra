@@ -38,7 +38,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ PR #50, phase 2 ✅ PR #56, both 2026-07-31 · **phase 3 is the last one, and it closes #49**) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ PR #50, phase 2 ✅ PR #56, both 2026-07-31 · **phase 3 pushed 2026-08-01 on `issue-49-phase3-brief-overlay`, awaiting review — it closes #49 and unblocks #14**) |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (✅ merged 2026-07-31, PR #53 — review FIX (2) → both fixed → re-review ACCEPT) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
@@ -46,9 +46,24 @@ record. (Issue numbers are filled in as issues are created.)
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
-#37, #38, #39, #45 and #49 phase 1 are merged. Every V1 feature is in; #14
-(README) is the last original V1 item and all that stands between here and
-launch.**
+#37, #38, #39, #45 and #49 phases 1 and 2 are merged. Every V1 feature is in;
+#49 phase 3 is pushed and awaiting review, and once it merges #14 (README) is
+the last original V1 item and all that stands between here and launch.**
+
+**#49 phase 3 — the brief sidecar (pushed 2026-08-01).** `<leader> i` opens a
+band on a worker's card showing the brief that worker was actually sent, plus
+the exact counters and newest complete line of what it has produced. Acceptance
+checks 9 (zoom) and 10 are both answered explicitly, which is what closes #49.
+The issue's own premise — that phase 1's watcher means the overlay needs no new
+plumbing — was checked and is false: `DispatchRecord.prompt` was reachable from
+the client by no path, so a non-reconciling `read_briefs` was added to
+`orc-core` and gated on the board's `history_total` watermark, because
+`reads_board` is true for `Snapshot` and `Snapshot` fires at PTY rate. Five
+gates green, 392 passed / 0 failed against a 365 baseline, every new test
+mutation-checked at its call site. tachyonfx evaluated and declined on its
+timing model. One pre-existing defect found and reported, not fixed: the
+`conductor_down` overlay is drawn before the cell blit and erased by it in the
+same frame, covered by no test.
 
 **#51 is merged (2026-07-31, PR #53) — all three defects, one branch.** Review
 returned FIX (2); both were fixed in `4ae609b` and the re-review was ACCEPT.

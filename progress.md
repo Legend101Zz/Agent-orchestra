@@ -2480,3 +2480,126 @@ wiring. The implementer named it in the evidence note, which is the right place
 for it.
 
 **Next:** #49 phase 3, the in-pane reveal — the last phase, and it closes #49.
+
+## 2026-08-01 — Claude (implementer) — #49 phase 3: the brief sidecar
+
+Branch `issue-49-phase3-brief-overlay` off `origin/main` @ `c4871b4`.
+Baseline re-measured on a clean worktree before touching anything: **365 passed,
+0 failed** — the number the prompt file names. Final: **392 passed, 0 failed**,
+three consecutive full-workspace runs, all five gates green.
+
+Evidence: `docs/notes/2026-08-01-issue-49-phase3-evidence.md`.
+
+**The issue's premise was false, and confirming it was the instruction.** #49's
+Decision 1 comment and the phase-3 prompt both say the overlay "needs no new
+plumbing" because phase 1's watcher already wakes the client on the write that
+makes the prompt durable. It does not. The prompt becomes durable in
+`~/.orchestra/dispatches`, which no `file_watches()` entry covers; the wake that
+does fire is one hop later via `~/.orchestra/tasks` and carries `TaskSummary`,
+which has no prompt and no dispatch id; `DispatchSummary` has no prompt either;
+and `orc-app` imports nothing from `orc_core::dispatch`. `DispatchRecord.prompt`
+was reachable from the client by **no** path. Putting it on the wire needs
+`orc-daemon`, outside the fence — so a client-side read was the only option
+inside it, with `orc_core::report::list_reports` as the existing precedent.
+Reported on the issue before any implementation, not after the diff.
+
+**The trap that shaped the reader.** `read_dispatch` and `list_dispatches` both
+run `reconcile_record`, which terminates a worker's process group, appends
+`execution_orphaned` to the board and rewrites the record. From the render
+thread that would make *drawing a frame* kill a worker and raise a board change
+that provokes another frame. `read_dispatch_unreconciled` is `pub(crate)`. Hence
+`DispatchBrief` + `read_briefs`: a lean parse with **no `stdout` field**, so the
+reveal structurally cannot be handed #55's 400 KB.
+
+**Measured, because the brief required the cost stated rather than asserted.**
+`read_briefs` at 1/4/16/64 records × 0/16/400 KiB of `record.stdout`: 57 µs to
+3.6 ms at the floor, 6.3 ms at 64 records with `stdout` at its documented cap,
+and **83.6 ms** under #55's real 400 KiB — against a 16 ms animating tier. So
+declining to deserialize the field is not enough (serde still scans it to skip
+it), and the reveal is gated on the board's own `history_total` watermark rather
+than run per board read: `Snapshot` fires at PTY rate and `reads_board` is true
+for it.
+
+**Acceptance 9 (zoom) answered: the brief survives, the wire does not, and
+STAGE says so.** `render_stage` never calls `render_circuit` when zoomed but it
+does call `render_pane`, where the band lives — and zoom is exactly what a user
+does when they want to *read* a pane. The vanished packet is stated on the
+legend in the same idiom as the shipped "connectors inlaid" fallback.
+
+**Acceptance 10 answered** by an unconditional negation clause in the header,
+the conductor's own accent on a rail inside the worker's card, and the header
+naming four things a pane cannot know about itself. The clause the design
+originally wanted — "delivered to this pane" — would have been *false*:
+`deliver` auto-selects a seated pane so `pane_id` is usually `Some`, but the
+supervisor spawns a separate child process. It would have manufactured #45
+inside the feature built to fix it.
+
+**A defect that is not mine, found and reported not fixed:** the
+`conductor_down` overlay is drawn at `lib.rs:4399` and overwritten by the cell
+blit at `:4425` in the same frame, because `resize_to_cards` sizes the hosted
+grid to exactly `inner`. No test or golden covers it — the STAGE fixture sets
+`state: None`. Left alone; the ordering lesson is why the band draws *after*
+the blit.
+
+**tachyonfx: no, argued from its timing model.** It is a per-frame delta
+accumulator with no absolute-`Instant` API; looping effects discard the overflow
+on reset so their period depends on poll cadence (acceptance 3); `lerp_rgb`
+always returns `Color::Rgb` and `Color::Reset` maps to black, so a fade on the
+monochrome tier would be the one tier with no colour getting a colour ramp. It
+is already a workspace dep, so this is declined on merit rather than cost — #49's
+body calling it "a new dependency" is stale.
+
+**Also landed:** the carried-over `capped`-latch test, the unheld `note`-frame
+`stderr` counters, and both reader-rule docs corrected to `kept < bytes` (the
+`log_max_bytes` form calls a worker that wrote 300 KB *quiet*).
+
+**Next:** review. #49 is discharged, so #14 (README + screenshots) is unblocked.
+
+## 2026-08-01 — Claude (implementer) — #49 phase 3: review FIX (6), all fixed
+
+Review of PR #57 / `110e826` ran **17 call-site mutations; 11 survived.** None
+was a wrong behaviour — the happy path and the wiring were correct. Every one was
+a guarantee the branch stated in prose and nothing held.
+
+**The seam had zero test callers.** `resolve_reveals` and `reveal::compose` — the
+only code that ever writes `state.reveals` — were never driven by anything.
+Every render test called `state.reveals.insert(..)` **by hand**. So deleting
+`stage.resolve_reveals(..)` from `absorb_board` left all 392 tests green with the
+feature completely inert: `⌃g i` refuses on every pane in every session.
+`absorb_board`'s own docstring diagnosed exactly this and nothing was built on it.
+
+Fourth consecutive occurrence of one pattern: #50 a test no implementation could
+fail, #51 one under-driving its own lifecycle, #56 one comparing two filenames
+instead of driving a retry, and this one populating by hand the map the feature
+exists to populate. The prompt named the pattern in advance and named phase 3 as
+the most exposed to it.
+
+**The fix that mattered was structural, and the reviewer found it by correcting
+themselves.** They wrote the missing test, verified it, and reported that it
+still did not kill the worst mutation — because it called `resolve_reveals`
+directly, the same one-level-short mistake. `absorb_board` hardcoded
+`read_briefs` and so could not be driven at all. Threading the reader through as
+a parameter — `read_board` passes the real one, a test passes a counting closure
+— is what lets a single `absorb_board` call kill both "the line is gone" and
+"the watermark guard is gone". The durable rule is in `findings.md`: when a
+function exists to be the seam a test grabs, what it calls must be injectable or
+the seam is decorative.
+
+**Also fixed:** the worker-bytes `sanitise` path, which had no test caller at all
+— `sanitise` was well covered *as a pure function* while replacing its call site
+inside `compose` left 392 green, so worker-controlled `\x1b` reached the composed
+sidecar. Now driven with a real forged badge written into a real byte log.
+`compose` proved to actually produce `Undeclared` rather than the variant merely
+being constructible by hand. The themed `Block` beside `Clear` held directly on a
+band cell's background. A test docstring that described a blit row-skip which is
+not in the code — and named dropping it as a required-failing mutation —
+corrected. `DispatchBrief` given the `#[serde(flatten)] extra` map it claimed to
+have while deriving `Serialize`. And `clock`'s `&stamp[11..19]`, guarded by a
+**byte** length, reproduced panicking on `あああああああ+00:00` on the render
+thread and fixed with `get`.
+
+**11/11 mutations now caught**, each re-applied to the fixed tree and observed to
+fail (142 passed / 1 failed every time), tree diffed clean after each. Five gates
+green, **395 passed / 0 failed**, `Cargo.lock` unchanged.
+
+**Next:** re-review.
