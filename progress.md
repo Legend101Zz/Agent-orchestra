@@ -2603,3 +2603,71 @@ fail (142 passed / 1 failed every time), tree diffed clean after each. Five gate
 green, **395 passed / 0 failed**, `Cargo.lock` unchanged.
 
 **Next:** re-review.
+
+## Session — 2026-08-01 (Claude, adversarial reviewer): #49 phase 3 reviewed FIX (6) → ACCEPT → merged as PR #57; four follow-ups filed
+
+**#49 is closed. All three phases in. #14 is the only original V1 item left.**
+
+Reviewed PR #57 (`110e826`) twice, in a detached worktree on the SSD with a cold
+`target/`, never in the implementer's tree.
+
+**Round 1 — FIX (6).** Five gates re-run cold: fmt, clippy (27.7 s, so it really
+checked), doc, release build, and `cargo test --workspace` at **392 passed / 0
+failed**, matching the PR exactly. Scope clean — nothing outside the issue's
+allowed paths, no `orc-daemon`, `orc-proto`, `Cargo.toml` or `Cargo.lock`.
+
+Then seventeen mutations at call sites. **Eleven survived.** Not one was a wrong
+behaviour — I drove the happy path and the wiring was correct — every one was a
+guarantee the PR stated in prose and nothing held. `resolve_reveals` and
+`reveal::compose` had **zero test callers**: every render test reached into
+`state.reveals` and put a `Reveal` there by hand, so the only code that ever
+*writes* that map was unheld end to end. Deleting `stage.resolve_reveals(..)`
+from `absorb_board` left all 392 tests green with the feature completely inert,
+`⌃g i` refusing on every pane in every session. Also surviving: the watermark
+guard that was the entire cost argument, the reviewer's brief landing on the
+executor's card (#51 defect 3 again), `attempt` defaulting to 1, `Undeclared`
+collapsed into `NotStreaming`, and `sanitise` dropped from **both** the brief
+and the worker-bytes paths.
+
+I wrote the missing test and handed it over — and then corrected myself on the
+issue: it did not kill the sharpest mutation either, because it called
+`resolve_reveals` directly, which is the same one-level-short mistake I was
+reporting. `absorb_board` hardcoded its reader, so it could not be driven at all.
+
+Three smaller findings: the `the_hosted_grid_is_never_drawn_under_the_reveal`
+docstring named a blit row-skip that does not exist and never did on the merged
+code; `DispatchBrief` claimed unknown fields were "preserved" without the map
+that would preserve them; and `clock` panicked on a non-ASCII stamp — reproduced,
+`byte index 11 is not a char boundary` — on the render thread.
+
+**Round 2 — ACCEPT.** All six fixed in `52852b4`. I re-ran every one of the
+eleven survivors and broke two of the fixes again as regression checks:
+**thirteen mutations, thirteen caught**, each by the test whose docstring names
+it. 395 passed / 0 failed, three consecutive runs, five gates green. The seam fix
+went where it had to rather than where it was cheap — `read` became a parameter
+of `absorb_board`, which is what makes the deletion mutation killable at all.
+
+**One new problem, and it was mine.** Finding 5 offered two fixes and the wrong
+one was taken up: `#[serde(flatten)] extra` on `DispatchBrief` puts #55's
+409,600-byte `stdout` back within reach — measured, `extra["stdout"]` — eleven
+lines below the docstring calling that guarantee "structural, not a rule someone
+has to remember". `DispatchBrief` is never serialized anywhere, so the map
+preserves nothing for anyone. Merged knowingly; filed as #58.
+
+**Four follow-ups filed rather than folded in:** #58 (the `extra` map), #59 (the
+`CONDUCTOR DOWN` overlay, drawn before the cell blit and erased by it in the same
+frame — it has never been visible, and no test or golden covers it), #60 (the
+fixed 1.5 s wall-clock assertion, A/B'd across three review rounds and 65 runs to
+the point where it is settled as the assertion rather than any branch), #61
+(`clip_ellipsis` bypassing the glyph register on the ASCII tier). None block #14.
+
+**The pattern, fourth consecutive occurrence.** #50 shipped a test no
+implementation could fail; #51 one that under-drove the lifecycle it claimed to
+measure; #56 one comparing two filenames instead of driving a retry; #57 one that
+populated by hand the map the feature exists to populate. The prompt named this
+in advance and named phase 3 as the most exposed. It was right. `findings.md` now
+carries the two rules that come out of it: **a function that exists to be a
+test's seam must have its dependency injectable, or the seam is decorative**, and
+**constructing an enum variant by hand does not test that anything produces it.**
+
+Post-merge: `LOG.md`, `task_plan.md` and this file updated on `main`.

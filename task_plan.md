@@ -38,7 +38,7 @@ record. (Issue numbers are filled in as issues are created.)
 | [#38](https://github.com/Legend101Zz/Agent-orchestra/issues/38) | V1-16 STAGE as a live circuit: n-worker topology, fluid drag-resize, message-in-flight motion | #13 (✅ merged 2026-07-30, PR #42) |
 | [#39](https://github.com/Legend101Zz/Agent-orchestra/issues/39) | V1-17 Visual identity carry-over: NO_COLOR trigger rainbow, recursive grep gate | #13 (✅ merged 2026-07-30, PR #47) |
 | [#45](https://github.com/Legend101Zz/Agent-orchestra/issues/45) | V1-18 A conductor seated in the TUI dispatches to the panes it sits in, visibly (supersedes #43 + #44) | #38 (✅ merged 2026-07-31, PR #48 · 2 review findings still open) |
-| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (phase 1 ✅ PR #50, phase 2 ✅ PR #56, both 2026-07-31 · **phase 3 pushed 2026-08-01 on `issue-49-phase3-brief-overlay`, awaiting review — it closes #49 and unblocks #14**) |
+| [#49](https://github.com/Legend101Zz/Agent-orchestra/issues/49) | V1-19 A delegation you can watch: real-state-driven animation from brain to worker and back | #45 (✅ **CLOSED 2026-08-01** — phase 1 PR #50, phase 2 PR #56, phase 3 PR #57 · **all three phases in, #14 is unblocked**) |
 | [#51](https://github.com/Legend101Zz/Agent-orchestra/issues/51) | V1-20 Three places the board and the screen disagree: the 8-event window, orphaned supervisors, the reviewer's wire | #49 phase 1 (✅ merged 2026-07-31, PR #53 — review FIX (2) → both fixed → re-review ACCEPT) |
 | [#14](https://github.com/Legend101Zz/Agent-orchestra/issues/14) | V1-12 README + positioning revamp for V1 launch | most of above |
 | [#28](https://github.com/Legend101Zz/Agent-orchestra/issues/28) | V1-13 Dispatch pipe-buffer deadlock: drain the worker's output while it runs | #8 (✅ merged 2026-07-27, PR #29) |
@@ -46,11 +46,18 @@ record. (Issue numbers are filled in as issues are created.)
 | [#33](https://github.com/Legend101Zz/Agent-orchestra/issues/33) | Side-fix (not part of the original epic): any known harness auto-registers, `pio harness add` for model profiles | — (✅ merged 2026-07-28, PR #34) |
 
 **Order: #16, #17, #3, #4, #5, #9, #6, #7, #8, #10, #28, #30, #11, #12, #13,
-#37, #38, #39, #45 and #49 phases 1 and 2 are merged. Every V1 feature is in;
-#49 phase 3 is pushed and awaiting review, and once it merges #14 (README) is
-the last original V1 item and all that stands between here and launch.**
+#37, #38, #39, #45, #51 and all three phases of #49 are merged. Every V1
+feature is in. #14 (README + screenshots) is the last original V1 item and all
+that stands between here and launch.**
 
-**#49 phase 3 — the brief sidecar (pushed 2026-08-01).** `<leader> i` opens a
+**Open follow-ups, none of which block #14:** #55 (`DispatchRecord.stdout`
+unbounded for any adapter with an extractor), #58 (`DispatchBrief`'s `extra` map
+puts #55's payload back within reach — the reviewer's own error, merged
+knowingly), #59 (the `CONDUCTOR DOWN` overlay has never been visible), #60 (the
+1.5 s wall-clock assertion that has cost three review rounds an A/B), #61
+(`clip_ellipsis` bypasses the glyph register on the ASCII tier).
+
+**#49 phase 3 — the brief sidecar (merged 2026-08-01, PR #57, `d685525`) — and #49 is now closed.** `<leader> i` opens a
 band on a worker's card showing the brief that worker was actually sent, plus
 the exact counters and newest complete line of what it has produced. Acceptance
 checks 9 (zoom) and 10 are both answered explicitly, which is what closes #49.
@@ -59,11 +66,30 @@ plumbing — was checked and is false: `DispatchRecord.prompt` was reachable fro
 the client by no path, so a non-reconciling `read_briefs` was added to
 `orc-core` and gated on the board's `history_total` watermark, because
 `reads_board` is true for `Snapshot` and `Snapshot` fires at PTY rate. Five
-gates green, 392 passed / 0 failed against a 365 baseline, every new test
-mutation-checked at its call site. tachyonfx evaluated and declined on its
-timing model. One pre-existing defect found and reported, not fixed: the
-`conductor_down` overlay is drawn before the cell blit and erased by it in the
-same frame, covered by no test.
+gates green, 395 passed / 0 failed against a 365 baseline. tachyonfx evaluated
+and declined on its timing model.
+
+Review returned **FIX (6)**: seventeen call-site mutations were run and **eleven
+survived**, all on one seam — `resolve_reveals` and `reveal::compose` had zero
+test callers, because every render test populated `state.reveals` by hand. The
+sharpest was deleting the whole feature from `absorb_board`, which left 392
+tests green with `⌃g i` refusing on every pane. All six were fixed in `52852b4`
+and the re-review was **ACCEPT**: all eleven mutations re-run and caught, plus
+two regression checks, 13 for 13.
+
+The durable lesson, now in `findings.md`: **when a function exists to be the
+seam a test grabs, the thing it calls must be injectable, or the seam is
+decorative.** `absorb_board` hardcoded its reader, so even the reviewer's own
+replacement test could not kill the mutation it was written for. A second one
+alongside it: **constructing an enum variant by hand does not test that anything
+produces it.**
+
+Merged with one item unfixed and it is the reviewer's error, filed as #58: the
+`#[serde(flatten)] extra` added for review finding 5 puts #55's 409,600-byte
+`stdout` back within reach of `DispatchBrief`, contradicting the same docstring's
+claim that a struct with no `stdout` field makes that guarantee structural.
+Three pre-existing defects also found and filed rather than folded in: #59, #60,
+#61.
 
 **#51 is merged (2026-07-31, PR #53) — all three defects, one branch.** Review
 returned FIX (2); both were fixed in `4ae609b` and the re-review was ACCEPT.
